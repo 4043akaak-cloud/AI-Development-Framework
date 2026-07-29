@@ -23,31 +23,30 @@ AI を単なるコード生成ツールとして扱うのではなく、開発�
 
 ## ディレクトリ構成
 
-現時点では README のみです。今後は、次の構成を基本として整備します。
+現在の共通文書は、次の構成で管理します。
 
 ```text
 .
 ├── README.md                 # プロジェクトの入口
 ├── docs/                     # 人間と AI が共有するドキュメント
 │   ├── project/              # 目的、要件、用語、背景
-│   ├── architecture/         # 設計方針、技術判断、構成
 │   ├── workflow/             # 開発・レビュー・リリースの手順
 │   └── decisions/            # 重要な意思決定の記録
 ├── guidelines/               # 実装・命名・テストなどの共通ルール
-├── prompts/                  # AI に依頼する際の共通プロンプト
 ├── templates/                # Issue、設計書、レビューなどのテンプレート
-└── examples/                 # フレームワークの利用例
+└── AGENTS.md                 # AI非依存の共通入口
 ```
 
 ## 最初に読むファイル
 
-今はこの `README.md` が唯一の入口です。ドキュメントを追加した後は、以下の順序で読むことを推奨します。
+以下の順序で読むことを推奨します。
 
-1. `README.md` — 目的、全体像、利用方法を把握する
-2. `docs/project/` — プロジェクトの背景、要件、用語を理解する
-3. `guidelines/` — 実装時に守る共通ルールを確認する
-4. `docs/workflow/` — タスクの進め方とレビュー方法を確認する
-5. `docs/decisions/` — 既存の重要な判断と、その理由を参照する
+1. `AGENTS.md` — AI非依存の共通ルールを確認する
+2. `README.md` と `docs/project/PROJECT.md` — 目的と全体像を把握する
+3. `guidelines/AI_COLLABORATION.md` — 全参加者共通の協働ルールを確認する
+4. `docs/decisions/ADR-001-knowledge-and-multi-ai-governance.md` — 正本と権限境界を確認する
+5. `docs/workflow/AI_DELEGATION_CHARTER.md` — Context、Plan、Approval、実装、検証の順序を確認する
+6. 作業に関連する設計、Task、決定記録、Current Stateを確認する
 
 ## 開発フロー
 
@@ -57,6 +56,8 @@ AI を単なるコード生成ツールとして扱うのではなく、開発�
 4. **小さな単位で変更する** — 変更の目的を限定し、影響範囲をわかる形で残します。
 5. **検証する** — テスト、レビュー、仕様との照合を行い、結果を記録します。
 6. **知見を還元する** — 再利用できる判断や注意点は、ルール・決定記録・テンプレートに反映します。
+
+詳細な役割・委任・エスカレーションは、[AI Delegation Charter](docs/workflow/AI_DELEGATION_CHARTER.md) を参照してください。
 
 ## 今後追加予定のドキュメント
 

@@ -4,24 +4,9 @@
 
 ## プロジェクト開始プロトコル（必須）
 
-**すべてのプロジェクト作業は、以下のプロトコルから始まります**:
+`AGENTS.md` と [AI Delegation Charter](docs/workflow/AI_DELEGATION_CHARTER.md) が、すべてのAIに共通する正本です。Claude Code固有のMemoryやSkillだけを作業開始の必須条件にしません。
 
-1. **Obsidian コンテキスト自動読み込み** (`project-context-loader` スキル)
-   - プロジェクト名を検出
-   - Projects/ と References/ をスキャン
-   - すべての関連ファイルを読み込み
-   - コンテキスト要約を提示
-
-2. **確認チェックリスト**
-   - 設計原則を理解したか
-   - フェーズ・ステータスを理解したか
-   - 制約・ルールを認識したか
-   - 「コンテキスト確認。作業開始」と明示的に承認
-
-3. **その後に実作業開始**
-   - コンテキスト確認までは実装を開始しない
-
-**詳細**: Memory の `PROJECT_START_PROTOCOL.md` を参照
+実装前に、Required Obsidian Context、Plan、Approval StatusをTaskで確認します。確認できない場合は調査・提案に留め、実装を開始しません。
 
 ---
 
@@ -29,14 +14,11 @@
 
 作業を始める前に、次の順序で確認します。
 
-1. **Obsidian コンテキスト** — `project-context-loader` スキルで自動読み込み
-   - Projects/ 内のプロジェクトファイル
-   - References/ 内のテンプレート・パターン
-
+1. `AGENTS.md` — AI非依存の共通入口
 2. `README.md` — プロジェクトの目的と全体像
 3. `guidelines/AI_COLLABORATION.md` — 全参加者共通の協働ルール
-4. 作業に関連する `docs/` 内の要件、設計、開発フロー
-5. 作業に関連する `docs/decisions/` 内の決定記録
+4. `docs/workflow/AI_DELEGATION_CHARTER.md` — Context、Plan、Approval、委任規則
+5. 作業に関連するObsidianノート、設計、決定記録、Task、Current State
 
 関連ドキュメントがまだ存在しない場合は、その事実と前提を明示して作業します。
 
@@ -60,4 +42,3 @@
 - 変更したファイル
 - 実施した検証と結果
 - 未検証事項、残る懸念、または次に必要な作業
-

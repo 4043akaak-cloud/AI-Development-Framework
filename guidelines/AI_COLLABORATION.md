@@ -52,6 +52,17 @@ AI は変更の前に、次の内容を確認します。
 
 不足情報があっても安全に進められる場合は、前提を明示して小さく進めます。要件、セキュリティ、公開範囲、データ削除などに影響する場合は、人間の確認を待ちます。
 
+## Context と Plan の実装前ゲート
+
+実装を開始する前に、AIはTaskへ次を記録または確認する。
+
+1. Required Obsidian Contextと、そのノートから採用する制約
+2. Objective、Scope、Out of Scope、受入条件
+3. Plan、代替案、影響範囲、Verification方法
+4. 必要なApproval Status
+
+承認前は調査とPlan作成に留め、コード、設定、依存関係、データ、UI、構造を変更しない。詳細な役割とエスカレーションは [AI Delegation Charter](../docs/workflow/AI_DELEGATION_CHARTER.md) を参照する。
+
 ## 変更の進め方
 
 1. **目的を共有する** — 何を、なぜ変えるかを明確にする
