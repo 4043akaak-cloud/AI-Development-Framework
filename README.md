@@ -47,7 +47,8 @@ AI を単なるコード生成ツールとして扱うのではなく、開発�
 4. `docs/decisions/ADR-001-knowledge-and-multi-ai-governance.md` — 正本と権限境界を確認する
 5. `docs/workflow/AI_DELEGATION_CHARTER.md` — Context、Plan、Approval、実装、検証の順序を確認する
 6. `docs/workflow/WORKTREE_POLICY.md` — 正本作業コピーを確認する
-7. 作業に関連する設計、Task、決定記録、Current Stateを確認する
+7. `docs/workflow/TASK_LIFECYCLE.md` と `templates/README.md` — Taskの状態遷移と必要な記録を確認する
+8. 作業に関連する設計、Task、決定記録、Current Stateを確認する
 
 ## 開発フロー
 
@@ -59,6 +60,12 @@ AI を単なるコード生成ツールとして扱うのではなく、開発�
 6. **知見を還元する** — 再利用できる判断や注意点は、ルール・決定記録・テンプレートに反映します。
 
 詳細な役割・委任・エスカレーションは、[AI Delegation Charter](docs/workflow/AI_DELEGATION_CHARTER.md) を参照してください。
+
+## プロジェクトとTaskの記録
+
+GitHubに、Goal、MVP、Roadmap、Current State、Task、Handoverを残します。新規プロジェクトは、[運用テンプレート](templates/README.md) の順序で作成してください。
+
+個別Taskは、[Task Lifecycle](docs/workflow/TASK_LIFECYCLE.md) に従い、`Context Read → Planned → Approval → Implementation → Verification → Push → Done` の順で進めます。Obsidianは発想・調査・長い背景・学びの保管先とし、Taskには参照したノートと採用した制約を記録します。
 
 ## 今後追加予定のドキュメント
 
