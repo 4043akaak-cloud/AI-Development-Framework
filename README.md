@@ -46,7 +46,8 @@ AI を単なるコード生成ツールとして扱うのではなく、開発�
 3. `guidelines/AI_COLLABORATION.md` — 全参加者共通の協働ルールを確認する
 4. `docs/decisions/ADR-001-knowledge-and-multi-ai-governance.md` — 正本と権限境界を確認する
 5. `docs/workflow/AI_DELEGATION_CHARTER.md` — Context、Plan、Approval、実装、検証の順序を確認する
-6. 作業に関連する設計、Task、決定記録、Current Stateを確認する
+6. `docs/workflow/WORKTREE_POLICY.md` — 正本作業コピーを確認する
+7. 作業に関連する設計、Task、決定記録、Current Stateを確認する
 
 ## 開発フロー
 
