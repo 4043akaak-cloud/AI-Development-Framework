@@ -10,6 +10,8 @@
 4. [CURRENT_STATE.md](CURRENT_STATE.md) — 現在地、次に承認済みの作業、阻害要因を常に1か所で示す。
 5. [TASK.md](TASK.md) — 実装・調査・設計・レビューを1つのTaskとして依頼・承認・検証する。
 6. [HANDOVER.md](HANDOVER.md) — 担当AIまたは人間が交代するときに、続きから安全に再開できるようにする。
+7. [AI_TASK_PACKET.md](AI_TASK_PACKET.md) — 上記Taskから、担当AIへ渡す最小の依頼パケットを作る。
+8. [CODEX_SOLO_REQUEST.md](CODEX_SOLO_REQUEST.md) — 現在のCodex単独パイロットで使う固定依頼文。
 
 Taskの状態遷移と停止条件は、[Task Lifecycle](../docs/workflow/TASK_LIFECYCLE.md) を正本とする。役割と承認境界は、[AI Delegation Charter](../docs/workflow/AI_DELEGATION_CHARTER.md) を参照する。
 
@@ -18,6 +20,7 @@ Taskの状態遷移と停止条件は、[Task Lifecycle](../docs/workflow/TASK_L
 - プロジェクトのGoal、MVP、Roadmap、Current State、Task、Handoverは、そのプロジェクトのGitHubリポジトリ内に置く。最初の4つは、例えば同じ`docs/project/`に置くと相互リンクを保ちやすい。
 - TaskがGitHub Issueの場合は、`TASK.md`の項目をIssue本文へ転記してよい。Plan、Approval、Verification、Handoverを省略しない。
 - Obsidianには、発想、調査、長い背景、学びを残す。Taskには、参照したObsidianノートと採用した制約をリンクして残す。
-- `REQUEST_TO_AI.md`と`PROJECT_STARTUP_CHECKLIST.md`は補助資料であり、新規Taskの必須記録にはこのセットを用いる。
+- AIへの依頼は、長い会話用テンプレートではなく、`TASK.md`と`AI_TASK_PACKET.md`を組み合わせて再現可能にする。
+- `CODEX_SOLO_REQUEST.md`は現在の最小運用専用である。複数AIへ広げる場合は、パイロット結果を評価した別Taskで役割別テンプレートを追加する。
 
 テンプレートを別のディレクトリへコピーした場合は、相対リンクを実際の記録先へ更新する。GitHub Issueに転記する場合は、リンク切れを避けるため、文書名とリポジトリ内パスを明記する。

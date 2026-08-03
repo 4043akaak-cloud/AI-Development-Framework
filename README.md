@@ -42,7 +42,7 @@ AI を単なるコード生成ツールとして扱うのではなく、開発�
 以下の順序で読むことを推奨します。
 
 1. `AGENTS.md` — AI非依存の共通ルールを確認する
-2. `README.md` と `docs/project/PROJECT.md` — 目的と全体像を把握する
+2. `README.md` と `docs/project/GOAL.md`、`docs/project/MVP.md`、`docs/project/ROADMAP.md`、`docs/project/CURRENT_STATE.md` — 目的、現在地、優先順位を把握する
 3. `guidelines/AI_COLLABORATION.md` — 全参加者共通の協働ルールを確認する
 4. `docs/decisions/ADR-001-knowledge-and-multi-ai-governance.md` — 正本と権限境界を確認する
 5. `docs/workflow/AI_DELEGATION_CHARTER.md` — Context、Plan、Approval、実装、検証の順序を確認する
@@ -67,16 +67,11 @@ GitHubに、Goal、MVP、Roadmap、Current State、Task、Handoverを残しま�
 
 個別Taskは、[Task Lifecycle](docs/workflow/TASK_LIFECYCLE.md) に従い、`Context Read → Planned → Approval → Implementation → Verification → Push → Done` の順で進めます。Obsidianは発想・調査・長い背景・学びの保管先とし、Taskには参照したノートと採用した制約を記録します。
 
-## 今後追加予定のドキュメント
+## 現在の運用段階
 
-- プロジェクト憲章（目的、対象範囲、成功指標）
-- 人間と AI の役割分担・承認ルール
-- AI への依頼・回答の記録方法
-- 要件定義、設計、実装、レビューの各テンプレート
-- コーディング規約、テスト方針、セキュリティ方針
-- Architecture Decision Record（ADR）の書き方
-- 複数 AI 間でコンテキストを引き継ぐためのガイド
-- フレームワークの導入例と運用例
+最初の運用は、Codexと人間だけで行う小さなパイロットである。目的は、外部APIやAI間の自動会話を導入する前に、`Obsidian Context → Plan → Human Approval → Implementation → Verification → Human Review → GitHub / Obsidian Update` を一貫して完走できることを確かめることである。
+
+[Codex単独パイロット](docs/workflow/CODEX_SOLO_PILOT.md) と [AI Task Packet](templates/AI_TASK_PACKET.md) を参照する。OpenRouterを含む自動モデル選定は、パイロットで得た運用記録を評価した後の別Taskとする。
 
 ---
 

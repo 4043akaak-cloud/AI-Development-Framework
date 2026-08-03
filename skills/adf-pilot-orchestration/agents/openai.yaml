@@ -1,0 +1,4 @@
+interface:
+  display_name: "ADF Pilot Orchestration"
+  short_description: "Run evidence-first ADF pilot experiments safely."
+  default_prompt: "Use $adf-pilot-orchestration to run the next ADF pilot task with role-separated review and evidence logging."
