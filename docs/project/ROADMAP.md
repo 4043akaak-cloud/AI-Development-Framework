@@ -57,7 +57,21 @@ Adapter Interfaceは`send_to_adapter` / `receive_from_adapter` / `continue_job` 
 
 **対象外:** 認証、APIキー、実HTTP送信、Claude／Codex CLI起動、外部送信、課金、MCP、worktree、並列Job、自律的な無限会話、正本自動書込み。
 
-**判断ゲート:** Project OwnerがNode.jsのある環境でtypecheck・test・buildを実行し、アプリ上でThread表示とOwner操作を確認すること。実装時点では自動検証・実機確認とも未実施である。
+**判断ゲート:** Project OwnerがNode.jsのある環境でtypecheck・test・buildを実行し、アプリ上でThread表示とOwner操作を確認すること。
+
+**記録済み（完了）:** typecheck、Vitest 60件、build / package、Electron起動、Thread開始→Proposal→継続→Critic→Result承認→次Task化の実機操作をProject Ownerが確認し、`ADF-CONVERSATION-RELAY-001`をDoneとした。commit `f8fb1c7`。
+
+## Phase 1.7 — Relay復旧（Owner判断による再開）
+
+`ADF-RELAY-RECOVERY-001`で、Turn送信後・受信前にプロセスが終了したThreadが恒久停止する問題を解消する。起動時にpendingを検出して`recovery-needed`として提示し、Ownerが「再送」「失敗として記録」「Thread停止」から選ぶ。
+
+MVPを軽く保つため、自動再送・常駐Worker・DB・バックグラウンド再開は作らない。timeoutは自動処理の引き金にせず、期限表示とOwner判断の材料に限定する。再送は同一`sequence`・新規`dispatchId`とし、Adapter契約（`send` / `getState` / `receive`）とFake Adapter会話は変更しない。
+
+これは現在の不具合の解消であると同時に、外部AI接続の構造的な前提でもある。外部AIは受理と回答の間隔が長く、その間にアプリが閉じられ得るため、pendingがプロセスを跨いで復旧できない限り実接続は成立しない。
+
+**対象外:** 自動再送、常駐Worker、DB、並列Job、外部AI接続、認証、APIキー、外部送信、課金、MCP。
+
+**判断ゲート:** Project Ownerが設計を承認したうえで、プロセス終了・再起動を含む実機検証でThreadが恒久停止しないことを確認すること。
 
 ## Phase 2 — 外部AIまたは人間による独立レビューの追加
 

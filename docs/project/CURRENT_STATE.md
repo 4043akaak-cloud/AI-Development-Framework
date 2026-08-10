@@ -8,9 +8,17 @@
 
 ADFの製品境界は、Project進捗管理とAI間の受け渡しに限定する。PECなど他プロジェクト固有の分析、AIそのものの推論、万能自動実行、無承認の外部送信・課金・正本変更はADFの責務に含めない。
 
+## 現在のMVP到達点
+
+このPC内で、承認済みTaskに紐づいたThread上で複数のFake AIが議論し、Ownerが結果を確認・継続・承認できる状態に到達した。`ADF-CONVERSATION-RELAY-001`をDoneとし、commit `f8fb1c7`として`origin/codex/adf-pilot-governance`へpush済みである。
+
+未実装は、実Claude／Codex等の外部AI接続、認証・APIキー管理、外部送信・課金、アプリ再起動時のpending復旧、実運用向けの計測・ログ改善である。
+
 ## 次のTask
 
-[`ADF-CONVERSATION-RELAY-001`](../tasks/ADF-CONVERSATION-RELAY-001.md): `Verifying`。実装担当はClaude Code。Task配下のThreadとTurnをADF内の会話一次データとし、Fake Adapter A/Bの複数ターン会話、Ownerの継続・停止・承認・次Task化、Thread表示UI、外部AI候補の`planned`登録を実装した。Project Ownerによる2回のレビューで計8件の欠陥が見つかり、いずれも修正済みである。1次では承認境界の迂回（P1）、Adapter Interfaceの不一致、受信Handleの未照合、Adapter roleの未検証。2次では既存Job Runtime／Dispatch ACKとの未接続、Result Envelope／Evidenceとの未接続、Owner「継続」の二操作化、同時dispatchの競合。ThreadはいまJob登録（ACK済み）に束縛され、Turnごとに検証済みResult EnvelopeとEvidence linkを残し、Evidenceが無ければ承認できない。**2次修正後のtypecheck / test / buildと既存Job Loop・Dispatch ACKの回帰は未実行である（実装環境にNode.jsが無いため）。** UI実機確認も`Error: Electron uninstall`により未了。Project Ownerが再検証するまで`Done`にしない。外部AIへの実送信、認証、課金、MCP、worktree、正本自動書込みは未実施である。
+[`ADF-RELAY-RECOVERY-001`](../tasks/ADF-RELAY-RECOVERY-001.md): `Verifying`。実装担当はClaude Code、監視・検証・差分レビューはCodex。Turn送信後・受信前にプロセスが終了したThreadが恒久停止する問題を、起動時の一度きりの走査とOwner判断による復旧（再送 / 失敗記録 / Thread停止）で解消した。中断をCase A（`answer-unavailable`）とCase B（`send-unconfirmed`）に区別し、`adapter.send()`前にintentを記録する。`dispatchId`は`attempt`込みの生成規則へ変更し、再送で必ず新しいIDになる。`appendTurn()`の`open`ガードは維持したまま、失敗記録専用の`appendRecoveryTurn()`を追加した。Codexの監視レビューで、`send-failed`後の同一sequence再送により古いintentが誤ってCase B検出されうるP1を指摘され、sequenceごとに最新attemptのintentだけを判定する形へ修正した。typecheck、Vitest 77件、buildをPass。**別プロセスで送信直後に強制終了させ、別プロセスで走査して再送・失敗記録・停止の3操作が成立することを実機確認した。** Electron画面での復旧UI操作は未確認。受信途中の中断、外部AI接続、認証、課金、MCPは対象外である。
+
+[`ADF-CONVERSATION-RELAY-001`](../tasks/ADF-CONVERSATION-RELAY-001.md): `Done`。実装担当はClaude Code。Task配下のThreadとTurnをADF内の会話一次データとし、Fake Adapter A/Bの複数ターン会話、Ownerの継続・停止・承認・次Task化、Thread表示UI、外部AI候補の`planned`登録を実装した。Project Ownerによる3回のレビューで計12件の欠陥を検出・修正した。ThreadはJob登録（ACK済み）に束縛され、Turnごとに検証済みResult EnvelopeとEvidence linkを残し、Evidenceが無ければ承認できない。Job Ledgerの状態もThreadの進行に追随する。typecheck、Vitest 60件、build / package、既存Job Loop・Dispatch ACK回帰、Electron起動、Thread開始→Proposal→継続→Critic→Result承認→次Task化の実機操作をすべてPass。Project Ownerが最終レビューと残存リスク受諾を完了した。外部AIへの実送信、認証、課金、MCP、worktree、正本自動書込みは未実施である。
 
 [`ADF-CLAUDE-ADAPTER-001`](../tasks/ADF-CLAUDE-ADAPTER-001.md): `Verifying`。複数AIを前提に、Adapter Registry、Owner承認済み固定Routing plan、役割別Adapter選択、Fake A/Bの独立Result記録を実装した。TypeScript node/web、Vitest 28件、production build、arm64 package、diff checkをPass。Claude Codeは最初の実Adapter試験例であり、CLI／SDK接続、外部送信、認証、課金、worktree、write、MCP、commit、push、mergeは別承認・別Taskとする。Project OwnerのDiff / Verification Review待ち。
 
@@ -52,7 +60,9 @@ ADFの製品境界は、Project進捗管理とAI間の受け渡しに限定す�
 
 ## 未実施・阻害要因
 
-- Product MVP 1の読み取り専用UIと共通管制Foundationは実装・Project Ownerレビュー済みである。次は、最初の外部Reviewerを手動で一件実行する。実際の外部送信はReviewer選定とPacket確認後の実行直前承認まで開始しない。
+- 次は[`ADF-RELAY-RECOVERY-001`](../tasks/ADF-RELAY-RECOVERY-001.md)である。Turn送信後・受信前にプロセスが終了したThreadが恒久停止する不具合を、起動時検出とOwner判断による復旧で解消する。設計とTask正本は作成済みで、Project Ownerの「設計OK」を待つ段階である。
+- 実AI Adapter接続（Claude / Codex等）は、Recovery Taskの完了後にさらに別Task・別承認とする。外部AIは受理と回答の間隔が長く、その間にアプリが閉じられ得るため、pendingがプロセスを跨いで復旧できることが実接続の前提である。実際の外部送信は、Provider選定とPacket確認後の実行直前承認まで開始しない。
+- `ADF-REVIEW-001`で設計した手動の外部Reviewer実験は、`ADF-REVIEW-FORWARD-002`が`Invalid / STOP`で終了して以降、再開していない。Relay上の外部Adapterとして扱うか、手動実験として続けるかは未決である。
 - 独立AIレビュー、外部API、自動モデル選定は未導入である。
 - Claude Code向けpacket-only Skillは構造を作成したが、実際にSkillが指示へ従うかを示すforward testと、技術的に隔離したReviewer環境は未検証である。
 - OpenRouterのアカウント、APIキー、予算、データ方針は未設定であり、このPhaseでは不要である。

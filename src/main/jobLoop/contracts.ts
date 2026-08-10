@@ -51,12 +51,13 @@ export function createDispatchKey(packet: ApprovedTaskPacket): string {
 }
 
 const transitions: Record<JobState, readonly JobState[]> = {
-  queued: ['running', 'cancelled'],
+  queued: ['running', 'cancelled', 'recovery-needed'],
   running: ['awaiting-review', 'failed', 'cancelled', 'recovery-needed'],
   'awaiting-review': [],
   failed: [],
   cancelled: [],
-  'recovery-needed': []
+  // A Job in recovery is not finished: the Owner can resend, abandon, or record the failure.
+  'recovery-needed': ['running', 'cancelled', 'failed']
 }
 
 export function canTransition(from: JobState, to: JobState): boolean {

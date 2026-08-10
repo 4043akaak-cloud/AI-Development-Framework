@@ -4,7 +4,7 @@ import { canonicalSources, rootFor } from '../shared/canonicalLinkPolicy'
 import { openResolvedCanonicalSource, type CanonicalSourceDefinition } from './canonicalSourceService'
 import { safeDevelopmentRendererUrl } from '../shared/rendererUrlPolicy'
 import { ConversationRelay } from './jobLoop/relay'
-import { continueThread, decideThread, getThread, listApprovedTaskIds, listThreads, sendFirstTurn, startApprovedThread } from './relayService'
+import { continueThread, decideThread, getThread, listApprovedTaskIds, listThreads, recoverThread, scanForRecovery, sendFirstTurn, startApprovedThread } from './relayService'
 
 let mainWindow: BrowserWindow | undefined
 
@@ -39,7 +39,7 @@ function createWindow(): void {
   }
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false))
   ipcMain.handle('board:open-canonical-source', (_event, sourceId: unknown) => openResolvedCanonicalSource(sourceId, allowedSources, shell.openPath))
 
@@ -51,7 +51,10 @@ app.whenReady().then(() => {
   ipcMain.handle('relay:send-first', (_event, threadId: unknown) => sendFirstTurn(relay, threadId))
   ipcMain.handle('relay:continue', (_event, threadId: unknown, note: unknown) => continueThread(relay, threadId, note))
   ipcMain.handle('relay:decide', (_event, threadId: unknown, action: unknown, note: unknown) => decideThread(relay, threadId, action, note))
+  ipcMain.handle('relay:recover', (_event, threadId: unknown, action: unknown, note: unknown) => recoverThread(relay, threadId, action, note))
 
+  // One pass, before the window exists, so the renderer cannot act on a Thread mid-scan.
+  await scanForRecovery(relay)
   createWindow()
 
   app.on('activate', () => {

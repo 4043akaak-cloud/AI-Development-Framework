@@ -1,7 +1,7 @@
 import path from 'node:path'
 import { readdir } from 'node:fs/promises'
 import type { ApprovedTaskPacket } from '../shared/jobLoopTypes'
-import type { ConversationThread, OwnerAction, RelayResult, ThreadSummary } from '../shared/threadTypes'
+import type { ConversationThread, OwnerAction, RecoveryAction, RelayResult, ThreadSummary } from '../shared/threadTypes'
 import { readJson } from './jobLoop/ledger'
 import type { ConversationRelay } from './jobLoop/relay'
 
@@ -84,6 +84,33 @@ export function sendFirstTurn(relay: ConversationRelay, threadId: unknown): Prom
 /** One Owner action: approve continuation and add the next Turn. */
 export function continueThread(relay: ConversationRelay, threadId: unknown, note: unknown): Promise<RelayResult<ConversationThread>> {
   return guard(() => relay.continueWithOwnerApproval(asIdentifier(threadId, 'threadId'), asNote(note)))
+}
+
+const recoveryActions: readonly RecoveryAction[] = ['resend', 'record-failure', 'stop']
+
+function asRecoveryAction(value: unknown): RecoveryAction {
+  if (typeof value !== 'string' || !recoveryActions.includes(value as RecoveryAction)) throw new Error('invalid recovery action')
+  return value as RecoveryAction
+}
+
+/** One startup pass. Detects interrupted sends; never resends or fails anything on its own. */
+export function scanForRecovery(relay: ConversationRelay): Promise<RelayResult<ThreadSummary[]>> {
+  return guard(() => relay.scanForRecovery())
+}
+
+export function recoverThread(relay: ConversationRelay, threadId: unknown, action: unknown, note: unknown): Promise<RelayResult<ConversationThread>> {
+  return guard(() => {
+    const id = asIdentifier(threadId, 'threadId')
+    const safeNote = asNote(note)
+    switch (asRecoveryAction(action)) {
+      case 'resend':
+        return relay.resendFromRecovery(id, safeNote)
+      case 'record-failure':
+        return relay.recordRecoveryFailure(id, safeNote)
+      default:
+        return relay.stopFromRecovery(id, safeNote)
+    }
+  })
 }
 
 export function decideThread(relay: ConversationRelay, threadId: unknown, action: unknown, note: unknown): Promise<RelayResult<ConversationThread>> {

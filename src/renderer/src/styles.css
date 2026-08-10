@@ -38,3 +38,7 @@ h1, h2, h3, p { margin-top: 0; } h1 { margin-bottom: 8px; font-size: 32px; } h2 
 .turn-meta small, .turn-refs { color: #90aaa3; font-size: 11px; }
 .turn-content { margin: 0; line-height: 1.55; font-size: 14px; }
 .owner-log ul { list-style: none; padding: 0; display: grid; gap: 5px; color: #b3ccc4; font-size: 12px; }
+.recovery-panel { border: 1px solid #a8663f; border-left-width: 4px; border-radius: 9px; background: #2a1c14; padding: 14px; display: grid; gap: 10px; }
+.recovery-panel h3 { margin: 0; color: #ffc79a; }
+.recovery-panel .detail-grid div { background: #35241a; }
+.recovery-panel .detail-grid dt { color: #ffc79a; }

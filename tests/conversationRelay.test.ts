@@ -9,17 +9,17 @@ import { JobRuntime } from '../src/main/jobLoop/runtime'
 import { FakeDispatchReceiver } from '../src/main/jobLoop/dispatchAck'
 import { routeAdapters } from '../src/main/jobLoop/adapterRegistry'
 import { hashJson } from '../src/main/jobLoop/hash'
+import type { ConversationAdapter } from '../src/main/jobLoop/conversationAdapters'
 import { FakeCriticConversationAdapter, FakeProposalConversationAdapter } from '../src/main/jobLoop/conversationAdapters'
-import { appendTurn, applyOwnerDecision, assertThreadTransition, createThread, ThreadRejectedError, turnHash } from '../src/main/jobLoop/thread'
+import { appendRecoveryTurn, appendTurn, applyOwnerDecision, assertThreadTransition, createThread, ThreadRejectedError, turnHash } from '../src/main/jobLoop/thread'
 
-function approvedPacket(overrides: Partial<ApprovedTaskPacket> = {}, fixtureMode: FixtureMode = 'success'): ApprovedTaskPacket {
+function approvedPacket(overrides: Partial<ApprovedTaskPacket> = {}, fixtureMode: FixtureMode = 'success', taskId = 'ADF-CONVERSATION-RELAY-001'): ApprovedTaskPacket {
   const scope = { inScope: ['Thread', 'Turn', 'Owner操作'], outOfScope: ['外部送信', '認証', '課金'] }
   const context = {
-    githubTask: 'manual-fixture://ADF-CONVERSATION-RELAY-001',
+    githubTask: `manual-fixture://${taskId}`,
     obsidianContext: ['manual-fixture://16_ChatGPT_ADF_各AI自動往復構想_2026-08-07.md'],
     adoptedPrinciples: ['owner-approval', 'source-boundary']
   }
-  const taskId = 'ADF-CONVERSATION-RELAY-001'
   const scopeHash = hashJson(scope)
   const adapterPlan = routeAdapters(taskId, ['proposal', 'critic'], ['read', 'propose'])
   return {
@@ -32,7 +32,7 @@ function approvedPacket(overrides: Partial<ApprovedTaskPacket> = {}, fixtureMode
     acceptance: ['Threadが承認済みTaskに紐づく'],
     stopConditions: ['Approval不在', '最大Turn超過'],
     approval: {
-      approvalId: 'approval-adf-conversation-relay-001',
+      approvalId: `approval-${taskId.toLowerCase()}`,
       taskId,
       status: 'active',
       approvedBy: 'Project Owner',
@@ -447,6 +447,256 @@ describe('ADF-CONVERSATION-RELAY-001 relay conversation', () => {
     const second = await current.startThread(approvedPacket())
     expect(second.threadId).toBe(first.threadId)
     expect(await current.listThreads()).toHaveLength(1)
+  })
+})
+
+/** Simulates a restart: same runtime directory, fresh adapters whose in-memory answers are gone. */
+async function restart(previous: ConversationRelay, adapters?: readonly ConversationAdapter[]): Promise<ConversationRelay> {
+  return new ConversationRelay({ runtimeRoot: previous.runtimeRoot, ...(adapters ? { adapters } : {}) })
+}
+
+class ThrowingSendAdapter extends FakeProposalConversationAdapter {
+  override async send(): Promise<never> {
+    throw new Error('network unreachable: token=SHOULD-NOT-BE-LOGGED')
+  }
+}
+
+class ThrowingGetStateAdapter extends FakeProposalConversationAdapter {
+  override async getState(): Promise<never> {
+    throw new Error(`probe failed ${'x'.repeat(400)}`)
+  }
+}
+
+describe('ADF-RELAY-RECOVERY-001 detection', () => {
+  it('detects an interrupted send whose answer is gone (Case A)', async () => {
+    const first = await relay()
+    const threadId = await startedThread(first)
+    await first.sendToAdapter(threadId)
+
+    const restarted = await restart(first)
+    const detected = await restarted.scanForRecovery()
+    expect(detected).toHaveLength(1)
+
+    const thread = await restarted.getConversationState(threadId)
+    expect(thread.state).toBe('recovery-needed')
+    expect(thread.recovery).toMatchObject({ reason: 'answer-unavailable', sequence: 0, adapterId: 'fake-ai-a', role: 'proposal', attempt: 0 })
+    expect(thread.recovery?.expiresAt).toBeTruthy()
+    expect((await restarted.jobRuntime.readJob(thread.jobId)).state).toBe('recovery-needed')
+  })
+
+  it('detects a send that was never confirmed (Case B) and keeps the error text safe', async () => {
+    const current = await relay({ adapters: [new ThrowingSendAdapter(), new FakeCriticConversationAdapter()] })
+    const threadId = await startedThread(current)
+    await expect(current.sendToAdapter(threadId)).rejects.toThrow(/network unreachable/)
+
+    const duringSession = await current.getConversationState(threadId)
+    expect(duringSession.state).toBe('open')
+
+    const restarted = await restart(current, [new ThrowingSendAdapter(), new FakeCriticConversationAdapter()])
+    expect(await restarted.scanForRecovery()).toHaveLength(1)
+    const thread = await restarted.getConversationState(threadId)
+    expect(thread.state).toBe('recovery-needed')
+    expect(thread.recovery?.reason).toBe('send-unconfirmed')
+
+    const events = (await readFile(path.join(current.threadDirectory(threadId), 'thread-events.jsonl'), 'utf8')).split('\n').filter(Boolean).map((line) => JSON.parse(line))
+    const failure = events.find((event) => event.type === 'relay.send-failed')
+    expect(failure.sendError.length).toBeLessThanOrEqual(200)
+    expect(failure.sendError).not.toContain('    at ')
+    expect(failure.sendError).toContain('network unreachable')
+  })
+
+  it('treats a getState exception as recovery and keeps scanning other threads', async () => {
+    const adapters = [new ThrowingGetStateAdapter(), new FakeCriticConversationAdapter()]
+    const current = await relay({ adapters })
+    const first = await current.startThread(approvedPacket({}, 'success', 'ADF-RECOVERY-FIXTURE-A'))
+    const second = await current.startThread(approvedPacket({}, 'success', 'ADF-RECOVERY-FIXTURE-B'))
+    await current.sendToAdapter(first.threadId)
+    await current.sendToAdapter(second.threadId)
+
+    const restarted = await restart(current, [new ThrowingGetStateAdapter(), new FakeCriticConversationAdapter()])
+    expect(await restarted.scanForRecovery()).toHaveLength(2)
+
+    const recovered = await restarted.getConversationState(first.threadId)
+    expect(recovered.state).toBe('recovery-needed')
+    expect(recovered.recovery?.probeError).toHaveLength(200)
+  })
+
+  it('does not report a superseded send-failed attempt once the same sequence succeeded', async () => {
+    const failing = new ThrowingSendAdapter()
+    const working = new FakeProposalConversationAdapter()
+    let proposal: ConversationAdapter = failing
+    // One adapter identity whose first send throws and whose retry succeeds, as a flaky AI would.
+    const flaky: ConversationAdapter = {
+      adapterId: 'fake-ai-a',
+      role: 'proposal',
+      send: (request) => proposal.send(request),
+      getState: (acceptance) => proposal.getState(acceptance),
+      receive: (acceptance) => proposal.receive(acceptance)
+    }
+
+    const current = await relay({ adapters: [flaky, new FakeCriticConversationAdapter()] })
+    const threadId = await startedThread(current)
+    await expect(current.sendToAdapter(threadId)).rejects.toThrow(/network unreachable/)
+
+    proposal = working
+    const answered = await current.continueJob(threadId)
+    expect(answered.turns).toHaveLength(1)
+    expect(answered.turns[0].sequence).toBe(0)
+
+    // Put the Thread back to `open` so the scan actually inspects it.
+    await current.recordOwnerDecision(threadId, 'continue')
+    const restarted = await restart(current, [new FakeProposalConversationAdapter(), new FakeCriticConversationAdapter()])
+    expect(await restarted.scanForRecovery()).toHaveLength(0)
+    expect((await restarted.getConversationState(threadId)).state).toBe('open')
+  })
+
+  it('reports only the newest attempt when a retry after send-failed is also interrupted', async () => {
+    const current = await relay({ adapters: [new ThrowingSendAdapter(), new FakeCriticConversationAdapter()] })
+    const threadId = await startedThread(current)
+    await expect(current.sendToAdapter(threadId)).rejects.toThrow(/network unreachable/)
+    await expect(current.sendToAdapter(threadId)).rejects.toThrow(/network unreachable/)
+
+    const events = (await readFile(path.join(current.threadDirectory(threadId), 'thread-events.jsonl'), 'utf8')).split('\n').filter(Boolean).map((line) => JSON.parse(line))
+    const intents = events.filter((event) => event.type === 'relay.dispatch-intent')
+    expect(intents.map((intent) => intent.attempt)).toEqual([0, 1])
+
+    const restarted = await restart(current, [new ThrowingSendAdapter(), new FakeCriticConversationAdapter()])
+    const detected = await restarted.scanForRecovery()
+    expect(detected).toHaveLength(1)
+
+    const thread = await restarted.getConversationState(threadId)
+    expect(thread.state).toBe('recovery-needed')
+    expect(thread.recovery).toMatchObject({ reason: 'send-unconfirmed', dispatchId: intents[1].dispatchId, sequence: 0, attempt: 1 })
+    expect(thread.recovery?.dispatchId).not.toBe(intents[0].dispatchId)
+  })
+
+  it('leaves a thread open when the adapter can still produce the answer', async () => {
+    const current = await relay()
+    const threadId = await startedThread(current)
+    await current.sendToAdapter(threadId)
+    expect(await current.scanForRecovery()).toHaveLength(0)
+    expect((await current.getConversationState(threadId)).state).toBe('open')
+  })
+
+  it('does not act on an expired pending by itself', async () => {
+    const expiring = new ConversationRelay({ runtimeRoot: await mkdtemp(path.join(tmpdir(), 'adf-relay-ttl-')), pendingTtlMs: 1 })
+    const thread = await expiring.startThread(approvedPacket())
+    const handle = await expiring.sendToAdapter(thread.threadId)
+    expect(new Date(handle.expiresAt).getTime()).toBeLessThan(Date.now() + 1000)
+    expect((await expiring.getConversationState(thread.threadId)).state).toBe('open')
+    expect((await expiring.listThreads())[0].recoveryRequired).toBe(false)
+  })
+})
+
+describe('ADF-RELAY-RECOVERY-001 owner recovery actions', () => {
+  async function interrupted(): Promise<{ current: ConversationRelay; threadId: string; oldDispatchId: string }> {
+    const first = await relay()
+    const threadId = await startedThread(first)
+    const handle = await first.sendToAdapter(threadId)
+    const current = await restart(first)
+    await current.scanForRecovery()
+    return { current, threadId, oldDispatchId: handle.dispatchId }
+  }
+
+  it('resends with the same sequence but a new dispatchId', async () => {
+    const { current, threadId, oldDispatchId } = await interrupted()
+    const resent = await current.resendFromRecovery(threadId)
+
+    expect(resent.state).toBe('awaiting-owner')
+    expect(resent.turns).toHaveLength(1)
+    expect(resent.turns[0].sequence).toBe(0)
+    expect(resent.turns[0].dispatchId).not.toBe(oldDispatchId)
+    expect(resent.recovery).toBeUndefined()
+    expect((await current.jobRuntime.readJob(resent.jobId)).state).toBe('running')
+  })
+
+  it('records a failure as a failed turn with evidence and blocks approval', async () => {
+    const { current, threadId } = await interrupted()
+    const recorded = await current.recordRecoveryFailure(threadId, 'Ownerが失敗として記録')
+
+    expect(recorded.state).toBe('awaiting-owner')
+    expect(recorded.recovery).toBeUndefined()
+    const turn = recorded.turns[0]
+    expect(turn.status).toBe('failed')
+    expect(turn.content).toContain('Adapterの発言ではない')
+    expect(turn.errorRef).toBe(`threads/${threadId}/errors/${turn.turnId}.json`)
+
+    const envelope = JSON.parse(await readFile(path.join(current.threadDirectory(threadId), 'results', `${turn.turnId}.json`), 'utf8'))
+    expect(envelope).toMatchObject({ status: 'failed', terminationReason: 'recovery-failed', ownerDecisionRequired: true })
+    expect(envelope.verification).toEqual([{ name: 'adapter-answer-recovered', status: 'not-run', reason: 'answer-unavailable' }])
+
+    const errorRecord = JSON.parse(await readFile(path.join(current.threadDirectory(threadId), 'errors', `${turn.turnId}.json`), 'utf8'))
+    expect(errorRecord).toMatchObject({ reason: 'answer-unavailable', sequence: 0, adapterId: 'fake-ai-a', attempt: 0, note: 'Ownerが失敗として記録' })
+
+    await expect(current.recordOwnerDecision(threadId, 'approve')).rejects.toThrow(/approve requires/)
+  })
+
+  it('stops the thread and cancels the job', async () => {
+    const { current, threadId } = await interrupted()
+    const stopped = await current.stopFromRecovery(threadId)
+    expect(stopped.state).toBe('stopped')
+    expect(stopped.recovery).toBeUndefined()
+    expect((await current.jobRuntime.readJob(stopped.jobId)).state).toBe('cancelled')
+    await expect(current.continueJob(threadId)).rejects.toThrow(/thread is not open/)
+  })
+
+  it('refuses ordinary owner actions and continue while recovery is pending', async () => {
+    const { current, threadId } = await interrupted()
+    await expect(current.recordOwnerDecision(threadId, 'stop')).rejects.toThrow(/use a recovery action/)
+    await expect(current.recordOwnerDecision(threadId, 'approve')).rejects.toThrow(/use a recovery action/)
+    await expect(current.continueJob(threadId)).rejects.toThrow(/use a recovery action first/)
+  })
+
+  it('refuses a recovery action on a thread that is not in recovery', async () => {
+    const current = await relay()
+    const threadId = await startedThread(current)
+    await expect(current.resendFromRecovery(threadId)).rejects.toThrow(/not awaiting recovery/)
+    await expect(current.recordRecoveryFailure(threadId)).rejects.toThrow(/not awaiting recovery/)
+    await expect(current.stopFromRecovery(threadId)).rejects.toThrow(/not awaiting recovery/)
+  })
+
+  it('detects a second interruption at the same sequence after a resend', async () => {
+    const { current, threadId } = await interrupted()
+    await current.resendFromRecovery(threadId)
+    await current.recordOwnerDecision(threadId, 'continue')
+    await current.sendToAdapter(threadId)
+
+    const restarted = await restart(current)
+    expect(await restarted.scanForRecovery()).toHaveLength(1)
+    const thread = await restarted.getConversationState(threadId)
+    expect(thread.state).toBe('recovery-needed')
+    expect(thread.recovery?.sequence).toBe(1)
+    expect(thread.recovery?.attempt).toBe(0)
+  })
+})
+
+describe('ADF-RELAY-RECOVERY-001 recovery turn rules', () => {
+  const recoveryTurn = (overrides: Partial<ConversationTurn> = {}): ConversationTurn =>
+    turnFixture({ status: 'failed', errorRef: 'threads/t1/errors/turn-0.json', ...overrides })
+
+  it('accepts an ADF failure turn only from recovery-needed', () => {
+    const base = { ...threadFixture(), state: 'recovery-needed' as const }
+    expect(appendRecoveryTurn(base, recoveryTurn()).turns).toHaveLength(1)
+    expect(() => appendRecoveryTurn(threadFixture(), recoveryTurn())).toThrow(/thread is not recovery-needed/)
+  })
+
+  it('rejects a recovery turn that is not a failure or has no error reference', () => {
+    const base = { ...threadFixture(), state: 'recovery-needed' as const }
+    expect(() => appendRecoveryTurn(base, recoveryTurn({ status: 'success' }))).toThrow(/must be failed/)
+    expect(() => appendRecoveryTurn(base, turnFixture({ status: 'failed' }))).toThrow(/requires an errorRef/)
+  })
+
+  it('keeps order, duplicate and parent checks on the recovery path', () => {
+    const base = { ...threadFixture(), state: 'recovery-needed' as const }
+    expect(() => appendRecoveryTurn(base, recoveryTurn({ sequence: 3 }))).toThrow(/turn sequence must be 0/)
+    const withOne = { ...appendRecoveryTurn(base, recoveryTurn()), state: 'recovery-needed' as const }
+    expect(() => appendRecoveryTurn(withOne, recoveryTurn({ turnId: 'turn-1', sequence: 1 }))).toThrow(/must reference a parent turn/)
+    expect(() => appendRecoveryTurn(withOne, recoveryTurn({ sequence: 1, respondsToTurnId: withOne.turns[0].turnId, respondsToHash: turnHash(withOne.turns[0]) }))).toThrow(/duplicate turnId/)
+  })
+
+  it('still refuses an ordinary turn outside open', () => {
+    const base = { ...threadFixture(), state: 'recovery-needed' as const }
+    expect(() => appendTurn(base, turnFixture())).toThrow(/thread is not open/)
   })
 })
 

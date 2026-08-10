@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState, type JSX } from 'react'
-import type { ConversationThread, OwnerAction, ThreadState, ThreadSummary } from '../../shared/threadTypes'
+import type { ConversationThread, OwnerAction, RecoveryAction, RecoveryReason, ThreadState, ThreadSummary } from '../../shared/threadTypes'
 
 const stateCopy: Record<ThreadState, string> = {
   open: '送信可能',
   'awaiting-owner': 'Owner判断待ち',
+  'recovery-needed': '要復旧',
   stopped: '停止',
   approved: '承認済み',
   completed: '完了・次Taskへ',
@@ -16,6 +17,8 @@ type DecisionAction = Exclude<OwnerAction, 'continue'>
 const allowedDecisions: Record<ThreadState, readonly DecisionAction[]> = {
   open: ['stop'],
   'awaiting-owner': ['stop', 'approve'],
+  // Recovery has its own three actions; the ordinary decisions are refused in this state.
+  'recovery-needed': [],
   approved: ['next-task', 'stop'],
   stopped: [],
   completed: [],
@@ -27,6 +30,17 @@ const decisionLabels: Record<DecisionAction, string> = {
   approve: 'Resultを承認',
   'next-task': '次Task化して完了'
 }
+
+const recoveryReasonCopy: Record<RecoveryReason, string> = {
+  'answer-unavailable': 'Adapterは受理したが、回答を取得できない（Case A）',
+  'send-unconfirmed': 'Adapterへ届いたか確認できない（Case B）'
+}
+
+const recoveryActions: ReadonlyArray<{ action: RecoveryAction; label: string }> = [
+  { action: 'resend', label: '再送（同じ順番・新しいdispatch）' },
+  { action: 'record-failure', label: '失敗として記録' },
+  { action: 'stop', label: 'Threadを停止' }
+]
 
 type RelayCall<T> = () => Promise<{ ok: true; value: T } | { ok: false; error: string }>
 
@@ -59,9 +73,12 @@ export default function ThreadPanel(): JSX.Element {
   }
 
   const belowLimit = thread ? thread.turns.length < thread.maxTurns : false
+  const inRecovery = thread?.state === 'recovery-needed'
   const canSendFirst = thread?.state === 'open' && belowLimit
   const canContinue = thread?.state === 'awaiting-owner' && belowLimit
   const decisions = thread ? allowedDecisions[thread.state] : []
+  const recovery = thread?.recovery
+  const expired = Boolean(recovery?.expiresAt && new Date(recovery.expiresAt).getTime() < Date.now())
   const hasEvidence = thread ? thread.turns.some((turn) => turn.resultEnvelopeRef && (turn.status === 'success' || turn.status === 'partial')) : false
 
   return (
@@ -101,6 +118,7 @@ export default function ThreadPanel(): JSX.Element {
               <span className="card-objective">{summary.title}</span>
               <span className="card-status">{stateCopy[summary.state]} · {summary.turnCount}/{summary.maxTurns} Turn</span>
               {summary.ownerActionRequired && <span className="freshness stale">Owner判断待ち</span>}
+              {summary.recoveryRequired && <span className="freshness broken">要復旧{summary.recoveryReason === 'send-unconfirmed' ? '（Case B）' : '（Case A）'}</span>}
             </button>
           ))}
         </aside>
@@ -118,6 +136,31 @@ export default function ThreadPanel(): JSX.Element {
                 <div><dt>Job（ACK済み）</dt><dd>jobs/{thread.jobId}/</dd></div>
                 <div><dt>Ledger / Evidence</dt><dd>threads/{thread.threadId}/thread.json · evidence-links.json</dd></div>
               </dl>
+
+              {inRecovery && recovery && (
+                <section className="recovery-panel" aria-label="復旧が必要なThread">
+                  <h3>復旧が必要です（{recovery.reason === 'answer-unavailable' ? 'Case A' : 'Case B'}）</h3>
+                  <p className="turn-content">{recoveryReasonCopy[recovery.reason]}</p>
+                  <dl className="detail-grid">
+                    <div><dt>対象Turn</dt><dd>{recovery.sequence + 1}（sequence {recovery.sequence}）</dd></div>
+                    <div><dt>Adapter</dt><dd>{recovery.adapterId} / {recovery.role}</dd></div>
+                    <div><dt>dispatchId</dt><dd>{recovery.dispatchId}</dd></div>
+                    <div><dt>attempt</dt><dd>{recovery.attempt}</dd></div>
+                    <div><dt>送信時刻</dt><dd>{recovery.sentAt}</dd></div>
+                    <div><dt>期限</dt><dd>{recovery.expiresAt ?? '記録なし'}{expired ? ' · 期限超過' : ''}</dd></div>
+                    <div><dt>検出時刻</dt><dd>{recovery.detectedAt}</dd></div>
+                    {recovery.probeError && <div><dt>Adapter応答エラー</dt><dd>{recovery.probeError}</dd></div>}
+                  </dl>
+                  <p className="turn-refs">期限超過は表示のみです。ADFは自動で再送・失敗記録・停止を行いません。</p>
+                  <div className="owner-actions" aria-label="復旧操作">
+                    {recoveryActions.map((entry) => (
+                      <button key={entry.action} type="button" className="text-button" disabled={busy} onClick={() => void run(() => window.adfRelay.recoverThread(thread.threadId, entry.action))}>
+                        {entry.label}
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              )}
 
               <div className="owner-actions" aria-label="Owner操作">
                 {canSendFirst && (
@@ -142,7 +185,7 @@ export default function ThreadPanel(): JSX.Element {
                     {decisionLabels[action]}
                   </button>
                 ))}
-                {decisions.length === 0 && !canSendFirst && !canContinue && <small className="turn-refs">このThreadは終端状態です。Owner操作はありません。</small>}
+                {decisions.length === 0 && !canSendFirst && !canContinue && !inRecovery && <small className="turn-refs">このThreadは終端状態です。Owner操作はありません。</small>}
               </div>
 
               {thread.turns.length === 0 && <p className="lane-empty">まだ発言がありません。「次のAIへ送信」でProposal役から開始します。</p>}

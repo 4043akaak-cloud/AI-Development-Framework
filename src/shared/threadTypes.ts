@@ -1,8 +1,30 @@
 import type { AdapterRole, ResultStatus } from './jobLoopTypes'
 
-export type ThreadState = 'open' | 'awaiting-owner' | 'stopped' | 'approved' | 'completed' | 'failed'
+
+export type ThreadState = 'open' | 'awaiting-owner' | 'recovery-needed' | 'stopped' | 'approved' | 'completed' | 'failed'
 export type TurnStatus = ResultStatus
 export type OwnerAction = 'continue' | 'stop' | 'approve' | 'next-task'
+
+/** Why a Thread needs Owner-driven recovery. */
+export type RecoveryReason = 'answer-unavailable' | 'send-unconfirmed'
+export type RecoveryAction = 'resend' | 'record-failure' | 'stop'
+
+/** What ADF knows about the interrupted send, shown to the Owner before they choose. */
+export interface RecoveryInfo {
+  reason: RecoveryReason
+  dispatchId: string
+  sequence: number
+  adapterId: string
+  role: AdapterRole
+  attempt: number
+  sentAt: string
+  expiresAt?: string
+  detectedAt: string
+  respondsToTurnId?: string
+  respondsToHash?: string
+  /** First 200 characters of a getState() exception. Never a stack trace or credentials. */
+  probeError?: string
+}
 
 export interface ConversationTurn {
   turnId: string
@@ -49,6 +71,8 @@ export interface ConversationThread {
   createdAt: string
   updatedAt: string
   stopReason?: string
+  /** Present only while state is `recovery-needed`. Cleared when the Owner resolves it. */
+  recovery?: RecoveryInfo
 }
 
 /** Pending send that has not yet produced a Turn. External adapters answer asynchronously. */
@@ -60,9 +84,13 @@ export interface RelayDispatchHandle {
   adapterId: string
   role: AdapterRole
   sequence: number
+  /** 0 for the first send of a sequence, incremented by every Owner-driven resend. */
+  attempt: number
   respondsToTurnId?: string
   respondsToHash?: string
   sentAt: string
+  /** Display-only deadline. Passing it never triggers an automatic action. */
+  expiresAt: string
 }
 
 export interface RelayTurnPayload {
@@ -90,6 +118,8 @@ export interface ThreadSummary {
   lastAdapterId: string | null
   lastTurnStatus: TurnStatus | null
   ownerActionRequired: boolean
+  recoveryRequired: boolean
+  recoveryReason?: RecoveryReason
   updatedAt: string
   stopReason?: string
 }

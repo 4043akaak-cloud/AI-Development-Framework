@@ -1,22 +1,31 @@
 import path from 'node:path'
 import { readdir } from 'node:fs/promises'
-import type { AdapterRole, ApprovedTaskPacket, JobState } from '../../shared/jobLoopTypes'
-import type { ConversationThread, ConversationTurn, OwnerAction, RelayDispatchHandle, RelayTurnPayload, ThreadSummary } from '../../shared/threadTypes'
+import type { AdapterRole, ApprovedTaskPacket, JobEvent, JobState } from '../../shared/jobLoopTypes'
+import type { ConversationThread, ConversationTurn, OwnerAction, RecoveryInfo, RelayDispatchHandle, RelayTurnPayload, ThreadSummary } from '../../shared/threadTypes'
 import { getAdapterProfile } from './adapterRegistry'
 import { canTransition, validateApprovedTask } from './contracts'
 import type { AdapterAcceptance, ConversationAdapter } from './conversationAdapters'
 import { FakeCriticConversationAdapter, FakeProposalConversationAdapter } from './conversationAdapters'
 import { hashJson } from './hash'
-import { appendEvent, ensureDir, readJson, removeFile, writeJsonAtomic, writeJsonExclusive } from './ledger'
+import { appendEvent, ensureDir, readEvents, readJson, removeFile, writeJsonAtomic, writeJsonExclusive } from './ledger'
 import { validateResultEnvelope, type AdapterResultEnvelope } from './resultEnvelope'
 import { JobRuntime } from './runtime'
-import { appendTurn, applyOwnerDecision, createThread, defaultMaxTurns, lastTurn, summarize, ThreadRejectedError, turnHash, withState } from './thread'
+import { appendRecoveryTurn, appendTurn, applyOwnerDecision, createThread, defaultMaxTurns, enterRecovery, lastTurn, leaveRecovery, summarize, ThreadRejectedError, turnHash, withState } from './thread'
+
+/** Display-only deadline for a pending dispatch. Passing it never triggers an automatic action. */
+export const defaultPendingTtlMs = 15 * 60 * 1000
+
+/** Keeps adapter-supplied error text short and free of stack traces or payloads. */
+function safeErrorText(error: unknown): string {
+  return String((error as Error)?.message ?? error).slice(0, 200)
+}
 
 export interface ConversationRelayOptions {
   runtimeRoot?: string
   clock?: () => Date
   adapters?: readonly ConversationAdapter[]
   jobRuntime?: JobRuntime
+  pendingTtlMs?: number
 }
 
 interface PendingDispatch {
@@ -29,13 +38,15 @@ export class ConversationRelay {
   readonly runtimeRoot: string
   readonly clock: () => Date
   readonly jobRuntime: JobRuntime
+  readonly pendingTtlMs: number
   private readonly adapters: Map<string, ConversationAdapter>
   /** Serialises relay work per Thread so concurrent calls cannot claim the same sequence. */
   private readonly queues = new Map<string, Promise<unknown>>()
 
-  constructor({ runtimeRoot = '.adf-runtime', clock = () => new Date(), adapters, jobRuntime }: ConversationRelayOptions = {}) {
+  constructor({ runtimeRoot = '.adf-runtime', clock = () => new Date(), adapters, jobRuntime, pendingTtlMs = defaultPendingTtlMs }: ConversationRelayOptions = {}) {
     this.runtimeRoot = path.resolve(runtimeRoot)
     this.clock = clock
+    this.pendingTtlMs = pendingTtlMs
     this.jobRuntime = jobRuntime ?? new JobRuntime({ runtimeRoot: this.runtimeRoot, clock })
     const list = adapters ?? [new FakeProposalConversationAdapter(), new FakeCriticConversationAdapter()]
     this.adapters = new Map(list.map((adapter) => [adapter.adapterId, adapter]))
@@ -88,8 +99,30 @@ export class ConversationRelay {
     return thread
   }
 
+  private eventsPath(threadId: string): string {
+    return path.join(this.threadDirectory(threadId), 'thread-events.jsonl')
+  }
+
   private async record(threadId: string, type: string, details: Record<string, unknown>): Promise<void> {
-    await appendEvent(path.join(this.threadDirectory(threadId), 'thread-events.jsonl'), { type, at: this.now(), threadId, ...details })
+    await appendEvent(this.eventsPath(threadId), { type, at: this.now(), threadId, ...details })
+  }
+
+  private readThreadEvents(threadId: string): Promise<JobEvent[]> {
+    return readEvents(this.eventsPath(threadId))
+  }
+
+  /**
+   * How many dispatches have already been attempted for this sequence. Counted from the Ledger
+   * rather than the clock, so a fixed test clock cannot collapse two attempts into one id.
+   */
+  private attemptForSequence(events: readonly JobEvent[], sequence: number): number {
+    return events.filter((event) => event.type === 'relay.dispatch-intent' && typeof event.sequence === 'number' && event.sequence === sequence).length
+  }
+
+  private recordedDispatchIds(events: readonly JobEvent[]): Set<string> {
+    const ids = new Set<string>()
+    for (const event of events) if (typeof event.dispatchId === 'string') ids.add(event.dispatchId)
+    return ids
   }
 
   private async readPending(threadId: string): Promise<PendingDispatch | null> {
@@ -216,29 +249,49 @@ export class ConversationRelay {
 
     const parent = lastTurn(thread)
     const sequence = thread.turns.length
+    const events = await this.readThreadEvents(threadId)
+    const attempt = this.attemptForSequence(events, sequence)
+    const dispatchId = `relay-dispatch-${hashJson([threadId, sequence, adapter.adapterId, attempt]).slice(0, 20)}`
+    if (this.recordedDispatchIds(events).has(dispatchId)) {
+      throw new ThreadRejectedError([`dispatchId ${dispatchId} was already used on this thread; refusing to reuse it`])
+    }
+
+    const sentAt = this.now()
     const handle: RelayDispatchHandle = {
-      dispatchId: `relay-dispatch-${hashJson([threadId, sequence, adapter.adapterId]).slice(0, 20)}`,
+      dispatchId,
       threadId,
       taskId: thread.taskId,
       jobId: thread.jobId,
       adapterId: adapter.adapterId,
       role: adapter.role,
       sequence,
+      attempt,
       ...(parent ? { respondsToTurnId: parent.turnId, respondsToHash: turnHash(parent) } : {}),
-      sentAt: this.now()
+      sentAt,
+      expiresAt: new Date(new Date(sentAt).getTime() + this.pendingTtlMs).toISOString()
     }
 
-    const acceptance = await adapter.send({
-      dispatchId: handle.dispatchId,
-      taskId: thread.taskId,
-      threadId,
-      jobId: thread.jobId,
-      title: thread.title,
-      role: adapter.role,
-      sequence,
-      priorTurns: thread.turns
-    })
-    if (acceptance.dispatchId !== handle.dispatchId || acceptance.adapterId !== adapter.adapterId) {
+    // Recorded before the send so an interruption between send and persistence stays visible.
+    await this.record(threadId, 'relay.dispatch-intent', { dispatchId, adapterId: adapter.adapterId, role: adapter.role, sequence, attempt })
+
+    let acceptance: AdapterAcceptance
+    try {
+      acceptance = await adapter.send({
+        dispatchId,
+        taskId: thread.taskId,
+        threadId,
+        jobId: thread.jobId,
+        title: thread.title,
+        role: adapter.role,
+        sequence,
+        priorTurns: thread.turns
+      })
+    } catch (error) {
+      // A throw does not prove nothing was sent, so the intent stays unresolved on purpose.
+      await this.record(threadId, 'relay.send-failed', { dispatchId, adapterId: adapter.adapterId, sequence, attempt, sendError: safeErrorText(error) })
+      throw error
+    }
+    if (acceptance.dispatchId !== dispatchId || acceptance.adapterId !== adapter.adapterId) {
       throw new ThreadRejectedError(['adapter acceptance does not match the dispatch'])
     }
 
@@ -358,6 +411,7 @@ export class ConversationRelay {
 
   private async continueJobUnsafe(threadId: string, adapterId?: string): Promise<ConversationThread> {
     const thread = await this.getConversationState(threadId)
+    if (thread.state === 'recovery-needed') throw new ThreadRejectedError(['thread needs recovery; use a recovery action first'])
     if (thread.turns.length >= thread.maxTurns) {
       const stopped = withState(thread, 'failed', this.now(), `max turns reached: ${thread.maxTurns}`)
       await this.record(threadId, 'thread.state', { state: stopped.state, stopReason: stopped.stopReason })
@@ -375,6 +429,124 @@ export class ConversationRelay {
       throw new ThreadRejectedError([`adapter has not produced an answer yet: ${state}`])
     }
     return this.receiveFromAdapterUnsafe(handle)
+  }
+
+  /**
+   * One startup pass over every Thread. Detects sends that were interrupted and moves those
+   * Threads to `recovery-needed`. Never retries, never resends, never blocks on one bad Adapter.
+   */
+  async scanForRecovery(): Promise<ThreadSummary[]> {
+    const detected: ThreadSummary[] = []
+    for (const threadId of await this.threadIds()) {
+      try {
+        const found = await this.serialise(threadId, () => this.detectRecoveryUnsafe(threadId))
+        if (found) detected.push(summarize(found))
+      } catch (error) {
+        // A single unreadable Thread must not stop the scan of the others.
+        await this.record(threadId, 'recovery.scan-failed', { scanError: safeErrorText(error) }).catch(() => undefined)
+      }
+    }
+    return detected
+  }
+
+  private async detectRecoveryUnsafe(threadId: string): Promise<ConversationThread | null> {
+    const thread = await this.tryRead(threadId)
+    if (!thread || thread.state !== 'open') return null
+
+    const pending = await this.readPending(threadId)
+    if (pending) return this.detectFromPending(thread, pending)
+
+    const orphan = this.unresolvedIntent(await this.readThreadEvents(threadId), thread)
+    if (!orphan) return null
+    return this.persist(await this.enterRecoveryFor(thread, {
+      reason: 'send-unconfirmed',
+      dispatchId: String(orphan.dispatchId),
+      sequence: Number(orphan.sequence),
+      adapterId: String(orphan.adapterId),
+      role: orphan.role as RecoveryInfo['role'],
+      attempt: Number(orphan.attempt ?? 0),
+      sentAt: String(orphan.at),
+      detectedAt: this.now()
+    }))
+  }
+
+  private async detectFromPending(thread: ConversationThread, pending: PendingDispatch): Promise<ConversationThread | null> {
+    const { handle } = pending
+    let probeError: string | undefined
+    try {
+      const adapter = this.resolveAdapter(handle.adapterId)
+      // Probed once. A retry loop here would be an automatic recovery, which this design forbids.
+      if ((await adapter.getState(pending.acceptance)) === 'ready') return null
+    } catch (error) {
+      probeError = safeErrorText(error)
+    }
+    return this.persist(await this.enterRecoveryFor(thread, {
+      reason: 'answer-unavailable',
+      dispatchId: handle.dispatchId,
+      sequence: handle.sequence,
+      adapterId: handle.adapterId,
+      role: handle.role,
+      attempt: handle.attempt,
+      sentAt: handle.sentAt,
+      expiresAt: handle.expiresAt,
+      ...(handle.respondsToTurnId ? { respondsToTurnId: handle.respondsToTurnId, respondsToHash: handle.respondsToHash } : {}),
+      detectedAt: this.now(),
+      ...(probeError ? { probeError } : {})
+    }))
+  }
+
+  private async enterRecoveryFor(thread: ConversationThread, info: RecoveryInfo): Promise<ConversationThread> {
+    const moved = enterRecovery(thread, info, this.now())
+    await this.record(thread.threadId, 'recovery.detected', { reason: info.reason, dispatchId: info.dispatchId, sequence: info.sequence, adapterId: info.adapterId, attempt: info.attempt, ...(info.probeError ? { probeError: info.probeError } : {}) })
+    await this.syncJobState(moved, 'recovery-needed')
+    return moved
+  }
+
+  /**
+   * The interrupted dispatch, if any.
+   *
+   * Only the newest attempt of each sequence is judged: an earlier attempt that was superseded by a
+   * later one is history, not an outstanding send. Judging every intent would report a stale
+   * `relay.send-failed` attempt as unconfirmed long after a later attempt of the same sequence
+   * succeeded. Within the newest attempt, resolution is by `dispatchId`, which keeps a second
+   * interruption at the same sequence detectable after a resend.
+   */
+  private unresolvedIntent(events: readonly JobEvent[], thread: ConversationThread): JobEvent | null {
+    const settled = new Set<string>()
+    for (const turn of thread.turns) if (turn.dispatchId) settled.add(turn.dispatchId)
+    const answered = new Set<number>(thread.turns.map((turn) => turn.sequence))
+    for (const event of events) {
+      // `relay.send-failed` is an observation, not proof that nothing was sent, so it never settles.
+      if (event.type === 'relay.dispatch-intent' || event.type === 'relay.send-failed') continue
+      for (const key of ['dispatchId', 'previousDispatchId'] as const) {
+        const value = event[key]
+        if (typeof value === 'string') settled.add(value)
+      }
+    }
+
+    const newestPerSequence = new Map<number, JobEvent>()
+    for (const event of events) {
+      if (event.type !== 'relay.dispatch-intent') continue
+      const { sequence, attempt, dispatchId } = event
+      if (typeof sequence !== 'number' || typeof dispatchId !== 'string') continue
+      const current = newestPerSequence.get(sequence)
+      const currentAttempt = typeof current?.attempt === 'number' ? current.attempt : -1
+      if (!current || (typeof attempt === 'number' ? attempt : 0) >= currentAttempt) newestPerSequence.set(sequence, event)
+    }
+
+    const outstanding = [...newestPerSequence.entries()]
+      .filter(([sequence, event]) => !answered.has(sequence) && !settled.has(event.dispatchId as string))
+      .map(([, event]) => event)
+    return outstanding[outstanding.length - 1] ?? null
+  }
+
+  private async threadIds(): Promise<string[]> {
+    try {
+      return (await readdir(path.join(this.runtimeRoot, 'threads'), { withFileTypes: true })).filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort()
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
+      throw error
+    }
   }
 
   /** `get_conversation_state`: the Thread as ADF holds it. */
@@ -399,12 +571,133 @@ export class ConversationRelay {
 
   private async recordOwnerDecisionUnsafe(threadId: string, action: OwnerAction, note?: string): Promise<ConversationThread> {
     const thread = await this.getConversationState(threadId)
+    // Checked before Evidence: a Thread in recovery must be resolved by a recovery action first.
+    if (thread.state === 'recovery-needed') {
+      throw new ThreadRejectedError([`thread needs recovery; use a recovery action instead of ${action}`])
+    }
     if (action === 'approve') await this.verifyStoredEvidence(thread)
     const decided = applyOwnerDecision(thread, action, this.now(), note)
     await this.record(threadId, 'owner.decision', { action, state: decided.state, ...(note ? { note } : {}) })
     const jobState = this.jobStateForThread(decided.state)
     if (jobState) await this.syncJobState(decided, jobState)
     return this.persist(decided)
+  }
+
+  /** Owner recovery: discard the interrupted dispatch and send the same sequence again. */
+  resendFromRecovery(threadId: string, note?: string): Promise<ConversationThread> {
+    return this.serialise(threadId, async () => {
+      const thread = await this.requireRecovery(threadId)
+      const previous = thread.recovery as RecoveryInfo
+      await this.clearPending(threadId)
+      await this.persist(leaveRecovery(thread, 'open', this.now()))
+      // Records the abandoned dispatchId so a later scan does not detect its intent again.
+      await this.record(threadId, 'recovery.resent', { reason: previous.reason, previousDispatchId: previous.dispatchId, sequence: previous.sequence, previousAttempt: previous.attempt, ...(note ? { note } : {}) })
+      // One Owner action: dispatch and take the answer, exactly like an ordinary continue.
+      return this.continueJobUnsafe(threadId, previous.adapterId)
+    })
+  }
+
+  /** Owner recovery: record that no answer was obtained, as a `failed` Turn with Evidence. */
+  recordRecoveryFailure(threadId: string, note?: string): Promise<ConversationThread> {
+    return this.serialise(threadId, async () => {
+      const thread = await this.requireRecovery(threadId)
+      const info = thread.recovery as RecoveryInfo
+      const turnId = `turn-${info.sequence}-recovery-${info.attempt}`
+      const recordedAt = this.now()
+
+      const errorRecord = {
+        reason: info.reason,
+        dispatchId: info.dispatchId,
+        sequence: info.sequence,
+        adapterId: info.adapterId,
+        role: info.role,
+        attempt: info.attempt,
+        sentAt: info.sentAt,
+        ...(info.expiresAt ? { expiresAt: info.expiresAt } : {}),
+        detectedAt: info.detectedAt,
+        recordedAt,
+        ...(info.probeError ? { probeError: info.probeError } : {}),
+        ...(note ? { note } : {})
+      }
+      const errorRef = `threads/${threadId}/errors/${turnId}.json`
+      await writeJsonAtomic(path.join(this.threadDirectory(threadId), 'errors', `${turnId}.json`), errorRecord)
+
+      const envelope: AdapterResultEnvelope = {
+        resultId: turnId,
+        jobId: thread.jobId,
+        taskId: thread.taskId,
+        adapterId: info.adapterId,
+        role: info.role,
+        inputHash: thread.inputHash,
+        scopeHash: thread.scopeHash,
+        contextHash: thread.contextHash,
+        status: 'failed',
+        summary: info.reason === 'answer-unavailable'
+          ? `Adapterは受理したが回答を取得できなかった（sequence ${info.sequence}、attempt ${info.attempt}）`
+          : `Adapterへ届いたか確認できないまま中断した（sequence ${info.sequence}、attempt ${info.attempt}）`,
+        artifact: { turnId, threadId, sequence: info.sequence, dispatchId: info.dispatchId, errorRef },
+        verification: [{ name: 'adapter-answer-recovered', status: 'not-run', reason: info.reason }],
+        risks: info.reason === 'answer-unavailable'
+          ? ['Adapterが処理を完了していた可能性がある']
+          : ['Adapterへ届いたか不明であり、外部AIでは課金が発生している可能性がある'],
+        ownerDecisionRequired: true,
+        nextOwnerDecision: 'この中断を踏まえ、停止・再依頼・これまでのTurnの扱いを判断する',
+        createdAt: recordedAt,
+        durationMs: 0,
+        terminationReason: 'recovery-failed'
+      }
+      validateResultEnvelope(envelope, { taskId: thread.taskId, jobId: thread.jobId, inputHash: thread.inputHash })
+      await writeJsonAtomic(this.resultPath(threadId, turnId), envelope)
+
+      // Derived from the Thread, not from the stored info: a Case B intent carries no parent ref.
+      const parent = lastTurn(thread)
+      const turn: ConversationTurn = {
+        turnId,
+        threadId,
+        jobId: thread.jobId,
+        dispatchId: info.dispatchId,
+        sequence: info.sequence,
+        adapterId: info.adapterId,
+        role: info.role,
+        ...(parent ? { respondsToTurnId: parent.turnId, respondsToHash: turnHash(parent) } : {}),
+        content: `【ADFによる復旧記録】このTurnはAdapterの発言ではない。${envelope.summary}。`,
+        status: 'failed',
+        resultEnvelopeRef: `threads/${threadId}/results/${turnId}.json`,
+        resultEnvelopeHash: hashJson(envelope),
+        errorRef,
+        createdAt: recordedAt
+      }
+
+      const appended = appendRecoveryTurn(thread, turn)
+      await this.clearPending(threadId)
+      await this.writeEvidenceLinks(appended)
+      await this.record(threadId, 'recovery.failed-recorded', { reason: info.reason, dispatchId: info.dispatchId, sequence: info.sequence, turnId, ...(note ? { note } : {}) })
+      const resolved = leaveRecovery(appended, 'awaiting-owner', recordedAt)
+      // The conversation is live again, so the Job leaves recovery too.
+      await this.syncJobState(resolved, 'running')
+      return this.persist(resolved)
+    })
+  }
+
+  /** Owner recovery: abandon the Thread. */
+  stopFromRecovery(threadId: string, note?: string): Promise<ConversationThread> {
+    return this.serialise(threadId, async () => {
+      const thread = await this.requireRecovery(threadId)
+      const info = thread.recovery as RecoveryInfo
+      await this.clearPending(threadId)
+      const stopped = leaveRecovery(thread, 'stopped', this.now(), note ?? `stopped during recovery: ${info.reason}`)
+      await this.record(threadId, 'recovery.stopped', { reason: info.reason, dispatchId: info.dispatchId, sequence: info.sequence, ...(note ? { note } : {}) })
+      await this.syncJobState(stopped, 'cancelled')
+      return this.persist(stopped)
+    })
+  }
+
+  private async requireRecovery(threadId: string): Promise<ConversationThread> {
+    const thread = await this.getConversationState(threadId)
+    if (thread.state !== 'recovery-needed' || !thread.recovery) {
+      throw new ThreadRejectedError([`thread is not awaiting recovery: ${thread.state}`])
+    }
+    return thread
   }
 
   /**
@@ -420,15 +713,8 @@ export class ConversationRelay {
   }
 
   async listThreads(): Promise<ThreadSummary[]> {
-    let entries: string[]
-    try {
-      entries = (await readdir(path.join(this.runtimeRoot, 'threads'), { withFileTypes: true })).filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort()
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
-      throw error
-    }
     const summaries: ThreadSummary[] = []
-    for (const threadId of entries) {
+    for (const threadId of await this.threadIds()) {
       const thread = await this.tryRead(threadId)
       if (thread) summaries.push(summarize(thread))
     }

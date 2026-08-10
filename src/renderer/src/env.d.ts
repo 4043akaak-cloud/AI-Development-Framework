@@ -1,5 +1,5 @@
 import type { OpenSourceResult } from '../../shared/boardTypes'
-import type { ConversationThread, OwnerAction, RelayResult, ThreadSummary } from '../../shared/threadTypes'
+import type { ConversationThread, OwnerAction, RecoveryAction, RelayResult, ThreadSummary } from '../../shared/threadTypes'
 
 declare global {
   interface Window {
@@ -14,6 +14,7 @@ declare global {
       sendFirstTurn: (threadId: string) => Promise<RelayResult<ConversationThread>>
       continueThread: (threadId: string, note?: string) => Promise<RelayResult<ConversationThread>>
       decideThread: (threadId: string, action: Exclude<OwnerAction, 'continue'>, note?: string) => Promise<RelayResult<ConversationThread>>
+      recoverThread: (threadId: string, action: RecoveryAction, note?: string) => Promise<RelayResult<ConversationThread>>
     }
   }
 }

@@ -1,7 +1,7 @@
 # Task — ADF-CONVERSATION-RELAY-001: ADF上の会話Threadと複数AI Relayを実装する
 
 > Type: Implementation
-> Status: Verifying
+> Status: Done
 > Owner: Claude Code
 > Review AI: Project Owner（最終Review）
 > Related Tasks: [ADF-JOB-LOOP-001](./ADF-JOB-LOOP-001.md) / [ADF-DISPATCH-ACK-001](./ADF-DISPATCH-ACK-001.md) / [ADF-CLAUDE-ADAPTER-001](./ADF-CLAUDE-ADAPTER-001.md)
@@ -239,8 +239,32 @@ allowBuilds:
 7. `claude-code-first-real`の`connection`変更（`cli` → `unknown`）を承認するか、`ADF-CLAUDE-ADAPTER-001`側を合わせるか。
 8. 実装担当（Claude Code）と最終Review担当（Project Owner）の分離で、独立レビュー要件を満たすとみなすか。
 
-## 11. Handover
+## 11. Project Owner Review
 
-- 次の安全な一手: Project Ownerが最終Diffを確認し、commit / pushの扱いを判断する。
-- 後続Task候補: 実外部Adapter接続（別承認）、pending dispatchの再開設計、Job LoopとThreadの統合、Turn単位の計測記録。
-- add / commit / push / merge / 公開は、Project Ownerの明示依頼までは行わない。
+| 対象 | 決定 | 根拠・確認内容 | 日時 |
+|---|---|---|---|
+| Plan / Scope | Approved | 本Taskの設計と実装をProject Ownerが指示 | 2026-08-10 |
+| Diff / Verification（1次） | Changes requested | 承認境界の迂回（P1）、Adapter Interfaceの不一致、受信Handleの未照合、Adapter roleの未検証 | 2026-08-10 |
+| Diff / Verification（2次） | Changes requested | Job Runtime／Dispatch ACK未接続、Result Envelope／Evidence未接続、継続の二操作化、同時dispatch競合 | 2026-08-10 |
+| Diff / Verification（3次） | Changes requested | Job実行状態の未連動、承認時Evidence再検証の不足、一操作継続の直列化の隙間、UI実機未確認 | 2026-08-10 |
+| Diff / Verification（最終） | **Approved** | typecheck Pass、Vitest 60件 Pass、build / package Pass、既存Job Loop・Dispatch ACK回帰 Pass、`git diff --check` Pass | 2026-08-10 |
+| 実機動作 | **Approved** | Electron起動 → 承認済みPacketからThread開始 → Fake AI A Proposal → Owner継続 → Fake AI B Critic → Result Envelope保存・検証 → Result承認 → 次Task化して完了。Job / Thread / Result / Owner判断のLedger保存を確認 | 2026-08-10 |
+| 残存リスク | Accepted | 外部AI未接続、認証・課金なし、pending復旧未実装、計測・ログ未整備、パッケージ署名未実施 | 2026-08-10 |
+
+Commit `f8fb1c7 feat: implement local ADF conversation relay` として `origin/codex/adf-pilot-governance` へpush済み。
+
+### Done checklist
+
+- [x] Required Contextを確認し、採用した制約を記録した。
+- [x] PlanとScopeが承認済みである。
+- [x] 承認済みScopeだけを変更した。
+- [x] Verificationの結果と未検証事項を記録した。
+- [x] 実装AI（Claude Code）と最終Review担当（Project Owner）を分けた。同一AI内の役割分離ではなく、人間による独立レビューである。
+- [x] Project Owner Reviewの対象・決定・根拠を記録した。
+- [x] GitHubのTask記録とCurrent Stateを更新した。
+
+## 12. Handover
+
+- 到達点: このPC内で、承認済みTaskに紐づいたThread上で複数のFake AIが議論し、Ownerが結果を確認・継続・承認できる状態。
+- 次のTask: [`ADF-RELAY-RECOVERY-001`](./ADF-RELAY-RECOVERY-001.md)。送信後・受信前にプロセスが終了したThreadが恒久停止する問題を、Owner判断による復旧で解消する。
+- 後続Task候補: 実外部Adapter接続（`ADF-RELAY-RECOVERY-001`の後、別承認）、承認Packet作成導線の整備、Turn単位の計測記録、配布用コード署名。
