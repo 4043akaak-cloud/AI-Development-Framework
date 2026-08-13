@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState, type JSX } from 'react'
 import type { ConversationThread, OwnerAction, RecoveryAction, RecoveryReason, ThreadState, ThreadSummary } from '../../shared/threadTypes'
-import type { ExternalPreflight } from '../../shared/externalAdapterTypes'
-
-const externalAdapterId = 'claude-external'
+import type { ExternalPreflight, OllamaReadiness } from '../../shared/externalAdapterTypes'
+import type { AdapterProfile } from '../../shared/jobLoopTypes'
+import { isSendEnabled } from './externalSendGate'
 
 const stateCopy: Record<ThreadState, string> = {
   open: '送信可能',
@@ -55,17 +55,33 @@ export default function ThreadPanel(): JSX.Element {
   const [busy, setBusy] = useState(false)
   const [preflight, setPreflight] = useState<ExternalPreflight | null>(null)
   const [inFlight, setInFlight] = useState(false)
+  // Registry-derived, read-only: never a hardcoded list, and never includes an Adapter this Relay
+  // instance did not actually register (see `listExternalAdapterProfiles` on the main side).
+  const [externalAdapters, setExternalAdapters] = useState<AdapterProfile[]>([])
+  const [selectedAdapterId, setSelectedAdapterId] = useState<string | null>(null)
+  const [ollamaReadiness, setOllamaReadiness] = useState<OllamaReadiness | null>(null)
+  const [readinessBusy, setReadinessBusy] = useState(false)
 
   const refresh = useCallback(async (): Promise<void> => {
-    const [threads, approved] = await Promise.all([window.adfRelay.listThreads(), window.adfRelay.listApprovedTaskIds()])
+    const [threads, approved, adapters] = await Promise.all([window.adfRelay.listThreads(), window.adfRelay.listApprovedTaskIds(), window.adfRelay.listExternalAdapters()])
     if (threads.ok) setSummaries(threads.value)
     else setMessage(threads.error)
     if (approved.ok) setApprovedTaskIds(approved.value)
+    if (adapters.ok) {
+      setExternalAdapters(adapters.value)
+      setSelectedAdapterId((current) => (current && adapters.value.some((profile) => profile.adapterId === current) ? current : (adapters.value[0]?.adapterId ?? null)))
+    }
   }, [])
 
   useEffect(() => {
     void refresh()
   }, [refresh])
+
+  // A stale Pass must never survive a switch to a different Adapter or Thread.
+  useEffect(() => {
+    setPreflight(null)
+    setOllamaReadiness(null)
+  }, [selectedAdapterId, thread?.threadId])
 
   const run = async (call: RelayCall<ConversationThread>): Promise<void> => {
     setBusy(true)
@@ -84,23 +100,34 @@ export default function ThreadPanel(): JSX.Element {
   const decisions = thread ? allowedDecisions[thread.state] : []
   const recovery = thread?.recovery
   const expired = Boolean(recovery?.expiresAt && new Date(recovery.expiresAt).getTime() < Date.now())
+  const selectedProfile = externalAdapters.find((profile) => profile.adapterId === selectedAdapterId) ?? null
 
   const runPreflight = async (): Promise<void> => {
-    if (!thread) return
+    if (!thread || !selectedAdapterId) return
     setBusy(true)
-    const result = await window.adfRelay.preflightExternal(thread.threadId, externalAdapterId)
+    const result = await window.adfRelay.preflightExternal(thread.threadId, selectedAdapterId)
     setPreflight(result.ok ? result.value : null)
     if (!result.ok) setMessage(result.error)
     setBusy(false)
   }
 
+  /** Owner-explicit only: fired by a direct button click, never on mount or Adapter/Thread switch. */
+  const runReadinessCheck = async (): Promise<void> => {
+    setReadinessBusy(true)
+    setMessage(null)
+    const result = await window.adfRelay.ollamaReadiness()
+    setOllamaReadiness(result.ok ? result.value : null)
+    if (!result.ok) setMessage(result.error)
+    setReadinessBusy(false)
+  }
+
   const runExternalSend = async (): Promise<void> => {
-    if (!thread) return
+    if (!thread || !selectedAdapterId) return
     setBusy(true)
     setMessage(null)
     // Poll while the send is open so the cancel button reflects the real in-flight state.
     const poll = setInterval(() => void window.adfRelay.externalSendState(thread.threadId).then((s) => setInFlight(s.ok && s.value.inFlight)), 250)
-    const result = await window.adfRelay.sendExternal(thread.threadId, externalAdapterId)
+    const result = await window.adfRelay.sendExternal(thread.threadId, selectedAdapterId)
     clearInterval(poll)
     setInFlight(false)
     if (result.ok) setThread(result.value)
@@ -224,8 +251,40 @@ export default function ThreadPanel(): JSX.Element {
                     <h3>外部AIへの送信</h3>
                     <p className="turn-refs">送信できるのは合成Packetだけです。承認ファイルはこの画面からは作成できません。Ownerが直接配置してください。</p>
                   </div>
-                  <button type="button" className="text-button" disabled={busy} onClick={() => void runPreflight()}>preflightを確認</button>
+                  <button type="button" className="text-button" disabled={busy || !selectedAdapterId} onClick={() => void runPreflight()}>preflightを確認</button>
                 </div>
+
+                <dl className="detail-grid" aria-label="Adapter選択">
+                  <div>
+                    <dt>Adapter</dt>
+                    <dd>
+                      <select
+                        value={selectedAdapterId ?? ''}
+                        disabled={busy || externalAdapters.length === 0}
+                        onChange={(event) => setSelectedAdapterId(event.target.value || null)}
+                      >
+                        {externalAdapters.length === 0 && <option value="">登録されたAdapterがありません</option>}
+                        {externalAdapters.map((profile) => (
+                          <option key={profile.adapterId} value={profile.adapterId}>{profile.displayName}（{profile.adapterId}）</option>
+                        ))}
+                      </select>
+                    </dd>
+                  </div>
+                </dl>
+
+                {selectedProfile?.connection === 'local-http' && (
+                  <dl className="detail-grid" aria-label="Ollama readiness">
+                    <div><dt>Model</dt><dd>{ollamaReadiness?.model ?? '未確認'}</dd></div>
+                    <div><dt>Endpoint</dt><dd>{ollamaReadiness?.baseUrl ?? '未確認'}</dd></div>
+                    <div>
+                      <dt>readiness</dt>
+                      <dd>
+                        {ollamaReadiness ? `${ollamaReadiness.reachable ? '到達可能' : '到達不可'} / ${ollamaReadiness.modelPresent ? 'モデルあり' : 'モデルなし'} — ${ollamaReadiness.detail}` : '未確認'}
+                        <button type="button" className="text-button" disabled={readinessBusy} onClick={() => void runReadinessCheck()}>Ollama到達性を確認</button>
+                      </dd>
+                    </div>
+                  </dl>
+                )}
 
                 {!preflight && <p className="lane-empty">「preflightを確認」を押すと、送信前に照合される項目が表示されます。ネットワークへは接続しません。</p>}
                 {preflight && (
@@ -256,7 +315,19 @@ export default function ThreadPanel(): JSX.Element {
                 )}
 
                 <div className="owner-actions" aria-label="外部送信操作">
-                  <button type="button" className="text-button" disabled={busy || !preflight?.ok || inFlight} title={preflight?.ok ? undefined : 'preflightがPassするまで送信できません'} onClick={() => void runExternalSend()}>
+                  <button
+                    type="button"
+                    className="text-button"
+                    disabled={!isSendEnabled(preflight, ollamaReadiness, selectedProfile?.connection, busy, inFlight)}
+                    title={
+                      !preflight?.ok
+                        ? 'preflightがPassするまで送信できません'
+                        : selectedProfile?.connection === 'local-http' && !(ollamaReadiness?.reachable && ollamaReadiness?.modelPresent)
+                          ? 'Ollama到達性の確認がPassするまで送信できません'
+                          : undefined
+                    }
+                    onClick={() => void runExternalSend()}
+                  >
                     外部AIへ送信（Ownerの明示操作）
                   </button>
                   <button type="button" className="text-button" disabled={!inFlight} onClick={() => void window.adfRelay.cancelExternal(thread.threadId)}>

@@ -1,4 +1,5 @@
 import type { AdapterCostTier, AdapterPlan, AdapterProfile, AdapterRole, AdapterSelection, Capability } from '../../shared/jobLoopTypes'
+import { hashJson } from './hash'
 
 export const adapterProfiles: readonly AdapterProfile[] = [
   {
@@ -122,6 +123,29 @@ export function supports(profile: AdapterProfile, role: AdapterRole, capabilitie
     // proxy an external host, so it is never auto-routed. It still dispatches, but only by explicit
     // adapterId through the same preflight gate as external-send adapters (see externalApproval.ts).
     && profile.connection !== 'local-http'
+}
+
+export interface PlanMembershipResult {
+  ok: boolean
+  detail: string
+}
+
+/**
+ * The single check for "is this explicit adapterId/role dispatch actually what the Owner approved" —
+ * shared by the read-only preflight report (`externalApproval.ts`) and the real dispatch gate
+ * (`relay.ts`), so the two can never drift into checking different things. Verifies the Plan's own
+ * integrity first (`adapterPlan` must still hash to the `routingPlanHash` the Owner's approval is
+ * bound to — catches a stale or tampered Thread/Packet), then that the named adapterId/role is one of
+ * the approved selections.
+ */
+export function checkAdapterPlanMembership(adapterPlan: AdapterPlan, routingPlanHash: string, adapterId: string, role: AdapterRole): PlanMembershipResult {
+  if (hashJson(adapterPlan) !== routingPlanHash) {
+    return { ok: false, detail: 'adapterPlan does not match its routingPlanHash (stale or tampered)' }
+  }
+  const selection = adapterPlan.selections.find((candidate) => candidate.adapterId === adapterId)
+  if (!selection) return { ok: false, detail: `Task Packet adapterPlan does not include ${adapterId}` }
+  if (selection.role !== role) return { ok: false, detail: `Task Packet adapterPlan approves ${adapterId} for role ${selection.role}, not ${role}` }
+  return { ok: true, detail: `adapterPlan approves ${adapterId} for role ${role}, routingPlanHash verified` }
 }
 
 /**

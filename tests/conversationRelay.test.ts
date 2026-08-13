@@ -13,6 +13,7 @@ import type { AdapterAcceptance, AdapterRequest, ConversationAdapter } from '../
 import { FakeCriticConversationAdapter, FakeProposalConversationAdapter } from '../src/main/jobLoop/conversationAdapters'
 import { appendRecoveryTurn, appendTurn, applyOwnerDecision, assertThreadTransition, createThread, ThreadRejectedError, turnHash } from '../src/main/jobLoop/thread'
 import { ExternalConversationAdapter } from '../src/main/jobLoop/externalAdapter'
+import { MockExternalTransport } from '../src/main/jobLoop/externalTransport'
 import { OllamaLocalHttpTransport } from '../src/main/jobLoop/ollamaTransport'
 
 function approvedPacket(overrides: Partial<ApprovedTaskPacket> = {}, fixtureMode: FixtureMode = 'success', taskId = 'ADF-CONVERSATION-RELAY-001'): ApprovedTaskPacket {
@@ -626,6 +627,134 @@ describe('ADF-OLLAMA-LIVE-CONNECTION-001 explicit dispatch to ollama-local (inje
     const tampered = explicitAdapterPacket('ollama-local', 'proposal')
     tampered.approval.routingPlanHash = 'wrong-routing-hash'
     await expect(current.startThread(tampered)).rejects.toThrow(/routing plan hash mismatch/)
+  })
+})
+
+describe('ADF-OLLAMA-FIRST-CLASS-ADAPTER-001 listExternalAdapterProfiles (Registry-derived, read-only)', () => {
+  it('returns only the Adapters actually registered on this Relay instance, excluding Fake Adapters', async () => {
+    const ollamaTransport = new OllamaLocalHttpTransport({ fetchImpl: async () => { throw new Error('must not be called: read-only listing') } })
+    let current: ConversationRelay
+    current = new ConversationRelay({
+      runtimeRoot: await mkdtemp(path.join(tmpdir(), 'adf-relay-')),
+      adapters: [
+        new FakeProposalConversationAdapter(),
+        new FakeCriticConversationAdapter(),
+        new ExternalConversationAdapter('ollama-local', 'proposal', ollamaTransport, {
+          authorise: (request) => current.externalHooks('ollama-local', ollamaTransport).authorise(request),
+          recordCall: (record) => current.externalHooks('ollama-local', ollamaTransport).recordCall(record),
+          now: () => new Date()
+        })
+      ]
+    })
+    const profiles = current.listExternalAdapterProfiles()
+    expect(profiles.map((profile) => profile.adapterId)).toEqual(['ollama-local'])
+  })
+
+  it('never lists an available Registry adapter that this Relay instance did not register (avoids a "selectable but fails" UI state)', async () => {
+    // claude-external is status: 'available' in the Registry, but this Relay never registers it.
+    const current = await relay()
+    const profiles = current.listExternalAdapterProfiles()
+    expect(profiles.map((profile) => profile.adapterId)).not.toContain('claude-external')
+    expect(profiles.map((profile) => profile.adapterId)).not.toContain('ollama-local')
+  })
+
+  it('lists every non-fake Adapter this Relay instance registers, matching a Main-shaped configuration (Anthropic + Ollama)', async () => {
+    const anthropicTransport = new MockExternalTransport({ status: 'success', content: 'unused in this test' }, 'claude-external')
+    const ollamaTransport = new OllamaLocalHttpTransport({ fetchImpl: async () => { throw new Error('must not be called') } })
+    let current: ConversationRelay
+    current = new ConversationRelay({
+      runtimeRoot: await mkdtemp(path.join(tmpdir(), 'adf-relay-')),
+      adapters: [
+        new FakeProposalConversationAdapter(),
+        new FakeCriticConversationAdapter(),
+        new ExternalConversationAdapter('claude-external', 'proposal', anthropicTransport, {
+          authorise: (request) => current.externalHooks('claude-external', anthropicTransport).authorise(request),
+          recordCall: (record) => current.externalHooks('claude-external', anthropicTransport).recordCall(record),
+          now: () => new Date()
+        }),
+        new ExternalConversationAdapter('ollama-local', 'proposal', ollamaTransport, {
+          authorise: (request) => current.externalHooks('ollama-local', ollamaTransport).authorise(request),
+          recordCall: (record) => current.externalHooks('ollama-local', ollamaTransport).recordCall(record),
+          now: () => new Date()
+        })
+      ]
+    })
+    const profiles = current.listExternalAdapterProfiles()
+    expect(profiles.map((profile) => profile.adapterId).sort()).toEqual(['claude-external', 'ollama-local'])
+  })
+})
+
+describe('ADF-OLLAMA-FIRST-CLASS-ADAPTER-001 preflight report shows the Plan-membership check, not just the actual Dispatch gate', () => {
+  it('reports adapterPlan-includes-selection as fail when the Packet approved fake-ai-a but ollama-local preflight is requested (visible before any send attempt)', async () => {
+    const ollamaTransport = new OllamaLocalHttpTransport({ fetchImpl: async () => { throw new Error('must not be called: preflight is read-only') } })
+    let current: ConversationRelay
+    current = new ConversationRelay({
+      runtimeRoot: await mkdtemp(path.join(tmpdir(), 'adf-relay-')),
+      externalTransports: { 'ollama-local': ollamaTransport },
+      adapters: [
+        new FakeProposalConversationAdapter(),
+        new FakeCriticConversationAdapter(),
+        new ExternalConversationAdapter('ollama-local', 'proposal', ollamaTransport, {
+          authorise: (request) => current.externalHooks('ollama-local', ollamaTransport).authorise(request),
+          recordCall: (record) => current.externalHooks('ollama-local', ollamaTransport).recordCall(record),
+          now: () => new Date()
+        })
+      ]
+    })
+    const threadId = await startedThread(current)
+
+    const preflight = await current.preflightExternalSend(threadId, 'ollama-local')
+
+    expect(preflight.ok).toBe(false)
+    const membershipCheck = preflight.checks.find((check) => check.name === 'adapterPlan-includes-selection')
+    expect(membershipCheck).toMatchObject({ status: 'fail' })
+    expect(membershipCheck?.detail).toMatch(/does not include ollama-local/)
+    expect(preflight.blockingReasons.some((reason) => reason.startsWith('adapterPlan-includes-selection'))).toBe(true)
+  })
+
+  it('reports adapterPlan-includes-selection as pass when the Packet explicitly approved ollama-local for this role', async () => {
+    const ollamaTransport = new OllamaLocalHttpTransport({ fetchImpl: async () => { throw new Error('must not be called: preflight is read-only') } })
+    let current: ConversationRelay
+    current = new ConversationRelay({
+      runtimeRoot: await mkdtemp(path.join(tmpdir(), 'adf-relay-')),
+      externalTransports: { 'ollama-local': ollamaTransport },
+      adapters: [
+        new ExternalConversationAdapter('ollama-local', 'proposal', ollamaTransport, {
+          authorise: (request) => current.externalHooks('ollama-local', ollamaTransport).authorise(request),
+          recordCall: (record) => current.externalHooks('ollama-local', ollamaTransport).recordCall(record),
+          now: () => new Date()
+        })
+      ]
+    })
+    const thread = await current.startThread(explicitAdapterPacket('ollama-local', 'proposal'))
+
+    const preflight = await current.preflightExternalSend(thread.threadId, 'ollama-local')
+
+    const membershipCheck = preflight.checks.find((check) => check.name === 'adapterPlan-includes-selection')
+    expect(membershipCheck).toMatchObject({ status: 'pass' })
+  })
+
+  it('does not add an adapterPlan-includes-selection check for an external-send Adapter (Anthropic) — that path is unaffected', async () => {
+    const anthropicTransport = new MockExternalTransport({ status: 'success', content: 'unused in this test' }, 'claude-external')
+    let current: ConversationRelay
+    current = new ConversationRelay({
+      runtimeRoot: await mkdtemp(path.join(tmpdir(), 'adf-relay-')),
+      externalTransports: { 'claude-external': anthropicTransport },
+      adapters: [
+        new FakeProposalConversationAdapter(),
+        new FakeCriticConversationAdapter(),
+        new ExternalConversationAdapter('claude-external', 'proposal', anthropicTransport, {
+          authorise: (request) => current.externalHooks('claude-external', anthropicTransport).authorise(request),
+          recordCall: (record) => current.externalHooks('claude-external', anthropicTransport).recordCall(record),
+          now: () => new Date()
+        })
+      ]
+    })
+    const threadId = await startedThread(current)
+
+    const preflight = await current.preflightExternalSend(threadId, 'claude-external')
+
+    expect(preflight.checks.some((check) => check.name === 'adapterPlan-includes-selection')).toBe(false)
   })
 })
 

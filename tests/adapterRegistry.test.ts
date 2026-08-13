@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import type { AdapterProfile } from '../src/shared/jobLoopTypes'
-import { AdapterRegistryError, adapterProfiles, buildExplicitAdapterPlan, routeAdapters, supports } from '../src/main/jobLoop/adapterRegistry'
+import type { AdapterPlan, AdapterProfile } from '../src/shared/jobLoopTypes'
+import { AdapterRegistryError, adapterProfiles, buildExplicitAdapterPlan, checkAdapterPlanMembership, routeAdapters, supports } from '../src/main/jobLoop/adapterRegistry'
+import { hashJson } from '../src/main/jobLoop/hash'
 import { ResultEnvelopeRejectedError, validateResultEnvelope, type AdapterResultEnvelope } from '../src/main/jobLoop/resultEnvelope'
 
 describe('multi-AI adapter foundation', () => {
@@ -101,5 +102,41 @@ describe('multi-AI adapter foundation', () => {
     }
     expect(() => validateResultEnvelope(envelope, { taskId: envelope.taskId, jobId: envelope.jobId, inputHash: envelope.inputHash })).not.toThrow()
     expect(() => validateResultEnvelope(envelope, { taskId: 'wrong-task', jobId: envelope.jobId, inputHash: envelope.inputHash })).toThrow(ResultEnvelopeRejectedError)
+  })
+})
+
+describe('checkAdapterPlanMembership (ADF-OLLAMA-FIRST-CLASS-ADAPTER-001 shared Plan-binding helper)', () => {
+  it('passes when adapterId, role, and routingPlanHash all match the approved Plan', () => {
+    const plan = buildExplicitAdapterPlan('T', 'ollama-local', 'proposal', ['read', 'propose'])
+    const result = checkAdapterPlanMembership(plan, hashJson(plan), 'ollama-local', 'proposal')
+    expect(result).toMatchObject({ ok: true })
+  })
+
+  it('rejects when the Plan does not name this adapterId at all (fake-ai-a approved, ollama-local requested)', () => {
+    const plan = routeAdapters('T', ['proposal', 'critic'], ['read', 'propose'])
+    const result = checkAdapterPlanMembership(plan, hashJson(plan), 'ollama-local', 'proposal')
+    expect(result).toMatchObject({ ok: false })
+    expect(result.detail).toMatch(/does not include ollama-local/)
+  })
+
+  it('rejects when the Plan names this adapterId for a different role', () => {
+    const plan = buildExplicitAdapterPlan('T', 'ollama-local', 'critic', ['read', 'propose'])
+    const result = checkAdapterPlanMembership(plan, hashJson(plan), 'ollama-local', 'proposal')
+    expect(result).toMatchObject({ ok: false })
+    expect(result.detail).toMatch(/approves ollama-local for role critic, not proposal/)
+  })
+
+  it('rejects when the adapterPlan does not hash to the given routingPlanHash (stale or tampered), even if the selection would otherwise match', () => {
+    const plan = buildExplicitAdapterPlan('T', 'ollama-local', 'proposal', ['read', 'propose'])
+    const result = checkAdapterPlanMembership(plan, 'tampered-hash', 'ollama-local', 'proposal')
+    expect(result).toMatchObject({ ok: false })
+    expect(result.detail).toMatch(/stale or tampered/)
+  })
+
+  it('checks routingPlanHash integrity before selection membership, so a tampered Plan is never trusted even for an adapterId it happens to contain', () => {
+    const plan: AdapterPlan = { version: 'v1', selections: [{ adapterId: 'ollama-local', role: 'proposal', rationale: 'x' }], externalSend: false, maxCostTier: 'free' }
+    const result = checkAdapterPlanMembership(plan, 'not-the-real-hash', 'ollama-local', 'proposal')
+    expect(result.ok).toBe(false)
+    expect(result.detail).toMatch(/stale or tampered/)
   })
 })

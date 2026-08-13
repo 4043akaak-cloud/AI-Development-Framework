@@ -1,7 +1,8 @@
 import path from 'node:path'
-import type { AdapterProfile, AdapterRole } from '../../shared/jobLoopTypes'
+import type { AdapterPlan, AdapterProfile, AdapterRole } from '../../shared/jobLoopTypes'
 import type { ExternalPreflight, ExternalSendApproval, SyntheticPacket } from '../../shared/externalAdapterTypes'
 import type { ExternalTransport } from './externalTransport'
+import { checkAdapterPlanMembership } from './adapterRegistry'
 import { readJson } from './ledger'
 
 export class ExternalSendBlockedError extends Error {
@@ -36,13 +37,21 @@ export interface PreflightInput {
   approval: ExternalSendApproval | null
   sendsAlreadyMade: number
   now: Date
+  /**
+   * The dispatching Thread's own approved Plan, so a local-only/local-http send can be checked
+   * against it here too — the same `checkAdapterPlanMembership` the real dispatch gate in
+   * `relay.ts` uses. Omitted entirely for `external-send` transports: `AdapterPlan` can never
+   * contain an external-send selection (see `validateAdapterPlan`), so this check would only ever
+   * fail there for the wrong reason.
+   */
+  approvedPlanBinding?: { adapterPlan: AdapterPlan; routingPlanHash: string }
 }
 
 /**
  * Every condition the Owner should see before authorising one external send. Produces a report
  * rather than throwing, so the gate can be shown in the UI without attempting anything.
  */
-export function preflightExternalSend({ profile, adapterRole, transport, packet, approval, sendsAlreadyMade, now }: PreflightInput): ExternalPreflight {
+export function preflightExternalSend({ profile, adapterRole, transport, packet, approval, sendsAlreadyMade, now, approvedPlanBinding }: PreflightInput): ExternalPreflight {
   const checks: ExternalPreflight['checks'] = []
   const blockingReasons: string[] = []
 
@@ -97,6 +106,10 @@ export function preflightExternalSend({ profile, adapterRole, transport, packet,
       'transport target is not confirmed to be localhost / 127.0.0.1',
       'transport target is confirmed to be localhost / 127.0.0.1'
     )
+    if (approvedPlanBinding) {
+      const membership = checkAdapterPlanMembership(approvedPlanBinding.adapterPlan, approvedPlanBinding.routingPlanHash, profile.adapterId, adapterRole)
+      require('adapterPlan-includes-selection', membership.ok, membership.detail, membership.detail)
+    }
   } else {
     require('owner-approval-present', Boolean(approval), approval ? `approval ${approval.approvalId}` : 'no execution approval on disk for this thread')
 

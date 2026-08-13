@@ -1,8 +1,8 @@
 import path from 'node:path'
 import { readdir } from 'node:fs/promises'
-import type { AdapterRole, ApprovedTaskPacket, JobEvent, JobState } from '../../shared/jobLoopTypes'
+import type { AdapterProfile, AdapterRole, ApprovedTaskPacket, JobEvent, JobState } from '../../shared/jobLoopTypes'
 import type { ConversationThread, ConversationTurn, OwnerAction, RecoveryInfo, RelayDispatchHandle, RelayTurnPayload, ThreadSummary } from '../../shared/threadTypes'
-import { getAdapterProfile } from './adapterRegistry'
+import { checkAdapterPlanMembership, getAdapterProfile } from './adapterRegistry'
 import { canTransition, validateApprovedTask } from './contracts'
 import type { AdapterAcceptance, ConversationAdapter } from './conversationAdapters'
 import { FakeCriticConversationAdapter, FakeProposalConversationAdapter } from './conversationAdapters'
@@ -113,9 +113,9 @@ export class ConversationRelay {
   private assertExplicitDispatchIsApprovedPlan(thread: ConversationThread, adapterId: string, role: AdapterRole): void {
     const profile = getAdapterProfile(adapterId)
     if (profile.dataPolicy !== 'local-only') return
-    const approved = thread.adapterPlan.selections.some((selection) => selection.adapterId === adapterId && selection.role === role)
-    if (!approved) {
-      throw new ThreadRejectedError([`explicit adapterId is not part of this Thread's approved adapterPlan: ${adapterId} (role ${role})`])
+    const membership = checkAdapterPlanMembership(thread.adapterPlan, thread.routingPlanHash, adapterId, role)
+    if (!membership.ok) {
+      throw new ThreadRejectedError([`explicit adapterId is not part of this Thread's approved adapterPlan: ${adapterId} (role ${role}) — ${membership.detail}`])
     }
   }
 
@@ -461,7 +461,8 @@ export class ConversationRelay {
       packet,
       approval: await readExternalApproval(this.runtimeRoot, threadId),
       sendsAlreadyMade: await this.countExternalCalls(threadId),
-      now: this.clock()
+      now: this.clock(),
+      approvedPlanBinding: { adapterPlan: thread.adapterPlan, routingPlanHash: thread.routingPlanHash }
     })
   }
 
@@ -502,7 +503,8 @@ export class ConversationRelay {
           packet,
           approval: await readExternalApproval(this.runtimeRoot, request.threadId),
           sendsAlreadyMade: await this.countExternalCalls(request.threadId),
-          now: this.clock()
+          now: this.clock(),
+          approvedPlanBinding: { adapterPlan: thread.adapterPlan, routingPlanHash: thread.routingPlanHash }
         })
         assertExternalSendAllowed(preflight)
         await this.record(request.threadId, 'external.preflight-passed', { provider: preflight.provider, adapterId: preflight.adapterId, packetHash: preflight.packetHash, approvalId: preflight.approvalId, costTier: preflight.costTier })
@@ -849,5 +851,17 @@ export class ConversationRelay {
       if (thread) summaries.push(summarize(thread))
     }
     return summaries
+  }
+
+  /**
+   * Read-only, Registry-derived candidates for explicit external dispatch — Fake Adapters excluded.
+   * Returns only Adapters actually registered on *this* Relay instance, never the full static
+   * Registry: a Registry entry marked `available` that this instance never wired up would otherwise
+   * look selectable in the UI and then fail with "not registered in this relay" the moment it's used.
+   */
+  listExternalAdapterProfiles(): AdapterProfile[] {
+    return [...this.adapters.keys()]
+      .map((adapterId) => getAdapterProfile(adapterId))
+      .filter((profile) => profile.connection !== 'fake')
   }
 }

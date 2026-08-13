@@ -1,5 +1,5 @@
 import type { AdapterConnection } from '../../shared/jobLoopTypes'
-import type { ExternalSendOutcome, SyntheticPacket } from '../../shared/externalAdapterTypes'
+import type { ExternalSendOutcome, OllamaReadiness, SyntheticPacket } from '../../shared/externalAdapterTypes'
 import type { CredentialStatus, ExternalTransport, TransportOptions } from './externalTransport'
 import { truncateAnswer } from './externalTransport'
 
@@ -8,10 +8,10 @@ import { truncateAnswer } from './externalTransport'
  * of `ExternalTransport` among others (Anthropic Messages API, future OpenAI/CLI transports) — the
  * `local-http` connection mode is not a special case anywhere in Thread, Relay, or Recovery.
  *
- * `ADF-OLLAMA-LIVE-CONNECTION-001`: `ollama-local` is `status: 'available'` in the Registry for
- * explicit-adapterId dispatch, but auto-routing still excludes `local-http` (`supports()`), and the
- * live Electron app's `index.ts` does not register an Adapter instance for it — only a dedicated,
- * Owner-run probe (`src/cli/ollamaConnectivityProbe.ts`) can reach it.
+ * `ollama-local` is `status: 'available'` in the Registry and, since
+ * `ADF-OLLAMA-FIRST-CLASS-ADAPTER-001`, registered as an explicit-adapterId Adapter in the live
+ * Electron app's `index.ts` too (alongside `src/cli/ollamaConnectivityProbe.ts`, which remains a
+ * separate standalone entry point). Auto-routing still excludes `local-http` (`supports()`) in both.
  */
 export const defaultOllamaBaseUrl = 'http://127.0.0.1:11434'
 export const defaultOllamaModel = 'llama3'
@@ -28,13 +28,6 @@ interface OllamaTagsResponse {
   models?: Array<{ name?: string; model?: string }>
 }
 
-export interface OllamaReadiness {
-  reachable: boolean
-  modelPresent: boolean
-  models: string[]
-  detail: string
-}
-
 /**
  * Read-only `/api/tags` check, entirely separate from `preflightExternalSend` (which is not
  * modified by this Task). Confirms the server answers and the expected model is pulled, before any
@@ -48,20 +41,20 @@ export async function checkOllamaReadiness(
   try {
     response = await fetchFn(`${baseUrl}/api/tags`, { method: 'GET', redirect: 'error' })
   } catch (error) {
-    return { reachable: false, modelPresent: false, models: [], detail: `not reachable: ${String((error as Error)?.message ?? error)}`.slice(0, 200) }
+    return { reachable: false, modelPresent: false, models: [], baseUrl, model, detail: `not reachable: ${String((error as Error)?.message ?? error)}`.slice(0, 200) }
   }
-  if (!response.ok) return { reachable: false, modelPresent: false, models: [], detail: `http-${response.status}` }
+  if (!response.ok) return { reachable: false, modelPresent: false, models: [], baseUrl, model, detail: `http-${response.status}` }
 
   let body: OllamaTagsResponse
   try {
     body = (await response.json()) as OllamaTagsResponse
   } catch {
-    return { reachable: true, modelPresent: false, models: [], detail: 'malformed /api/tags response' }
+    return { reachable: true, modelPresent: false, models: [], baseUrl, model, detail: 'malformed /api/tags response' }
   }
   const models = (body.models ?? []).map((entry) => entry.model ?? entry.name ?? '').filter(Boolean)
   // Bare "llama3" must match the pulled "llama3:latest" — Ollama's own tag-omission convention.
   const modelPresent = models.some((name) => name === model || name === `${model}:latest` || name.split(':')[0] === model)
-  return { reachable: true, modelPresent, models, detail: modelPresent ? `model ${model} present` : `model ${model} not found among: ${models.join(', ') || '(none)'}` }
+  return { reachable: true, modelPresent, models, baseUrl, model, detail: modelPresent ? `model ${model} present` : `model ${model} not found among: ${models.join(', ') || '(none)'}` }
 }
 
 export interface OllamaTransportOptions {

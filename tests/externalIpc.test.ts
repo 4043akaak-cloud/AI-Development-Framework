@@ -4,15 +4,16 @@ import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { ApprovedTaskPacket } from '../src/shared/jobLoopTypes'
 import type { ExternalSendApproval } from '../src/shared/externalAdapterTypes'
-import { routeAdapters } from '../src/main/jobLoop/adapterRegistry'
+import { buildExplicitAdapterPlan, routeAdapters } from '../src/main/jobLoop/adapterRegistry'
 import { hashJson } from '../src/main/jobLoop/hash'
 import { writeJsonAtomic } from '../src/main/jobLoop/ledger'
 import { ConversationRelay } from '../src/main/jobLoop/relay'
 import { ExternalConversationAdapter } from '../src/main/jobLoop/externalAdapter'
 import { externalApprovalPath } from '../src/main/jobLoop/externalApproval'
 import { MockExternalTransport } from '../src/main/jobLoop/externalTransport'
+import { OllamaLocalHttpTransport } from '../src/main/jobLoop/ollamaTransport'
 import { buildSyntheticPacket } from '../src/main/jobLoop/syntheticPacket'
-import { AnthropicMessagesTransport } from '../src/main/jobLoop/anthropicTransport'
+import { AnthropicMessagesTransport, type FetchLike } from '../src/main/jobLoop/anthropicTransport'
 import { FakeCriticConversationAdapter, FakeProposalConversationAdapter } from '../src/main/jobLoop/conversationAdapters'
 import {
   approvedTaskDirectory,
@@ -20,6 +21,7 @@ import {
   continueThread,
   decideThread,
   externalSendState,
+  listExternalAdapters,
   preflightExternal,
   scanForRecovery,
   sendExternal,
@@ -417,7 +419,9 @@ describe('ADF-EXTERNAL-ADAPTER-001 Electron wiring', () => {
       'relay:preflight-external',
       'relay:send-external',
       'relay:cancel-external',
-      'relay:external-state'
+      'relay:external-state',
+      'relay:external-adapters',
+      'relay:ollama-readiness'
     ])
   })
 
@@ -445,5 +449,171 @@ describe('ADF-EXTERNAL-ADAPTER-001 Electron wiring', () => {
     expect(preflight.ok).toBe(false)
     expect((await sendExternal(relay, threadId, externalAdapterId)).ok).toBe(false)
     expect(transport.received).toHaveLength(0)
+  })
+})
+
+/**
+ * Rebuilds `index.ts`'s actual configuration since `ADF-OLLAMA-FIRST-CLASS-ADAPTER-001`: two Fake
+ * Adapters, `claude-external` (real `AnthropicMessagesTransport`, matching Registry `connection: 'api'`
+ * exactly the way `index.ts` constructs it), and `ollama-local`, all on one Relay. Nothing here opens
+ * a connection by default — both transports throw if `send`/`fetch` is ever reached, unless a caller
+ * supplies its own `anthropicFetchImpl`.
+ */
+async function wiredMainWithOllama(runtimeRoot?: string, anthropicFetchImpl?: FetchLike) {
+  const root = runtimeRoot ?? (await mkdtemp(path.join(tmpdir(), 'adf-ipc-ollama-')))
+  const anthropicTransport = new AnthropicMessagesTransport({
+    fetchImpl: anthropicFetchImpl ?? (async () => { throw new Error('must not be called: no send was authorised') })
+  })
+  const ollamaTransport = new OllamaLocalHttpTransport({ fetchImpl: async () => { throw new Error('must not be called: no send was authorised') } })
+  let relay: ConversationRelay
+  relay = new ConversationRelay({
+    runtimeRoot: root,
+    externalTransports: { 'claude-external': anthropicTransport, 'ollama-local': ollamaTransport },
+    adapters: [
+      new FakeProposalConversationAdapter(),
+      new FakeCriticConversationAdapter(),
+      new ExternalConversationAdapter('claude-external', 'proposal', anthropicTransport, {
+        authorise: (request) => relay.externalHooks('claude-external', anthropicTransport).authorise(request),
+        recordCall: (record) => relay.externalHooks('claude-external', anthropicTransport).recordCall(record),
+        now: () => new Date()
+      }),
+      new ExternalConversationAdapter('ollama-local', 'proposal', ollamaTransport, {
+        authorise: (request) => relay.externalHooks('ollama-local', ollamaTransport).authorise(request),
+        recordCall: (record) => relay.externalHooks('ollama-local', ollamaTransport).recordCall(record),
+        now: () => new Date()
+      })
+    ]
+  })
+  return { relay, runtimeRoot: root, anthropicTransport, ollamaTransport }
+}
+
+function explicitOllamaPacket(): ApprovedTaskPacket {
+  const ollamaTaskId = 'ADF-OLLAMA-FIRST-CLASS-ADAPTER-001'
+  const scope = { inScope: ['Ollama標準Adapter統合'], outOfScope: ['実送信'] }
+  const context = { githubTask: `manual-fixture://${ollamaTaskId}`, obsidianContext: [], adoptedPrinciples: ['owner-approval'] }
+  const scopeHash = hashJson(scope)
+  const adapterPlan = buildExplicitAdapterPlan(ollamaTaskId, 'ollama-local', 'proposal', ['read', 'propose'])
+  return {
+    taskId: ollamaTaskId,
+    objective: 'ollama-localを明示承認するPacket fixture',
+    scope,
+    scopeHash,
+    context,
+    contextHash: hashJson(context),
+    acceptance: ['明示承認のみ'],
+    stopConditions: ['未承認の送信'],
+    approval: {
+      approvalId: 'approval-ollama-first-class-explicit',
+      taskId: ollamaTaskId,
+      status: 'active',
+      approvedBy: 'Project Owner',
+      approvedAt: '2026-08-13T00:00:00.000Z',
+      expiresAt: '2099-12-31T23:59:59.000Z',
+      scopeHash,
+      routingPlanHash: hashJson(adapterPlan),
+      capabilities: ['read', 'propose']
+    },
+    adapter: 'multi-ai-routing-v1',
+    fixtureMode: 'success',
+    target: { repository: 'fixture://adf', branch: 'fixture/ollama', worktree: 'fixture://ollama', allowedFiles: [], forbiddenChanges: ['commit'] },
+    adapterPlan
+  }
+}
+
+describe('ADF-OLLAMA-FIRST-CLASS-ADAPTER-001 Electron wiring (ollama-local co-registered with claude-external)', () => {
+  it('sends nothing externally — neither Anthropic nor Ollama — while the app starts up and scans for recovery', async () => {
+    // Both transports throw if `fetch`/`send` is ever reached (wiredMainWithOllama's default), so a
+    // clean scan proves zero calls without needing a separate call counter.
+    const { relay } = await wiredMainWithOllama()
+    const threadId = await placeApprovedTask(relay)
+
+    const scanned = await scanForRecovery(relay)
+
+    expect(scanned.ok).toBe(true)
+    expect((await relay.getConversationState(threadId)).turns).toHaveLength(0)
+  })
+
+  it('listExternalAdapters (IPC) returns both non-fake Adapters, Registry-derived, read-only', async () => {
+    const { relay } = await wiredMainWithOllama()
+
+    const result = await listExternalAdapters(relay)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.map((profile) => profile.adapterId).sort()).toEqual(['claude-external', 'ollama-local'])
+  })
+
+  it('rejects explicit dispatch to ollama-local when the Packet approved fake-ai-a (Plan mismatch, visible in preflight before any send)', async () => {
+    const { relay } = await wiredMainWithOllama()
+    const threadId = await placeApprovedTask(relay)
+
+    const preflight = await preflightExternal(relay, threadId, 'ollama-local')
+    expect(preflight.ok).toBe(true)
+    if (preflight.ok) expect(preflight.value.checks.find((check) => check.name === 'adapterPlan-includes-selection')).toMatchObject({ status: 'fail' })
+
+    const sent = await sendExternal(relay, threadId, 'ollama-local')
+    expect(sent.ok).toBe(false)
+  })
+
+  it('accepts explicit dispatch to ollama-local when the Packet explicitly approved it (fetch injected, still never touches the network)', async () => {
+    const { relay } = await wiredMainWithOllama()
+    const packet = explicitOllamaPacket()
+    await writeJsonAtomic(path.join(approvedTaskDirectory(relay), `${packet.taskId}.json`), packet)
+    const started = await startApprovedThread(relay, packet.taskId)
+    expect(started.ok).toBe(true)
+    if (!started.ok) return
+
+    const preflight = await preflightExternal(relay, started.value.threadId, 'ollama-local')
+    expect(preflight.ok).toBe(true)
+    if (preflight.ok) expect(preflight.value.ok).toBe(true)
+  })
+
+  it('Fake Adapter round trip is unaffected by ollama-local/claude-external co-registration (regression)', async () => {
+    const { relay } = await wiredMainWithOllama()
+    const threadId = await placeApprovedTask(relay)
+
+    const sent = await sendFirstTurn(relay, threadId)
+    expect(sent.ok).toBe(true)
+    if (sent.ok) expect(sent.value.turns[0]).toMatchObject({ adapterId: 'fake-ai-a', role: 'proposal', status: 'success' })
+  })
+
+  it('Anthropic (claude-external) explicit send is unaffected by ollama-local co-registration (regression)', async () => {
+    const previousKey = process.env.ANTHROPIC_API_KEY
+    process.env.ANTHROPIC_API_KEY = 'test-key'
+    try {
+      let calls = 0
+      const { relay } = await wiredMainWithOllama(undefined, async () => {
+        calls += 1
+        return new Response(JSON.stringify({ content: [{ type: 'text', text: 'ok from Anthropic' }], stop_reason: 'end_turn' }), { status: 200, headers: { 'content-type': 'application/json' } })
+      })
+      const threadId = await placeApprovedTask(relay)
+      await grantApproval(relay, threadId, { provider: 'anthropic-messages-api' }, 'claude-external')
+
+      const sent = await sendExternal(relay, threadId, 'claude-external')
+
+      expect(sent.ok).toBe(true)
+      if (sent.ok) expect(sent.value.turns[0]).toMatchObject({ adapterId: 'claude-external', status: 'success', content: 'ok from Anthropic' })
+      expect(calls).toBe(1)
+    } finally {
+      if (previousKey === undefined) delete process.env.ANTHROPIC_API_KEY
+      else process.env.ANTHROPIC_API_KEY = previousKey
+    }
+  })
+
+  it('Ollama readiness is reached only from the dedicated relay:ollama-readiness IPC — never from startup, preflight, or a polling path', async () => {
+    const indexSource = await readFile(path.join(__dirname, '..', 'src', 'main', 'index.ts'), 'utf8')
+    const rendererSource = await readFile(path.join(__dirname, '..', 'src', 'renderer', 'src', 'ThreadPanel.tsx'), 'utf8')
+
+    // Main: checkOllamaReadiness/ollamaReadiness appears exactly once, as the relay:ollama-readiness handler.
+    const readinessCalls = [...indexSource.matchAll(/\bollamaReadiness\s*\(/g)]
+    expect(readinessCalls).toHaveLength(1)
+    expect(indexSource).toMatch(/ipcMain\.handle\('relay:ollama-readiness',\s*\(\)\s*=>\s*ollamaReadiness\(\)\)/)
+
+    // Renderer: the IPC call site lives only inside the explicit-click handler, not in a useEffect.
+    const rendererCallSite = rendererSource.indexOf('window.adfRelay.ollamaReadiness()')
+    expect(rendererCallSite).toBeGreaterThan(-1)
+    const enclosingFunctionStart = rendererSource.lastIndexOf('const runReadinessCheck', rendererCallSite)
+    expect(enclosingFunctionStart).toBeGreaterThan(-1)
+    expect(rendererSource.slice(0, rendererCallSite)).not.toMatch(/useEffect\([^)]*ollamaReadiness/)
   })
 })

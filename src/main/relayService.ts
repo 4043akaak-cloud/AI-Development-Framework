@@ -1,10 +1,11 @@
 import path from 'node:path'
 import { readdir } from 'node:fs/promises'
-import type { ApprovedTaskPacket } from '../shared/jobLoopTypes'
-import type { ExternalPreflight } from '../shared/externalAdapterTypes'
+import type { AdapterProfile, ApprovedTaskPacket } from '../shared/jobLoopTypes'
+import type { ExternalPreflight, OllamaReadiness } from '../shared/externalAdapterTypes'
 import type { ConversationThread, OwnerAction, RecoveryAction, RelayResult, ThreadSummary } from '../shared/threadTypes'
 import { readJson } from './jobLoop/ledger'
 import type { ConversationRelay } from './jobLoop/relay'
+import { checkOllamaReadiness } from './jobLoop/ollamaTransport'
 
 const ownerActions: readonly OwnerAction[] = ['continue', 'stop', 'approve', 'next-task']
 
@@ -142,6 +143,20 @@ export function cancelExternal(relay: ConversationRelay, threadId: unknown, note
 
 export function externalSendState(relay: ConversationRelay, threadId: unknown): Promise<RelayResult<{ inFlight: boolean }>> {
   return guard(async () => ({ inFlight: relay.hasInFlightExternalSend(asIdentifier(threadId, 'threadId')) }))
+}
+
+/** Read-only, Registry-derived candidates for explicit external dispatch. Opens no connection. */
+export function listExternalAdapters(relay: ConversationRelay): Promise<RelayResult<AdapterProfile[]>> {
+  return guard(async () => relay.listExternalAdapterProfiles())
+}
+
+/**
+ * Owner-explicit only. The one IPC in this file that actually reaches a network endpoint
+ * (`/api/tags`, read-only) — callers must never invoke it from startup, Thread selection, or a
+ * polling loop.
+ */
+export function ollamaReadiness(): Promise<RelayResult<OllamaReadiness>> {
+  return guard(() => checkOllamaReadiness())
 }
 
 export function decideThread(relay: ConversationRelay, threadId: unknown, action: unknown, note: unknown): Promise<RelayResult<ConversationThread>> {

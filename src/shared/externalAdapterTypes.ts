@@ -89,6 +89,17 @@ export interface ExternalCallRecord {
   errorText?: string
 }
 
+/** Result of a read-only `/api/tags`-style check: is the local provider reachable, is the model there. */
+export interface OllamaReadiness {
+  reachable: boolean
+  modelPresent: boolean
+  models: string[]
+  detail: string
+  /** The endpoint and model this check actually targeted, for display next to the result. */
+  baseUrl: string
+  model: string
+}
+
 export interface ExternalPreflight {
   ok: boolean
   provider: string

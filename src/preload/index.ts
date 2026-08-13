@@ -1,7 +1,8 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { OpenSourceResult } from '../shared/boardTypes'
 import type { ConversationThread, OwnerAction, RecoveryAction, RelayResult, ThreadSummary } from '../shared/threadTypes'
-import type { ExternalPreflight } from '../shared/externalAdapterTypes'
+import type { ExternalPreflight, OllamaReadiness } from '../shared/externalAdapterTypes'
+import type { AdapterProfile } from '../shared/jobLoopTypes'
 
 contextBridge.exposeInMainWorld('adfBoard', {
   openCanonicalSource: (sourceId: string): Promise<OpenSourceResult> => ipcRenderer.invoke('board:open-canonical-source', sourceId)
@@ -20,5 +21,8 @@ contextBridge.exposeInMainWorld('adfRelay', {
   preflightExternal: (threadId: string, adapterId: string): Promise<RelayResult<ExternalPreflight>> => ipcRenderer.invoke('relay:preflight-external', threadId, adapterId),
   sendExternal: (threadId: string, adapterId: string): Promise<RelayResult<ConversationThread>> => ipcRenderer.invoke('relay:send-external', threadId, adapterId),
   cancelExternal: (threadId: string, note?: string): Promise<RelayResult<{ cancelled: boolean }>> => ipcRenderer.invoke('relay:cancel-external', threadId, note ?? null),
-  externalSendState: (threadId: string): Promise<RelayResult<{ inFlight: boolean }>> => ipcRenderer.invoke('relay:external-state', threadId)
+  externalSendState: (threadId: string): Promise<RelayResult<{ inFlight: boolean }>> => ipcRenderer.invoke('relay:external-state', threadId),
+  listExternalAdapters: (): Promise<RelayResult<AdapterProfile[]>> => ipcRenderer.invoke('relay:external-adapters'),
+  // Owner-explicit only: the renderer must call this only from a direct click handler.
+  ollamaReadiness: (): Promise<RelayResult<OllamaReadiness>> => ipcRenderer.invoke('relay:ollama-readiness')
 })

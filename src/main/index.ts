@@ -4,8 +4,9 @@ import { canonicalSources, rootFor } from '../shared/canonicalLinkPolicy'
 import { openResolvedCanonicalSource, type CanonicalSourceDefinition } from './canonicalSourceService'
 import { safeDevelopmentRendererUrl } from '../shared/rendererUrlPolicy'
 import { ConversationRelay } from './jobLoop/relay'
-import { cancelExternal, continueThread, decideThread, externalSendState, getThread, listApprovedTaskIds, listThreads, preflightExternal, recoverThread, scanForRecovery, sendExternal, sendFirstTurn, startApprovedThread } from './relayService'
+import { cancelExternal, continueThread, decideThread, externalSendState, getThread, listApprovedTaskIds, listExternalAdapters, listThreads, ollamaReadiness, preflightExternal, recoverThread, scanForRecovery, sendExternal, sendFirstTurn, startApprovedThread } from './relayService'
 import { AnthropicMessagesTransport } from './jobLoop/anthropicTransport'
+import { OllamaLocalHttpTransport } from './jobLoop/ollamaTransport'
 import { ExternalConversationAdapter } from './jobLoop/externalAdapter'
 import { FakeCriticConversationAdapter, FakeProposalConversationAdapter } from './jobLoop/conversationAdapters'
 
@@ -46,21 +47,29 @@ app.whenReady().then(async () => {
   session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false))
   ipcMain.handle('board:open-canonical-source', (_event, sourceId: unknown) => openResolvedCanonicalSource(sourceId, allowedSources, shell.openPath))
 
-  // Constructed, not connected. Nothing here opens a socket or reads a credential — the transport
-  // only touches the network inside `send`, which the Owner gate must authorise first.
+  // Constructed, not connected. Nothing here opens a socket or reads a credential — the transports
+  // only touch the network inside `send` (Anthropic) or an explicit readiness check (Ollama), both
+  // gated behind an Owner action. Neither is contacted just by building this Relay.
   const externalAdapterId = 'claude-external'
   const externalTransport = new AnthropicMessagesTransport()
+  const ollamaAdapterId = 'ollama-local'
+  const ollamaTransport = new OllamaLocalHttpTransport()
   const runtimeRoot = path.join(app.getPath('userData'), 'adf-runtime')
 
   const relay: ConversationRelay = new ConversationRelay({
     runtimeRoot,
-    externalTransports: { [externalAdapterId]: externalTransport },
+    externalTransports: { [externalAdapterId]: externalTransport, [ollamaAdapterId]: ollamaTransport },
     adapters: [
       new FakeProposalConversationAdapter(),
       new FakeCriticConversationAdapter(),
       new ExternalConversationAdapter(externalAdapterId, 'proposal', externalTransport, {
         authorise: (request) => relay.externalHooks(externalAdapterId, externalTransport).authorise(request),
         recordCall: (record) => relay.externalHooks(externalAdapterId, externalTransport).recordCall(record),
+        now: () => new Date()
+      }),
+      new ExternalConversationAdapter(ollamaAdapterId, 'proposal', ollamaTransport, {
+        authorise: (request) => relay.externalHooks(ollamaAdapterId, ollamaTransport).authorise(request),
+        recordCall: (record) => relay.externalHooks(ollamaAdapterId, ollamaTransport).recordCall(record),
         now: () => new Date()
       })
     ]
@@ -77,6 +86,9 @@ app.whenReady().then(async () => {
   ipcMain.handle('relay:send-external', (_event, threadId: unknown, adapterId: unknown) => sendExternal(relay, threadId, adapterId))
   ipcMain.handle('relay:cancel-external', (_event, threadId: unknown, note: unknown) => cancelExternal(relay, threadId, note))
   ipcMain.handle('relay:external-state', (_event, threadId: unknown) => externalSendState(relay, threadId))
+  ipcMain.handle('relay:external-adapters', () => listExternalAdapters(relay))
+  // Owner-explicit only: never invoked from startup, Thread selection, or any polling loop.
+  ipcMain.handle('relay:ollama-readiness', () => ollamaReadiness())
 
   // One pass, before the window exists, so the renderer cannot act on a Thread mid-scan.
   await scanForRecovery(relay)

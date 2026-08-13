@@ -1,6 +1,6 @@
 # ADF Current State
 
-> Last updated: 2026-08-11
+> Last updated: 2026-08-13（`ADF-OLLAMA-FIRST-CLASS-ADAPTER-001`のみ反映。それ以前の項目は前回更新時点のまま）
 
 ## 現在地
 
@@ -14,11 +14,13 @@ ADFの製品境界は、Project進捗管理とAI間の受け渡しに限定す�
 
 **完了済み**: `ADF-BOARD-PROJECTION-001`、`ADF-JOB-LOOP-001`（Legacy化を受諾してDone。現行Liveなのは`registerApprovedJob`等の共通登録経路のみで、旧Fake討論・旧`projectBoard`/`readBoard`・`JobRuntime`直接実行経路は現行Electronから到達不能なLegacyコードとして記録）、`ADF-DISPATCH-ACK-001`（Dispatch Packet生成とACK完全照合が`registerApprovedJob`経由で現行アプリのLive機能。JOB-LOOP-001のような広範なLegacy化ではない）、`ADF-CLAUDE-ADAPTER-001`（**複数AI Adapter共通基盤は完成。ただし実AI接続は未実施。** Adapter Registry・Routing plan生成/hash検証・Result Envelope検証はLive、旧`adapter-results.json`/`buildResult`/`runApprovedTask`経由の独立Result記録はLegacy）、`ADF-TASK-PACKET-CLI-001`（**ローカルMVPの入口であるApproved Task Packet生成が完了した。** Execution Summaryは固定JSONブロック方式で確定し、3 Task文書で抽出・hash計算・`validateApprovedTask`がPass。既存Packetは要約fixtureであり、既存hashとの一致は必須にしない。既存Packetの自動上書き・自動再承認は行わない）、およびローカルMVPのThread／Fake AI／Owner Review／Recovery／Live Boardの一連の機能。
 
-**残存Verifying**: `ADF-EXTERNAL-ADAPTER-001`のみ。**残る判断は`ADF-EXTERNAL-ADAPTER-001`の実送信可否のみである。**
+**残存Verifying**: `ADF-EXTERNAL-ADAPTER-001`（実送信可否がOwner判断待ち）、`ADF-OLLAMA-FIRST-CLASS-ADAPTER-001`（実Ollama接続はMain/Relay/Transport本番経路で確認済み。GUIのマウスクリック操作そのものの確認とOwnerの`Done`受入判断が残る）。
 
 Anthropic APIキーの取得と外部AIへの実送信は引き続き保留である。External Adapterは接続経路（Electron main／IPC／preload／UI、認証状態preflight）まで実装済みだが、実送信は未実施である。`ADF-BOARD-PROJECTION-001`は、`open + turnCount > 0`の実機表示と`recovery-needed`のLive Board実機表示の2項目を、単体テストで検証済みかつDoneを妨げない残存リスクとして記録している。`ADF-TASK-PACKET-CLI-001`は、Task本文とExecution Summaryの将来的な乖離を検出できないことを残存リスクとして記録している。受信途中の中断と外部Adapter固有の冪等性は引き続き後続Taskで扱う。
 
 ## 次のTask
+
+[`ADF-OLLAMA-FIRST-CLASS-ADAPTER-001`](../tasks/ADF-OLLAMA-FIRST-CLASS-ADAPTER-001.md): `Verifying`（2026-08-13）。`ADF-OLLAMA-LIVE-CONNECTION-001`でCLIプローブ経由のみ実証されていた`ollama-local`を、Electronアプリの明示承認付き標準Adapterとして統合した。Main（`index.ts`）へ`OllamaLocalHttpTransport`/`ExternalConversationAdapter('ollama-local', ...)`を`claude-external`・Fake二種と共存登録し、Registry由来の読み取り専用Adapter選択UI（`listExternalAdapterProfiles`/`relay:external-adapters`）をRendererへ追加した。Packet承認Planと実Dispatch先の一致検証（`adapterId`・`role`・`routingPlanHash`）を、preflight表示と実Dispatchの両方で共通ヘルパー`checkAdapterPlanMembership`により行う設計とし、Anthropic経路には影響しない。Ollama readiness確認（`/api/tags`）はOwnerの明示操作でのみ実行され、`local-http`のAdapterでは送信ボタン有効化の必須条件とした。typecheck（node/web/cli）、Vitest 254件、`electron-vite build`、`git diff --check`をPass。**2026-08-13、Owner承認のうえ実Ollamaへ1件送信し成功した**（Thread `thread-18399ed229b8f47b` / Job `job-c33f22d42214f89f`、`ollama-local`/proposal、preflight全10項目Pass、Result Envelope・Evidence・Ledger生成、旧証跡は無変更）。ただし、この送信は`index.ts`のIPCハンドラが実際に呼ぶのと同一のMain／Relay／Transport本番経路をスクリプトから直接実行したものであり、**マウスクリックによる実GUI操作そのものの確認ではない**（本環境にElectronネイティブウィンドウを操作するツールが無いため）。GUIクリックでの目視確認はOwner自身に別途推奨する。`ADF-EXTERNAL-ADAPTER-001`のStatusは変更していない。
 
 [`ADF-BOARD-PROJECTION-001`](../tasks/ADF-BOARD-PROJECTION-001.md): `Done`。静的な手作業Snapshot（`boardSnapshot.ts`、2026-08-04/05時点で最終更新）とは別に、ADF Runtime Ledgerに記録された実際のThread状態を、既存の読み取り専用IPC（`listThreads` / `listApprovedTaskIds`）だけを使ってBoardへ反映するLive Boardを実装した。Main／Preload／IPCは無変更（build出力がbyte単位で一致）。Legacy Snapshot（既存4件のADFカード＋Block Defenseカード）はLive Boardと別セクション・別集計に分離し、自動書き換えは行っていない。typecheck、Vitest 173件、build、Electron実機でのlane遷移・手動Refresh・空Runtime表示・Legacy非混在を確認した。`open + turnCount > 0`の実機表示と`recovery-needed`のLive Board実機表示の2件は、単体テストで検証済みかつDoneを妨げない残存リスクとして記録している。
 
