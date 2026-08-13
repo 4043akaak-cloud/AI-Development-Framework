@@ -95,6 +95,27 @@ export const adapterProfiles: readonly AdapterProfile[] = [
     capabilities: ['read', 'propose'],
     costTier: 'free',
     dataPolicy: 'local-only'
+  },
+  {
+    // `ADF-CLAUDE-CODE-CLI-ADAPTER-001`: `planned` only — `supports()` already requires
+    // `status === 'available'`, so this entry cannot be auto-routed or explicitly dispatched to
+    // regardless of `connection`. Not registered in `index.ts`'s Relay either. Registering the
+    // Transport here is deliberately separate from making it reachable, mirroring how `ollama-local`
+    // spent its first Task as `planned` before a later Task flipped it to `available`.
+    // authMode is `environment-secret`, not `cli-session`: ClaudeCodeCliTransport always spawns with
+    // `--bare`, under which the CLI's own docs state auth is strictly ANTHROPIC_API_KEY (OAuth and
+    // keychain are never read) — so that is the complete, accurate description of what this Adapter
+    // actually checks and actually uses, not an unconfirmed richer session model.
+    adapterId: 'claude-code-cli',
+    displayName: 'Claude Code CLI / External Conversation Adapter',
+    provider: 'anthropic',
+    connection: 'cli',
+    authMode: 'environment-secret',
+    status: 'planned',
+    roles: ['proposal', 'critic', 'implementation', 'review'],
+    capabilities: ['read', 'propose'],
+    costTier: 'unknown',
+    dataPolicy: 'external-send'
   }
 ]
 

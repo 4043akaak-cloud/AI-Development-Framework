@@ -79,6 +79,17 @@ describe('multi-AI adapter foundation', () => {
     }
   })
 
+  it('registers claude-code-cli as planned/cli/environment-secret/external-send (ADF-CLAUDE-CODE-CLI-ADAPTER-001)', () => {
+    const profile = adapterProfiles.find((candidate) => candidate.adapterId === 'claude-code-cli')
+    expect(profile).toMatchObject({ provider: 'anthropic', connection: 'cli', authMode: 'environment-secret', status: 'planned', dataPolicy: 'external-send' })
+  })
+
+  it('never selects claude-code-cli via routeAdapters while it is planned', () => {
+    const plan = routeAdapters('ADF-CLAUDE-CODE-CLI-ADAPTER-001', ['proposal', 'critic'], ['read', 'propose'])
+    expect(plan.selections.map((selection) => selection.adapterId)).toEqual(['fake-ai-a', 'fake-ai-b'])
+    expect(plan.selections.some((selection) => selection.adapterId === 'claude-code-cli')).toBe(false)
+  })
+
   it('validates structured adapter results against the approved Job input', () => {
     const envelope: AdapterResultEnvelope = {
       resultId: 'result-fake-ai-a-1',
