@@ -73,6 +73,18 @@ MVPを軽く保つため、自動再送・常駐Worker・DB・バックグラウ
 
 **判断ゲート:** Project Ownerが設計を承認したうえで、プロセス終了・再起動を含む実機検証でThreadが恒久停止しないことを確認すること。
 
+**記録済み（完了）:** `ADF-RELAY-RECOVERY-001`で、Case A / Case Bの起動時検出、Ownerによる再送・失敗記録・停止、Job同期、77 tests、build、別プロセス検証、Recovery UI表示を確認した。commit `932357c`。
+
+## Phase 1.8 — 最初の実AI Adapter接続（実装完了・実行直前承認待ち）
+
+`ADF-EXTERNAL-ADAPTER-001`で、既存のADF Thread / Relayへ実AI Adapterを一つ接続し、Synthetic Packetの送信からResult Envelope取込、Ownerレビュー待ちまでをこのPC上で実証する。Claudeは最初の技術試験対象とするが、ADF製品をClaude専用にはしない。同じAdapter契約で第二Adapter以降を追加できることを保つ。
+
+**対象:** 接続方式のpreflight、最小Packet、実行直前の外部送信・課金承認、foreground送受信、timeout / cancel / recovery、Result / Ledger / Board反映。
+
+**対象外:** repo添付、worktree、外部AIによるコード実行、正本変更、動的Routing、並列Job、無限討論、自動統合、commit、push、merge。
+
+**判断ゲート:** Project Ownerが送信データ、Provider、予算上限、保持・telemetry、停止条件、実行直前承認を確認し、実AIの回答が既存Threadへ安全に戻ることを実機検証する。
+
 ## Phase 2 — 外部AIまたは人間による独立レビューの追加
 
 パイロット結果をもとに、別AIまたは人間によるレビューを1段だけ追加する。実装者と最終レビュー担当を分け、役割別テンプレートを必要最小限で作る。

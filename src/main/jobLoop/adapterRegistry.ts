@@ -4,7 +4,9 @@ export const adapterProfiles: readonly AdapterProfile[] = [
   {
     adapterId: 'fake-ai-a',
     displayName: 'Fake AI A / Proposal',
+    provider: 'fake',
     connection: 'fake',
+    authMode: 'none',
     status: 'available',
     roles: ['proposal'],
     capabilities: ['read', 'propose'],
@@ -14,7 +16,9 @@ export const adapterProfiles: readonly AdapterProfile[] = [
   {
     adapterId: 'fake-ai-b',
     displayName: 'Fake AI B / Critic',
+    provider: 'fake',
     connection: 'fake',
+    authMode: 'none',
     status: 'available',
     roles: ['critic', 'review'],
     capabilities: ['read', 'propose'],
@@ -24,7 +28,9 @@ export const adapterProfiles: readonly AdapterProfile[] = [
   {
     adapterId: 'claude-code-first-real',
     displayName: 'Claude Code / First Real Adapter Test',
+    provider: 'anthropic',
     connection: 'unknown',
+    authMode: 'unknown',
     status: 'planned',
     roles: ['implementation', 'review'],
     capabilities: ['read', 'propose'],
@@ -32,24 +38,62 @@ export const adapterProfiles: readonly AdapterProfile[] = [
     dataPolicy: 'unknown'
   },
   {
+    // Connection method decided by Project Owner after the environment preflight: Messages API over
+    // the built-in fetch (no CLI installed, no SDK dependency added). Dispatch still requires an
+    // Owner execution approval on disk and a credential in the process environment.
     adapterId: 'claude-external',
     displayName: 'Claude / External Conversation Adapter',
-    connection: 'unknown',
-    status: 'planned',
+    provider: 'anthropic',
+    connection: 'api',
+    authMode: 'environment-secret',
+    status: 'available',
     roles: ['proposal', 'critic', 'review'],
     capabilities: ['read', 'propose'],
     costTier: 'unknown',
     dataPolicy: 'external-send'
   },
   {
+    // Exercises the whole external path with no network access, so the gates can be verified
+    // before any provider or execution approval exists.
+    adapterId: 'external-probe-mock',
+    displayName: 'External Probe / Mock transport',
+    provider: 'mock',
+    connection: 'mock',
+    authMode: 'none',
+    status: 'available',
+    roles: ['proposal'],
+    capabilities: ['read', 'propose'],
+    costTier: 'free',
+    dataPolicy: 'external-send'
+  },
+  {
     adapterId: 'codex-external',
     displayName: 'Codex / External Conversation Adapter',
+    provider: 'openai',
     connection: 'unknown',
+    authMode: 'unknown',
     status: 'planned',
     roles: ['proposal', 'critic', 'implementation'],
     capabilities: ['read', 'propose'],
     costTier: 'unknown',
     dataPolicy: 'external-send'
+  },
+  {
+    // `ADF-OLLAMA-LIVE-CONNECTION-001`: available for explicit-adapterId dispatch only. `supports()`
+    // still excludes `connection === 'local-http'` from auto-selection, so this flip does not let
+    // ollama-local into any Fake-adapter auto-routed discussion. Dispatch also requires the calling
+    // process's own `ConversationRelay` to have registered an Adapter instance for this id — the live
+    // Electron app's `index.ts` does not, so the running app cannot reach it through this change alone.
+    adapterId: 'ollama-local',
+    displayName: 'Ollama / Local HTTP Adapter',
+    provider: 'ollama',
+    connection: 'local-http',
+    authMode: 'none',
+    status: 'available',
+    roles: ['proposal', 'critic'],
+    capabilities: ['read', 'propose'],
+    costTier: 'free',
+    dataPolicy: 'local-only'
   }
 ]
 
@@ -68,12 +112,42 @@ export function getAdapterProfile(adapterId: string): AdapterProfile {
   return profile
 }
 
-function supports(profile: AdapterProfile, role: AdapterRole, capabilities: Capability[], maxCostTier: AdapterCostTier): boolean {
+export function supports(profile: AdapterProfile, role: AdapterRole, capabilities: Capability[], maxCostTier: AdapterCostTier): boolean {
   return profile.status === 'available'
     && profile.roles.includes(role)
     && capabilities.every((capability) => profile.capabilities.includes(capability))
     && costRank[profile.costTier] <= costRank[maxCostTier]
     && profile.dataPolicy === 'local-only'
+    // local-only does not mean zero-risk: a local-http adapter (e.g. Ollama) can be misconfigured to
+    // proxy an external host, so it is never auto-routed. It still dispatches, but only by explicit
+    // adapterId through the same preflight gate as external-send adapters (see externalApproval.ts).
+    && profile.connection !== 'local-http'
+}
+
+/**
+ * Builds an `AdapterPlan` naming exactly one Owner-chosen adapterId for one role, instead of letting
+ * `routeAdapters` auto-select. Provider-neutral: works for any registered `local-only` adapter, not
+ * just Ollama. Deliberately still requires `dataPolicy === 'local-only'`, the same MVP boundary
+ * `validateAdapterPlan` enforces on every selection — an external-send adapter is never eligible here
+ * either, so this cannot become a second way to smuggle one into an approved local Plan.
+ */
+export function buildExplicitAdapterPlan(taskId: string, adapterId: string, role: AdapterRole, capabilities: readonly Capability[], maxCostTier: AdapterCostTier = 'free'): AdapterPlan {
+  const profile = getAdapterProfile(adapterId)
+  if (profile.status !== 'available') throw new AdapterRegistryError(`adapter is not available: ${adapterId} (status: ${profile.status})`)
+  // Checked ahead of role/capabilities/cost: the local-only MVP boundary is the fundamental gate an
+  // explicit Owner choice cannot bypass, not a tiebreaker among otherwise-eligible adapters.
+  if (profile.dataPolicy !== 'local-only') throw new AdapterRegistryError(`adapter ${adapterId} is outside local-only MVP boundary`)
+  if (!profile.roles.includes(role)) throw new AdapterRegistryError(`adapter ${adapterId} does not support role ${role}`)
+  if (!capabilities.every((capability) => profile.capabilities.includes(capability))) {
+    throw new AdapterRegistryError(`adapter ${adapterId} does not support the requested capabilities for task ${taskId}`)
+  }
+  if (costRank[profile.costTier] > costRank[maxCostTier]) throw new AdapterRegistryError(`adapter ${adapterId} exceeds the maximum cost tier ${maxCostTier}`)
+  return {
+    version: 'v1',
+    selections: [{ adapterId, role, rationale: `Explicit adapterId approved by Owner for role ${role} in task ${taskId} (not auto-routed)` }],
+    externalSend: false,
+    maxCostTier
+  }
 }
 
 export function routeAdapters(taskId: string, roles: readonly AdapterRole[], capabilities: readonly Capability[], maxCostTier: AdapterCostTier = 'free'): AdapterPlan {

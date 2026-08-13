@@ -4,7 +4,10 @@ import { canonicalSources, rootFor } from '../shared/canonicalLinkPolicy'
 import { openResolvedCanonicalSource, type CanonicalSourceDefinition } from './canonicalSourceService'
 import { safeDevelopmentRendererUrl } from '../shared/rendererUrlPolicy'
 import { ConversationRelay } from './jobLoop/relay'
-import { continueThread, decideThread, getThread, listApprovedTaskIds, listThreads, recoverThread, scanForRecovery, sendFirstTurn, startApprovedThread } from './relayService'
+import { cancelExternal, continueThread, decideThread, externalSendState, getThread, listApprovedTaskIds, listThreads, preflightExternal, recoverThread, scanForRecovery, sendExternal, sendFirstTurn, startApprovedThread } from './relayService'
+import { AnthropicMessagesTransport } from './jobLoop/anthropicTransport'
+import { ExternalConversationAdapter } from './jobLoop/externalAdapter'
+import { FakeCriticConversationAdapter, FakeProposalConversationAdapter } from './jobLoop/conversationAdapters'
 
 let mainWindow: BrowserWindow | undefined
 
@@ -43,7 +46,25 @@ app.whenReady().then(async () => {
   session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false))
   ipcMain.handle('board:open-canonical-source', (_event, sourceId: unknown) => openResolvedCanonicalSource(sourceId, allowedSources, shell.openPath))
 
-  const relay = new ConversationRelay({ runtimeRoot: path.join(app.getPath('userData'), 'adf-runtime') })
+  // Constructed, not connected. Nothing here opens a socket or reads a credential — the transport
+  // only touches the network inside `send`, which the Owner gate must authorise first.
+  const externalAdapterId = 'claude-external'
+  const externalTransport = new AnthropicMessagesTransport()
+  const runtimeRoot = path.join(app.getPath('userData'), 'adf-runtime')
+
+  const relay: ConversationRelay = new ConversationRelay({
+    runtimeRoot,
+    externalTransports: { [externalAdapterId]: externalTransport },
+    adapters: [
+      new FakeProposalConversationAdapter(),
+      new FakeCriticConversationAdapter(),
+      new ExternalConversationAdapter(externalAdapterId, 'proposal', externalTransport, {
+        authorise: (request) => relay.externalHooks(externalAdapterId, externalTransport).authorise(request),
+        recordCall: (record) => relay.externalHooks(externalAdapterId, externalTransport).recordCall(record),
+        now: () => new Date()
+      })
+    ]
+  })
   ipcMain.handle('relay:list', () => listThreads(relay))
   ipcMain.handle('relay:get', (_event, threadId: unknown) => getThread(relay, threadId))
   ipcMain.handle('relay:approved-tasks', () => listApprovedTaskIds(relay))
@@ -52,6 +73,10 @@ app.whenReady().then(async () => {
   ipcMain.handle('relay:continue', (_event, threadId: unknown, note: unknown) => continueThread(relay, threadId, note))
   ipcMain.handle('relay:decide', (_event, threadId: unknown, action: unknown, note: unknown) => decideThread(relay, threadId, action, note))
   ipcMain.handle('relay:recover', (_event, threadId: unknown, action: unknown, note: unknown) => recoverThread(relay, threadId, action, note))
+  ipcMain.handle('relay:preflight-external', (_event, threadId: unknown, adapterId: unknown) => preflightExternal(relay, threadId, adapterId))
+  ipcMain.handle('relay:send-external', (_event, threadId: unknown, adapterId: unknown) => sendExternal(relay, threadId, adapterId))
+  ipcMain.handle('relay:cancel-external', (_event, threadId: unknown, note: unknown) => cancelExternal(relay, threadId, note))
+  ipcMain.handle('relay:external-state', (_event, threadId: unknown) => externalSendState(relay, threadId))
 
   // One pass, before the window exists, so the renderer cannot act on a Thread mid-scan.
   await scanForRecovery(relay)

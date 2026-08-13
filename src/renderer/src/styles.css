@@ -42,3 +42,21 @@ h1, h2, h3, p { margin-top: 0; } h1 { margin-bottom: 8px; font-size: 32px; } h2 
 .recovery-panel h3 { margin: 0; color: #ffc79a; }
 .recovery-panel .detail-grid div { background: #35241a; }
 .recovery-panel .detail-grid dt { color: #ffc79a; }
+.external-panel { border: 1px solid #7b6bb0; border-left-width: 4px; border-radius: 9px; background: #1b1930; padding: 14px; display: grid; gap: 12px; margin-bottom: 16px; }
+.external-panel h3 { margin: 0; color: #cfc4ff; }
+.external-panel .thread-heading { border-bottom-color: #413a61; margin-bottom: 0; padding-bottom: 10px; }
+.external-panel .detail-grid div { background: #262244; }
+.external-panel .detail-grid dt { color: #cfc4ff; }
+.external-panel .detail-grid dd { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; word-break: break-all; }
+.preflight-checks { list-style: none; padding: 0; margin: 0; display: grid; gap: 4px; font-size: 12px; }
+.live-board { margin-top: 20px; border: 1px solid #2a5349; border-radius: 14px; background: #0d1e2f; padding: 22px; }
+.live-board .thread-heading { margin-bottom: 14px; }
+.live-card { cursor: default; }
+.live-card:hover { border-color: #355d74; background: #112639; }
+.live-badges { display: flex; flex-wrap: wrap; gap: 6px; }
+.live-badge { width: fit-content; padding: 3px 7px; border-radius: 99px; font-size: 11px; font-weight: 700; }
+.live-badge.owner-action { background: #194f48; color: #9df0dd; }
+.live-badge.recovery { background: #682e34; color: #ffc2c7; }
+.legacy-board-wrapper { margin-top: 20px; border: 1px solid #4d4630; border-radius: 14px; background: #17140d; padding: 22px; }
+.legacy-board-wrapper .thread-heading { margin-bottom: 14px; }
+.legacy-board-wrapper .eyebrow { color: #d9b46a; }

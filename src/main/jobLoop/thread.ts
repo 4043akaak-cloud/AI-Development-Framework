@@ -1,4 +1,5 @@
 import type { ConversationThread, ConversationTurn, OwnerAction, RecoveryInfo, ThreadState, ThreadSummary } from '../../shared/threadTypes'
+import type { AdapterPlan } from '../../shared/jobLoopTypes'
 import { hashJson } from './hash'
 
 export const defaultMaxTurns = 6
@@ -40,6 +41,7 @@ export interface CreateThreadInput {
   scopeHash: string
   contextHash: string
   routingPlanHash: string
+  adapterPlan: AdapterPlan
   inputHash: string
   createdAt: string
   maxTurns?: number
@@ -52,6 +54,9 @@ export function createThread(input: CreateThreadInput): ConversationThread {
   if (!input.approvalId || !input.scopeHash || !input.contextHash || !input.routingPlanHash || !input.inputHash) {
     throw new ThreadRejectedError(['a Thread requires an approvalId, scopeHash, contextHash, routingPlanHash and inputHash'])
   }
+  if (!input.adapterPlan || !Array.isArray(input.adapterPlan.selections) || input.adapterPlan.selections.length === 0) {
+    throw new ThreadRejectedError(['a Thread requires a non-empty adapterPlan, matching the approved routingPlanHash'])
+  }
   return {
     threadId: input.threadId,
     taskId: input.taskId,
@@ -61,6 +66,7 @@ export function createThread(input: CreateThreadInput): ConversationThread {
     scopeHash: input.scopeHash,
     contextHash: input.contextHash,
     routingPlanHash: input.routingPlanHash,
+    adapterPlan: input.adapterPlan,
     inputHash: input.inputHash,
     state: 'open',
     maxTurns,

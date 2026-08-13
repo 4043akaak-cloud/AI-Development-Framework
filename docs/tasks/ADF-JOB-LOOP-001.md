@@ -1,7 +1,7 @@
 # Task — ADF-JOB-LOOP-001: Fake Adapterによる最小討論Job Loopを実装する
 
 > Type: Implementation
-> Status: Verifying
+> Status: Done
 > Owner: Codex
 > Review AI: Project Owner（最終Review）
 > Related Goal / MVP / Roadmap: [Goal](../project/GOAL.md) / [MVP](../project/MVP.md) / [Roadmap](../project/ROADMAP.md)
@@ -129,8 +129,18 @@
 | 対象 | 決定 | 根拠・確認内容 | 日時 | 記録リンク |
 |---|---|---|---|---|
 | Plan / Scope | Approved | `設計OK` | 2026-08-08 | 本Task Approval |
-| Diff / Verification | Not applicable | Project Ownerレビュー待ち | | |
-| 残存リスク | Follow-up required | 実AI接続・MCP・worktreeは後続Task | | |
+| Diff / Verification | Approved / Done（Legacy化を受諾） | 実装当時の受入条件・自動テスト（13 tests、本日`tests/jobLoop.test.ts`単体で再実行しPass）は満たされている。ただし現行アプリでは`ADF-CONVERSATION-RELAY-001`以降のアーキテクチャへ移行済みであり、本Task固有の実行経路は現行Electronからは到達不能なLegacyコードであることをProject Ownerが確認・受諾した。詳細は「## 10. Legacy化の記録」を参照 | 2026-08-11 | 本Task §10 |
+| 残存リスク | Accepted（Legacyとして） | 視覚的Job Board表示、旧Job Loop固有のプロセス中断復旧、実AI接続、MCP、worktree、配布署名は対象外・未検証のまま。今後これらが必要になる場合は別Taskで扱う | 2026-08-11 | |
+
+### 個別レビュー記録（2026-08-11）
+
+- **個別レビュー対象**: `ADF-JOB-LOOP-001`
+- **判定**: Approved / Done
+- **判定理由**: 当時（2026-08-10）の受入条件・自動検証（typecheck、Vitest 20件、build/package、`git diff --check`）は完了している。2026-08-11時点で`tests/jobLoop.test.ts`13件を単体で再実行し、引き続きPassすることを確認した。
+- **現在の状態**: `ADF-CONVERSATION-RELAY-001`以降の構成で一部Legacy化している。「現行機能として完了」ではなく「過去Taskとして受入済み」である。
+- **現行Live範囲**: `JobRuntime.registerApprovedJob()`（Approval検証・Dispatch Packet・ACK照合・Job登録）と、`contracts.ts` / `hash.ts` / `adapterRegistry.ts`等の共通登録経路・共通契約の一部。`ConversationRelay.startThread`から継続して呼ばれ、後続の全Taskのテストで回帰なく再実行されている。
+- **Legacy範囲**: 旧Fake討論の実行（`fakeAdapters.ts`、`runApprovedTask`本体）、旧Board Projection（`projectBoard` / `readBoard`、`projection/board.json`）、`JobRuntime`の直接実行経路。`src/main/index.ts` / `src/main/relayService.ts` / `src/renderer/`のいずれからも参照されておらず、現行Electronアプリの実行経路からは到達不能。`tests/jobLoop.test.ts`自身によってのみ実行される。旧Taskを復活させるコード変更は行っていない。
+- **残存リスク**: 実AI接続、MCP、worktree、視覚的Job Board表示、配布用コード署名は対象外・未検証のまま維持する。
 
 ### Done checklist
 
@@ -138,6 +148,17 @@
 - [x] PlanとScopeが承認済みである。
 - [x] 承認済みScopeだけを変更した。
 - [x] Verificationの結果と未検証事項を記録した。
-- [ ] 独立レビュー、または該当しない理由を記録した。
-- [ ] Project Owner Reviewの対象・決定・根拠を記録した。
+- [x] 独立レビュー、または該当しない理由を記録した。同一Codex環境内の役割分離であり独立外部レビューには該当しない（元記録どおり）。
+- [x] Project Owner Reviewの対象・決定・根拠を記録した。2026-08-11、Legacy化の事実を含めてProject Ownerが確認・受諾した。
 - [x] GitHubのTask記録を更新した。
+
+## 10. Legacy化の記録（2026-08-11）
+
+本TaskをDoneとするにあたり、「現行機能として完了」ではなく「過去Taskとして受入済み」であることを明記する。
+
+- 実装当時（2026-08-10）の受入条件はすべて満たされ、自動テスト（typecheck、Vitest 20件、当時のbuild/package、`git diff --check`）はPassしていた。2026-08-11時点で`tests/jobLoop.test.ts`13件を単体で再実行し、引き続きPassすることを確認した。
+- 現行アプリは`ADF-CONVERSATION-RELAY-001`で導入されたThread / `ConversationRelay`へ移行済みである。
+- 現在Liveなのは、`JobRuntime.registerApprovedJob()`（Approval検証・Dispatch Packet・ACK照合・Job登録）と、`contracts.ts` / `hash.ts` / `adapterRegistry.ts`等の共通契約の一部のみである。これらは`ConversationRelay.startThread`から継続して呼ばれており、後続の全Taskのテストを通じて回帰なく再実行されている。
+- `runApprovedTask`本体、`fakeAdapters.ts`によるFake討論の実行、旧`projectBoard` / `readBoard`（`projection/board.json`によるJob単位のBoard投影）は、`src/main/index.ts` / `src/main/relayService.ts` / `src/renderer/`のいずれからも参照されておらず、**現行Electronアプリの実行経路からは到達不能なLegacyコード**である（`tests/jobLoop.test.ts`自身によってのみ実行される）。
+- 視覚的Job Board表示、旧Job Loop固有のプロセス中断復旧、実AI接続、MCP、worktree、配布用コード署名は、実装当時から対象外または未検証のままであり、本Doneはこれらを検証済みとするものではない。
+- 上記のLegacy化の事実を、2026-08-11にProject Ownerが確認・受諾した。

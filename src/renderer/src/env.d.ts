@@ -1,5 +1,6 @@
 import type { OpenSourceResult } from '../../shared/boardTypes'
 import type { ConversationThread, OwnerAction, RecoveryAction, RelayResult, ThreadSummary } from '../../shared/threadTypes'
+import type { ExternalPreflight } from '../../shared/externalAdapterTypes'
 
 declare global {
   interface Window {
@@ -15,6 +16,10 @@ declare global {
       continueThread: (threadId: string, note?: string) => Promise<RelayResult<ConversationThread>>
       decideThread: (threadId: string, action: Exclude<OwnerAction, 'continue'>, note?: string) => Promise<RelayResult<ConversationThread>>
       recoverThread: (threadId: string, action: RecoveryAction, note?: string) => Promise<RelayResult<ConversationThread>>
+      preflightExternal: (threadId: string, adapterId: string) => Promise<RelayResult<ExternalPreflight>>
+      sendExternal: (threadId: string, adapterId: string) => Promise<RelayResult<ConversationThread>>
+      cancelExternal: (threadId: string, note?: string) => Promise<RelayResult<{ cancelled: boolean }>>
+      externalSendState: (threadId: string) => Promise<RelayResult<{ inFlight: boolean }>>
     }
   }
 }

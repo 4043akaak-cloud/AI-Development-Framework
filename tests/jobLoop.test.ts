@@ -3,8 +3,8 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { ApprovedTaskPacket, DispatchAck, FixtureMode } from '../src/shared/jobLoopTypes'
-import { assertTransition, validateApprovedTask } from '../src/main/jobLoop/contracts'
-import { routeAdapters } from '../src/main/jobLoop/adapterRegistry'
+import { assertTransition, createDispatchKey, validateApprovedTask } from '../src/main/jobLoop/contracts'
+import { buildExplicitAdapterPlan, routeAdapters } from '../src/main/jobLoop/adapterRegistry'
 import { hashJson } from '../src/main/jobLoop/hash'
 import { DispatchBlockedError, FakeDispatchReceiver } from '../src/main/jobLoop/dispatchAck'
 import { JobRuntime } from '../src/main/jobLoop/runtime'
@@ -184,5 +184,84 @@ describe('ADF-JOB-LOOP-001', () => {
     await current.runApprovedTask(approvedTask())
     expect(await readFile(fixture, 'utf8')).toBe(before)
     await expect(readdir(current.runtimeRoot, { withFileTypes: true })).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ name: 'jobs' })]))
+  })
+})
+
+describe('ADF-OLLAMA-LIVE-CONNECTION-001 Job identity binds to the approved adapterPlan/approval (2nd Blocking finding fix)', () => {
+  /** Same Scope/Context/Target/adapter-mode as approvedTask(), but a different explicit adapterPlan/approval — the exact shape of the real fake-ai-a-vs-ollama-local collision the Owner found. */
+  function explicitlyApprovedPacket(approvalId: string): ApprovedTaskPacket {
+    const base = approvedTask()
+    const explicitPlan = buildExplicitAdapterPlan(base.taskId, 'ollama-local', 'proposal', ['read', 'propose'])
+    return { ...base, approval: { ...base.approval, approvalId, routingPlanHash: hashJson(explicitPlan) }, adapterPlan: explicitPlan }
+  }
+
+  it('createDispatchKey changes when adapterPlan (routingPlanHash) differs, even with identical Scope/Context/Target/adapter mode', () => {
+    const fakePacket = approvedTask()
+    const ollamaPacket = explicitlyApprovedPacket('approval-adf-job-loop-001-explicit')
+    expect(createDispatchKey(fakePacket)).not.toBe(createDispatchKey(ollamaPacket))
+  })
+
+  it('createDispatchKey stays identical for a byte-for-byte re-run of the same Packet (idempotency is unaffected)', () => {
+    const packet = approvedTask()
+    expect(createDispatchKey(packet)).toBe(createDispatchKey({ ...packet }))
+  })
+
+  it('a Packet with a different adapterPlan never reuses the prior Job: it gets its own Job with its own fresh Ledger', async () => {
+    const current = await runtime()
+    const fakePacket = approvedTask()
+    const first = await current.registerApprovedJob(fakePacket)
+    expect(first.alreadyRegistered).toBe(false)
+
+    const ollamaPacket = explicitlyApprovedPacket('approval-adf-job-loop-001-explicit')
+    const second = await current.registerApprovedJob(ollamaPacket)
+
+    expect(second.alreadyRegistered).toBe(false)
+    expect(second.jobId).not.toBe(first.jobId)
+  })
+
+  it('re-running the identical Packet (same approvalId, same routingPlanHash) still reuses the existing Job — the one legitimate reuse case', async () => {
+    const current = await runtime()
+    const packet = approvedTask()
+    const first = await current.registerApprovedJob(packet)
+    const second = await current.registerApprovedJob(packet)
+    expect(second.jobId).toBe(first.jobId)
+    expect(second.alreadyRegistered).toBe(true)
+  })
+
+  it("a new Job's full Ledger — request/adapter-plan/approval/dispatch-packet/dispatch-ack — all agree with the newly approved ollama-local Plan", async () => {
+    const current = await runtime()
+    const packet = explicitlyApprovedPacket('approval-adf-job-loop-001-explicit-v2')
+    const registration = await current.registerApprovedJob(packet)
+    const directory = current.jobDirectory(registration.jobId)
+
+    const request = JSON.parse(await readFile(path.join(directory, 'request.json'), 'utf8')) as { task: { adapterPlan: { selections: Array<{ adapterId: string }> } } }
+    expect(request.task.adapterPlan.selections).toEqual([expect.objectContaining({ adapterId: 'ollama-local', role: 'proposal' })])
+
+    const adapterPlan = JSON.parse(await readFile(path.join(directory, 'adapter-plan.json'), 'utf8')) as { selections: Array<{ adapterId: string }> }
+    expect(adapterPlan.selections).toEqual([expect.objectContaining({ adapterId: 'ollama-local', role: 'proposal' })])
+
+    const approval = JSON.parse(await readFile(path.join(directory, 'approval.json'), 'utf8')) as { approvalId: string; routingPlanHash: string }
+    expect(approval).toMatchObject({ approvalId: 'approval-adf-job-loop-001-explicit-v2', routingPlanHash: packet.approval.routingPlanHash })
+
+    const dispatchPacket = JSON.parse(await readFile(path.join(directory, 'dispatch-packet.json'), 'utf8')) as { adapterPlan: { selections: Array<{ adapterId: string }> } }
+    expect(dispatchPacket.adapterPlan.selections).toEqual([expect.objectContaining({ adapterId: 'ollama-local', role: 'proposal' })])
+
+    const dispatchAck = JSON.parse(await readFile(path.join(directory, 'dispatch-ack.json'), 'utf8')) as { status: string }
+    expect(dispatchAck.status).toBe('acknowledged')
+  })
+
+  it("the prior fake-ai-a Job's own Ledger is left untouched when a later, differently-approved Packet registers its own Job", async () => {
+    const current = await runtime()
+    const fakePacket = approvedTask()
+    const first = await current.registerApprovedJob(fakePacket)
+    const beforeRequest = await readFile(path.join(current.jobDirectory(first.jobId), 'request.json'), 'utf8')
+    const beforeApproval = await readFile(path.join(current.jobDirectory(first.jobId), 'approval.json'), 'utf8')
+
+    await current.registerApprovedJob(explicitlyApprovedPacket('approval-adf-job-loop-001-explicit-v3'))
+
+    expect(await readFile(path.join(current.jobDirectory(first.jobId), 'request.json'), 'utf8')).toBe(beforeRequest)
+    expect(await readFile(path.join(current.jobDirectory(first.jobId), 'approval.json'), 'utf8')).toBe(beforeApproval)
+    const oldAdapterPlan = JSON.parse(await readFile(path.join(current.jobDirectory(first.jobId), 'adapter-plan.json'), 'utf8')) as { selections: Array<{ adapterId: string }> }
+    expect(oldAdapterPlan.selections.map((selection) => selection.adapterId)).toEqual(['fake-ai-a', 'fake-ai-b'])
   })
 })

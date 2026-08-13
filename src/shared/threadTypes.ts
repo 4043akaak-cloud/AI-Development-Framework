@@ -1,4 +1,4 @@
-import type { AdapterRole, ResultStatus } from './jobLoopTypes'
+import type { AdapterPlan, AdapterRole, AdapterRunStatus, ResultStatus } from './jobLoopTypes'
 
 
 export type ThreadState = 'open' | 'awaiting-owner' | 'recovery-needed' | 'stopped' | 'approved' | 'completed' | 'failed'
@@ -62,6 +62,9 @@ export interface ConversationThread {
   scopeHash: string
   contextHash: string
   routingPlanHash: string
+  /** The approved Task Packet's own adapterPlan, hash-bound to routingPlanHash. An explicit adapterId
+   *  dispatch to a local-only adapter must be one of these selections — see relay.ts sendToAdapterUnsafe. */
+  adapterPlan: AdapterPlan
   /** Job input hash from the registered Job, used to bind every Result Envelope to this Job. */
   inputHash: string
   state: ThreadState
@@ -101,6 +104,9 @@ export interface RelayTurnPayload {
   verification?: Array<{ name: string; status: 'pass' | 'fail' | 'not-run'; reason?: string }>
   risks?: string[]
   errorRef?: string
+  /** Lets an Adapter record `timeout` / `cancelled`, which a Turn status cannot express. */
+  envelopeStatus?: AdapterRunStatus
+  terminationReason?: string
 }
 
 export type RelayResult<T> = { ok: true; value: T } | { ok: false; error: string }

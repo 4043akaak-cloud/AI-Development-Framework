@@ -268,3 +268,58 @@ Commit `f8fb1c7 feat: implement local ADF conversation relay` として `origin/
 - 到達点: このPC内で、承認済みTaskに紐づいたThread上で複数のFake AIが議論し、Ownerが結果を確認・継続・承認できる状態。
 - 次のTask: [`ADF-RELAY-RECOVERY-001`](./ADF-RELAY-RECOVERY-001.md)。送信後・受信前にプロセスが終了したThreadが恒久停止する問題を、Owner判断による復旧で解消する。
 - 後続Task候補: 実外部Adapter接続（`ADF-RELAY-RECOVERY-001`の後、別承認）、承認Packet作成導線の整備、Turn単位の計測記録、配布用コード署名。
+
+## ADF Execution Summary
+
+```json adf-execution-summary
+{
+  "adfExecutionSummary": "v1",
+  "taskId": "ADF-CONVERSATION-RELAY-001",
+  "objective": "Task配下にThread（順序付きTurn列）を一次データとして持ち、複数Adapterが同じThreadへ発言し、Ownerが途中で継続・停止・承認・次Task化を選べる状態にする。",
+  "scope": {
+    "inScope": [
+      "ConversationThread / ConversationTurn / ThreadState / OwnerActionの共有型",
+      "Thread検証ロジック（順序保証、重複turnId拒否、親Turn hash照合、状態遷移、最大Turn数）",
+      "Adapter Interface: send_to_adapter / receive_from_adapter / continue_job / get_conversation_state",
+      "Fake Adapter A(Proposal) / B(Critic)による複数ターン会話",
+      "thread.json / thread-events.jsonlによるローカル会話Ledger",
+      "Owner操作（継続・停止・承認・次Task化）と履歴記録",
+      "Thread一覧・Turn時系列・Owner操作を表示する最小UIとIPC境界",
+      "外部AI候補（Claude / Codex）のplanned登録"
+    ],
+    "outOfScope": [
+      "APIキーの取得・保存、認証、実HTTP送信、Claude / Codex CLI起動、外部AIへの実データ送信、課金",
+      "MCP接続、外部Repository操作、worktree作成",
+      "GitHub / Obsidian正本の自動書込み、commit、push、merge、公開",
+      "自律的な無限会話、並列Job、DB、クラウド同期、汎用チャットUI、AI人格設定"
+    ]
+  },
+  "context": {
+    "githubTask": "docs/tasks/ADF-CONVERSATION-RELAY-001.md",
+    "obsidianContext": [
+      "Projects/AI-Development-Framework/16_ChatGPT_ADF_各AI自動往復構想_2026-08-07.md",
+      "Projects/AI-Development-Framework/00_MOC.md"
+    ],
+    "adoptedPrinciples": [
+      "owner-approval",
+      "github-and-obsidian-as-canonical",
+      "board-is-a-derived-view"
+    ]
+  },
+  "acceptance": [
+    "承認済みTaskを経由せずにThreadを開始できない",
+    "Turnごとに検証済みResult EnvelopeとEvidence linkを生成する",
+    "検証済みResultを持たないThreadはapproveできない",
+    "Ownerの継続が承認と次Turn送信を一操作で行う",
+    "Fake A(Proposal)とFake B(Critic)が2Turn以上会話し、再依頼・再反論まで到達する",
+    "plannedな外部Adapter（Claude / Codex）はdispatchできない"
+  ],
+  "stopConditions": [
+    "maxTurns（既定6）を超える送信が必要になった場合",
+    "外部送信、認証、課金、MCP接続が必要になった場合",
+    "GitHub / Obsidian正本への自動書込みが必要になった場合"
+  ]
+}
+```
+
+*`stopConditions`は本文書に独立した「Stop Conditions」見出しが無いため、`## 5. データモデル` → `### 無限会話の防止` の記述と、`## 4. Scope` → `### Out of scope（別Task・別承認）` の内容から編成した（`ADF-TASK-PACKET-CLI-001`の設計指示による）。*

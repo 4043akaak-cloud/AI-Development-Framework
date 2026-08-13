@@ -3,11 +3,13 @@ export type ResultStatus = 'success' | 'partial' | 'failed' | 'invalid'
 export type Capability = 'read' | 'propose'
 export type FixtureMode = 'success' | 'partial' | 'failed' | 'invalid'
 export type DispatchState = 'dispatched' | 'acknowledged' | 'preflight-valid' | 'blocked'
-export type AdapterConnection = 'fake' | 'cli' | 'api' | 'manual' | 'unknown'
+export type AdapterConnection = 'fake' | 'cli' | 'api' | 'local-http' | 'gui-experimental' | 'manual' | 'mock' | 'unknown'
 export type AdapterStatus = 'available' | 'planned'
 export type AdapterRole = 'proposal' | 'critic' | 'implementation' | 'review' | 'research'
 export type AdapterCostTier = 'free' | 'low' | 'medium' | 'high' | 'unknown'
 export type AdapterDataPolicy = 'local-only' | 'external-send' | 'unknown'
+/** How the Owner's credential (if any) reaches the transport. ADF never reads or stores the value itself. */
+export type AuthMode = 'none' | 'environment-secret' | 'cli-session' | 'oauth' | 'cloud-credential' | 'unknown'
 export type AdapterRunStatus = ResultStatus | 'timeout' | 'cancelled'
 
 export interface JobScope {
@@ -32,7 +34,10 @@ export interface DispatchTarget {
 export interface AdapterProfile {
   adapterId: string
   displayName: string
+  /** Who serves the model, independent of `adapterId`. Free-form: 'anthropic' | 'openai' | 'ollama' | 'fake' ... */
+  provider: string
   connection: AdapterConnection
+  authMode: AuthMode
   status: AdapterStatus
   roles: AdapterRole[]
   capabilities: Capability[]

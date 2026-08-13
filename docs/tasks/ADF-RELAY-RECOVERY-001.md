@@ -1,12 +1,12 @@
 # Task — ADF-RELAY-RECOVERY-001: pending dispatchの検出とOwner判断による復旧
 
 > Type: Implementation
-> Status: Verifying
+> Status: Done
 > Owner: Claude Code
 > Review AI: Project Owner（最終Review）
 > Related: [Relay Recovery設計](../design/ADF_RELAY_RECOVERY.md) / [ADF-CONVERSATION-RELAY-001](./ADF-CONVERSATION-RELAY-001.md)
 
-このTaskは `docs/workflow/TASK_LIFECYCLE.md` と `docs/workflow/AI_DELEGATION_CHARTER.md` に従う。**現在は設計の正本化までであり、Project Ownerの「設計OK」まで実装を開始しない。**
+このTaskは `docs/workflow/TASK_LIFECYCLE.md` と `docs/workflow/AI_DELEGATION_CHARTER.md` に従う。設計承認、実装、検証、Project Ownerレビューまで完了している。
 
 ## 1. Objective
 
@@ -164,7 +164,7 @@ Codexの監視レビューで、`send-failed`後の同一sequence再送に関す
 | **実機** | **別プロセスでの送信→強制終了→別プロセスで走査→再送** | **Pass** | Claude Code |
 | **実機** | 同上→失敗記録（3ファイル出力・`awaiting-owner`・Job `running`） | **Pass** | Claude Code |
 | **実機** | 同上→停止（`stopped`・Job `cancelled`） | **Pass** | Claude Code |
-| 手動 | Electron画面での復旧表示とOwner操作 | **Not run** | — |
+| 手動 | Electron画面での復旧表示とOwner操作 | **未確認（プロセス跨ぎでのバックエンド動作＝再送・失敗記録・停止は検証済み。Electron画面上でのUI操作としての実機確認は事実が確定していないため、確定するまで未確認として扱う。§10参照。2026-08-11、`ADF-TASK-PACKET-CLI-001`のOwner指示により訂正）** | Codex |
 
 実行環境にはNode.jsが無いため、`node_modules/electron/dist`の同梱Node v24を`ELECTRON_RUN_AS_NODE=1`で使用した。
 
@@ -186,14 +186,14 @@ Codexの監視レビューで、`send-failed`後の同一sequence再送に関す
 - [x] 1. Case Aで恒久停止しない（実機で確認）
 - [x] 2. Case Bを検出し、送信を試みた事実がLedgerに残る
 - [x] 3. `getState`例外でも走査が止まらず、`probeError`は200文字・スタックトレースなし
-- [x] 4. `recovery-needed`をUIで理由付きに表示（コード実装済み、実機未確認）
+- [x] 4. `recovery-needed`をUIで理由付きに表示（実機確認）
 - [x] 5. 再送 / 失敗記録 / 停止の3操作が成立しLedgerに残る（実機で確認）
 - [x] 6. 同一sequence・同一Adapterの再送でdispatchIdが変わり、重複時は再送せず失敗する
 - [x] 7. 失敗記録が3点を残し`awaiting-owner`へ戻る。この`failed` Turnでは承認できない
 - [x] 8. `appendRecoveryTurn`の3条件と、`appendTurn`の`open`ガード維持
 - [x] 9. `send`例外でpendingを作らず、Threadは`open`のまま。Turnが生まれなければ次回起動で`send-unconfirmed`
 - [x] 10. 自動再送・自動失敗記録なし。期限超過は表示のみ
-- [x] 11. 既存テストが回帰しない（Vitest 75件Pass。Adapterの`failed`が通常経路でThreadを`failed`にする挙動も維持）
+- [x] 11. 既存テストが回帰しない（Vitest 77件Pass。Adapterの`failed`が通常経路でThreadを`failed`にする挙動も維持）
 - [x] 12. 外部送信・認証・APIキー・課金のコードなし
 
 ## 10. 残存リスク・未検証事項
@@ -213,7 +213,72 @@ Codexの監視レビューで、`send-failed`後の同一sequence再送に関す
 
 ## 12. Handover
 
-- 次の安全な一手: Codexが差分・検証をレビューし、Project OwnerがElectron画面で復旧表示とOwner操作3種を実機確認する。
-- 実機確認の手順: Threadを開始してTurnを送信した直後にアプリを終了し、再起動して`recovery-needed`の表示と3操作を確認する。
-- 後続Task候補: 受信途中の中断への対応、外部AI Adapter接続（別承認）、復旧回数・復旧までの時間の計測。
-- add / commit / push / merge は行っていない。
+- 完了確認: Codexが差分・検証をレビューし、Recovery UIの表示と失敗記録を実機確認した。再送・停止は別プロセス検証で確認した。
+- 後続Task: `ADF-EXTERNAL-ADAPTER-001`。外部送信・課金・認証は別の実行直前承認で扱う。
+- commit / push: `932357c`を`origin/codex/adf-pilot-governance`へpush済み。
+
+## 13. Project Owner Review
+
+- Review date: 2026-08-10
+- Decision: Approved / Done
+- Project Ownerが実装結果、残存リスク、77 tests、typecheck、build、プロセス跨ぎ復旧検証を確認し、コミット・プッシュを承認した。
+- 監視担当: Codex。実装担当: Claude Code。同一Codex環境内の役割分離は独立した外部AIレビューとは扱わない。
+
+## ADF Execution Summary
+
+```json adf-execution-summary
+{
+  "adfExecutionSummary": "v1",
+  "taskId": "ADF-RELAY-RECOVERY-001",
+  "objective": "Turn送信後・受信前にプロセスが終了したThreadを、起動時の検出とOwner判断による復旧（再送 / 失敗記録 / 停止）で解消する。",
+  "scope": {
+    "inScope": [
+      "adapter.send()前のrelay.dispatch-intent記録",
+      "send失敗時のrelay.send-failed記録とThread openの維持",
+      "appendRecoveryTurn()の追加とappendTurn()のopenガード維持",
+      "起動時の全Thread走査によるCase A(answer-unavailable) / Case B(send-unconfirmed)の検出",
+      "Thread状態recovery-needed追加とJob Ledger同期",
+      "Owner復旧操作3種（再送 / 失敗記録 / Thread停止）",
+      "dispatchId生成規則へのattempt追加と重複検査",
+      "recovery-needed UIと単体・復旧テスト",
+      "pendingへのexpiresAt付与と、経過時間・期限超過の表示"
+    ],
+    "outOfScope": [
+      "自動再送、自動リトライ、常駐Worker、バックグラウンド再開",
+      "DB、メッセージブローカー、並列Job、複数Threadの一括復旧",
+      "外部AIへの実接続、認証、APIキー、外部送信、課金、MCP",
+      "Adapter契約（send / getState / receive）の変更",
+      "承認Packet作成導線の整備、計測・ログ基盤、配布用コード署名"
+    ]
+  },
+  "context": {
+    "githubTask": "docs/tasks/ADF-RELAY-RECOVERY-001.md",
+    "obsidianContext": [
+      "Projects/AI-Development-Framework/16_ChatGPT_ADF_各AI自動往復構想_2026-08-07.md"
+    ],
+    "adoptedPrinciples": [
+      "owner-approval",
+      "no-db-no-broker",
+      "structured-result-even-on-failure"
+    ]
+  },
+  "acceptance": [
+    "pending保存後の再起動でThreadが恒久停止しない（Case A）",
+    "send成功後・pending保存前の再起動でも送信を試みた事実がLedgerに残る（Case B）",
+    "getState例外でも走査が止まらずrecovery-neededになる",
+    "再送 / 失敗記録 / 停止の3操作がいずれも成立しLedgerに残る",
+    "同一sequence・同一Adapterの再送でdispatchIdが必ず変わる",
+    "Owner操作なしに自動再送・自動失敗記録が起きない",
+    "recovery-neededのThreadがUI上で理由付きで判別できる",
+    "失敗記録が失敗Turn・検証済みResult Envelope・errors/<turnId>.jsonの3点を残し、このfailed Turnでは承認できない",
+    "appendRecoveryTurn()はrecovery-needed以外・failed以外のstatus・errorRefなしのTurnをいずれも拒否し、appendTurn()はopen以外を拒否する",
+    "既存テスト（Fake Adapterを含む）が回帰しない",
+    "外部送信、認証、APIキー、課金に該当するコードを追加しない"
+  ],
+  "stopConditions": [
+    "Adapter契約の変更が必要になった場合",
+    "既存の検証済み挙動を変えないと実装できない場合",
+    "外部送信、認証、課金、新規依存が必要になった場合"
+  ]
+}
+```

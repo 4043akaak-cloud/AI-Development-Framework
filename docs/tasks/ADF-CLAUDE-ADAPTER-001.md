@@ -1,7 +1,7 @@
 # Task — ADF-CLAUDE-ADAPTER-001: 複数AI対応Adapter基盤と最初の実Adapter検証
 
 > Type: Implementation
-> Status: Verifying
+> Status: Done
 > Owner: Codex
 > Review AI: Project Owner（最終Review）
 > Related Tasks: [ADF-JOB-LOOP-001](./ADF-JOB-LOOP-001.md) / [ADF-DISPATCH-ACK-001](./ADF-DISPATCH-ACK-001.md)
@@ -235,7 +235,21 @@ Project Ownerの2026-08-10の指示により、単一Claude構成ではなく、
 - Ledger追加: `adapter-plan.json`、`adapter-results.json`。既存の`dispatch-packet.json`、`dispatch-ack.json`、`result.json`と合わせ、AIごとの役割とResultを追跡する。
 - 残るリスク・未検証事項: 実Claude／Gemini／Codex等の接続互換性、外部送信・費用・telemetry、動的選定、並列Job、worktree、実機でのBoard表示は未検証。
 
-Project Ownerの最終Diff / Verification Review待ち。
+## 15.1 Project Owner Review（2026-08-12）
+
+| 対象 | 決定 | 根拠・確認内容 | 日時 |
+|---|---|---|---|
+| Plan / Scope | Approved | Project Ownerが2026-08-10に複数AI前提の共通Adapter基盤への修正を指示 | 2026-08-10 |
+| Diff / Verification | Approved / Done | Adapter Registry・Routing plan生成・hash検証・Result Envelope検証は現行アプリでLive。詳細は下記個別レビュー記録を参照 | 2026-08-12 |
+
+### 個別レビュー記録
+
+- **対象**: `ADF-CLAUDE-ADAPTER-001`
+- **判定**: Approved / Done
+- **Live範囲**: Adapter Registry（`adapterProfiles` / `getAdapterProfile`）、Routing plan生成・hash検証（`routeAdapters` / `validateAdapterPlan`）、Routing planの永続化（`adapter-plan.json`）、Result Envelope検証（`validateResultEnvelope`）。いずれも`registerApprovedJob`または`relay.ts`のTurn処理を通じて、現行アプリの実Thread開始・実Turn作成のたびに実行される。実runtimeの実Job2件双方で`adapter-plan.json`の実在を確認し、`resultEnvelope.ts`の検証が`relay.ts`の複数箇所から呼ばれていることをソースで確認した。
+- **Legacy範囲**: 旧`adapter-results.json`書込み、旧`buildResult`、`runApprovedTask`経由の独立Result記録。`ADF-JOB-LOOP-001`と同じ理由で、現行Electronアプリのどこからも参照されず到達不能。実Jobディレクトリに`adapter-results.json`は存在しない（確認済み）。
+- **Doneの意味に含めないこと**: 実Claude接続、APIキー、外部送信、MCP、実AI品質検証は未実施である。本Doneはこれらを検証済みとするものではない。
+- **残存リスク**: 実Claude／Gemini／Codex等の接続互換性・費用・telemetryは未検証。動的選定、並列Job、worktreeは未検証。Adapter Registry自体のBoard表示は静的Snapshotのまま（`ADF-BOARD-PROJECTION-001`の対象外）。
 
 ## 16. Product Boundary
 

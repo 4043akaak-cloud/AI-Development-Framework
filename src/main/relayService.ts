@@ -1,6 +1,7 @@
 import path from 'node:path'
 import { readdir } from 'node:fs/promises'
 import type { ApprovedTaskPacket } from '../shared/jobLoopTypes'
+import type { ExternalPreflight } from '../shared/externalAdapterTypes'
 import type { ConversationThread, OwnerAction, RecoveryAction, RelayResult, ThreadSummary } from '../shared/threadTypes'
 import { readJson } from './jobLoop/ledger'
 import type { ConversationRelay } from './jobLoop/relay'
@@ -111,6 +112,36 @@ export function recoverThread(relay: ConversationRelay, threadId: unknown, actio
         return relay.stopFromRecovery(id, safeNote)
     }
   })
+}
+
+/**
+ * Read-only Owner gate report. Opens no connection: it only reads Thread state, the Registry and
+ * the Owner approval file. The renderer cannot create or edit that file through any IPC.
+ */
+export function preflightExternal(relay: ConversationRelay, threadId: unknown, adapterId: unknown): Promise<RelayResult<ExternalPreflight>> {
+  return guard(() => relay.preflightExternalSend(asIdentifier(threadId, 'threadId'), asIdentifier(adapterId, 'adapterId')))
+}
+
+/**
+ * One external send, on one explicit Owner action. The gate runs again inside the Adapter, so a
+ * stale preflight in the UI cannot authorise anything. No retry and no fallback.
+ */
+export function sendExternal(relay: ConversationRelay, threadId: unknown, adapterId: unknown): Promise<RelayResult<ConversationThread>> {
+  return guard(async () => {
+    const id = asIdentifier(threadId, 'threadId')
+    const adapter = asIdentifier(adapterId, 'adapterId')
+    const preflight = await relay.preflightExternalSend(id, adapter)
+    if (!preflight.ok) throw new Error(`external send blocked: ${preflight.blockingReasons.join('; ')}`)
+    return relay.continueJob(id, adapter)
+  })
+}
+
+export function cancelExternal(relay: ConversationRelay, threadId: unknown, note: unknown): Promise<RelayResult<{ cancelled: boolean }>> {
+  return guard(async () => ({ cancelled: relay.cancelExternalSend(asIdentifier(threadId, 'threadId'), asNote(note) ?? 'cancelled by Owner') }))
+}
+
+export function externalSendState(relay: ConversationRelay, threadId: unknown): Promise<RelayResult<{ inFlight: boolean }>> {
+  return guard(async () => ({ inFlight: relay.hasInFlightExternalSend(asIdentifier(threadId, 'threadId')) }))
 }
 
 export function decideThread(relay: ConversationRelay, threadId: unknown, action: unknown, note: unknown): Promise<RelayResult<ConversationThread>> {

@@ -11,6 +11,11 @@ export interface AdapterRequest {
   role: AdapterRole
   sequence: number
   priorTurns: readonly ConversationTurn[]
+  /** Optional provenance an Adapter may record. Local Fake Adapters ignore these. */
+  attempt?: number
+  inputHash?: string
+  scopeHash?: string
+  contextHash?: string
 }
 
 /** What an Adapter returns from `send`. An external Adapter may carry its own conversation id. */
@@ -32,6 +37,8 @@ export interface ConversationAdapter {
   send(request: AdapterRequest): Promise<AdapterAcceptance>
   getState(acceptance: AdapterAcceptance): Promise<AdapterRunState>
   receive(acceptance: AdapterAcceptance): Promise<RelayTurnPayload>
+  /** Aborts an in-flight send. Local in-process Adapters have nothing to abort and omit it. */
+  cancel?(dispatchId: string, reason?: string): boolean
 }
 
 export class AdapterProtocolError extends Error {

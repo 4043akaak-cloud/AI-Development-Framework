@@ -8,6 +8,11 @@ import type { AdapterAcceptance, ConversationAdapter } from './conversationAdapt
 import { FakeCriticConversationAdapter, FakeProposalConversationAdapter } from './conversationAdapters'
 import { hashJson } from './hash'
 import { appendEvent, ensureDir, readEvents, readJson, removeFile, writeJsonAtomic, writeJsonExclusive } from './ledger'
+import type { ExternalPreflight } from '../../shared/externalAdapterTypes'
+import { assertExternalSendAllowed, preflightExternalSend, readExternalApproval } from './externalApproval'
+import type { ExternalAdapterHooks } from './externalAdapter'
+import type { ExternalTransport } from './externalTransport'
+import { assertPacketBoundary, buildSyntheticPacket } from './syntheticPacket'
 import { validateResultEnvelope, type AdapterResultEnvelope } from './resultEnvelope'
 import { JobRuntime } from './runtime'
 import { appendRecoveryTurn, appendTurn, applyOwnerDecision, createThread, defaultMaxTurns, enterRecovery, lastTurn, leaveRecovery, summarize, ThreadRejectedError, turnHash, withState } from './thread'
@@ -26,6 +31,8 @@ export interface ConversationRelayOptions {
   adapters?: readonly ConversationAdapter[]
   jobRuntime?: JobRuntime
   pendingTtlMs?: number
+  /** Provider transports, keyed by adapterId, so the Owner gate can run without the renderer. */
+  externalTransports?: Readonly<Record<string, ExternalTransport>>
 }
 
 interface PendingDispatch {
@@ -40,10 +47,14 @@ export class ConversationRelay {
   readonly jobRuntime: JobRuntime
   readonly pendingTtlMs: number
   private readonly adapters: Map<string, ConversationAdapter>
+  private readonly externalTransports: Map<string, ExternalTransport>
+  /** Which dispatch is currently open per Thread, so an Owner cancel needs only a threadId. */
+  private readonly inFlight = new Map<string, { dispatchId: string; adapterId: string }>()
   /** Serialises relay work per Thread so concurrent calls cannot claim the same sequence. */
   private readonly queues = new Map<string, Promise<unknown>>()
 
-  constructor({ runtimeRoot = '.adf-runtime', clock = () => new Date(), adapters, jobRuntime, pendingTtlMs = defaultPendingTtlMs }: ConversationRelayOptions = {}) {
+  constructor({ runtimeRoot = '.adf-runtime', clock = () => new Date(), adapters, jobRuntime, pendingTtlMs = defaultPendingTtlMs, externalTransports = {} }: ConversationRelayOptions = {}) {
+    this.externalTransports = new Map(Object.entries(externalTransports))
     this.runtimeRoot = path.resolve(runtimeRoot)
     this.clock = clock
     this.pendingTtlMs = pendingTtlMs
@@ -75,23 +86,54 @@ export class ConversationRelay {
     return this.clock().toISOString()
   }
 
-  /** Local-only adapters are the MVP boundary; a `planned` external adapter is never dispatched. */
+  /**
+   * `local-only` adapters dispatch freely. An `external-send` adapter is allowed here only so its
+   * own Owner gate can run inside `send`; a `planned` adapter is never dispatched at all.
+   */
   private resolveAdapter(adapterId: string): ConversationAdapter {
     const profile = getAdapterProfile(adapterId)
     if (profile.status !== 'available') throw new ThreadRejectedError([`adapter is not available for dispatch: ${adapterId}`])
-    if (profile.dataPolicy !== 'local-only') throw new ThreadRejectedError([`adapter is outside the local-only MVP boundary: ${adapterId}`])
+    if (profile.dataPolicy !== 'local-only' && profile.dataPolicy !== 'external-send') {
+      throw new ThreadRejectedError([`adapter has an undeclared data policy: ${adapterId}`])
+    }
     const adapter = this.adapters.get(adapterId)
     if (!adapter) throw new ThreadRejectedError([`adapter is not registered in this relay: ${adapterId}`])
     return adapter
+  }
+
+  /**
+   * A local-only adapter named explicitly (not auto-routed) must be one of the Thread's own approved
+   * `adapterPlan` selections — the Plan the Owner actually approved via `routingPlanHash`. This closes
+   * the gap where an explicit adapterId could reach a `local-only` adapter that was never part of what
+   * was approved (e.g. a Task Packet approving `fake-ai-a` while the caller names `ollama-local`).
+   * An `external-send` adapter is untouched here: its gate is the separate Owner-approval-file check
+   * in `preflightExternalSend`, and `AdapterPlan` can never contain an external-send selection at all
+   * (see `validateAdapterPlan`), so this check would reject it for the wrong reason if it ran there too.
+   */
+  private assertExplicitDispatchIsApprovedPlan(thread: ConversationThread, adapterId: string, role: AdapterRole): void {
+    const profile = getAdapterProfile(adapterId)
+    if (profile.dataPolicy !== 'local-only') return
+    const approved = thread.adapterPlan.selections.some((selection) => selection.adapterId === adapterId && selection.role === role)
+    if (!approved) {
+      throw new ThreadRejectedError([`explicit adapterId is not part of this Thread's approved adapterPlan: ${adapterId} (role ${role})`])
+    }
   }
 
   private nextRole(thread: ConversationThread): AdapterRole {
     return thread.turns.length % 2 === 0 ? 'proposal' : 'critic'
   }
 
+  /** Automatic role routing never reaches outside this machine: an external Adapter must be named. */
   private adapterForRole(role: AdapterRole): ConversationAdapter {
-    for (const adapter of this.adapters.values()) if (adapter.role === role) return adapter
-    throw new ThreadRejectedError([`no relay adapter registered for role ${role}`])
+    for (const adapter of this.adapters.values()) {
+      if (adapter.role !== role) continue
+      const profile = getAdapterProfile(adapter.adapterId)
+      if (profile.status !== 'available') continue
+      if (profile.dataPolicy !== 'local-only') continue
+      if (profile.connection === 'local-http') continue
+      return adapter
+    }
+    throw new ThreadRejectedError([`no local relay adapter registered for role ${role}`])
   }
 
   private async persist(thread: ConversationThread): Promise<ConversationThread> {
@@ -222,6 +264,7 @@ export class ConversationRelay {
       scopeHash: packet.scopeHash,
       contextHash: packet.contextHash,
       routingPlanHash: packet.approval.routingPlanHash,
+      adapterPlan: packet.adapterPlan,
       inputHash: registration.inputHash,
       createdAt: this.now(),
       maxTurns: options.maxTurns ?? defaultMaxTurns
@@ -246,6 +289,7 @@ export class ConversationRelay {
     const expectedRole = this.nextRole(thread)
     const adapter = adapterId ? this.resolveAdapter(adapterId) : this.adapterForRole(expectedRole)
     if (adapter.role !== expectedRole) throw new ThreadRejectedError([`turn ${thread.turns.length} requires role ${expectedRole}, but ${adapter.adapterId} is ${adapter.role}`])
+    if (adapterId) this.assertExplicitDispatchIsApprovedPlan(thread, adapterId, adapter.role)
 
     const parent = lastTurn(thread)
     const sequence = thread.turns.length
@@ -275,6 +319,7 @@ export class ConversationRelay {
     await this.record(threadId, 'relay.dispatch-intent', { dispatchId, adapterId: adapter.adapterId, role: adapter.role, sequence, attempt })
 
     let acceptance: AdapterAcceptance
+    this.inFlight.set(threadId, { dispatchId, adapterId: adapter.adapterId })
     try {
       acceptance = await adapter.send({
         dispatchId,
@@ -284,12 +329,18 @@ export class ConversationRelay {
         title: thread.title,
         role: adapter.role,
         sequence,
-        priorTurns: thread.turns
+        priorTurns: thread.turns,
+        attempt,
+        inputHash: thread.inputHash,
+        scopeHash: thread.scopeHash,
+        contextHash: thread.contextHash
       })
     } catch (error) {
       // A throw does not prove nothing was sent, so the intent stays unresolved on purpose.
       await this.record(threadId, 'relay.send-failed', { dispatchId, adapterId: adapter.adapterId, sequence, attempt, sendError: safeErrorText(error) })
       throw error
+    } finally {
+      this.inFlight.delete(threadId)
     }
     if (acceptance.dispatchId !== dispatchId || acceptance.adapterId !== adapter.adapterId) {
       throw new ThreadRejectedError(['adapter acceptance does not match the dispatch'])
@@ -377,7 +428,7 @@ export class ConversationRelay {
       inputHash: thread.inputHash,
       scopeHash: thread.scopeHash,
       contextHash: thread.contextHash,
-      status: answer.status,
+      status: answer.envelopeStatus ?? answer.status,
       summary: answer.summary ?? answer.content.slice(0, 200),
       artifact: { turnId, threadId: thread.threadId, sequence: stored.sequence, respondsToTurnId: stored.respondsToTurnId ?? null },
       verification: answer.verification ?? [],
@@ -386,8 +437,87 @@ export class ConversationRelay {
       nextOwnerDecision: answer.status === 'success' || answer.status === 'partial' ? 'このTurnを確認し、継続・停止・承認を判断する' : 'Turnの失敗理由を確認し、停止または再設計を判断する',
       createdAt,
       durationMs: 0,
-      terminationReason: answer.status === 'success' ? 'completed' : `adapter-${answer.status}`
+      terminationReason: answer.terminationReason ?? (answer.status === 'success' ? 'completed' : `adapter-${answer.status}`)
     }
+  }
+
+  /**
+   * Builds the Owner gate for one external send. Exposed so the UI can show the report without
+   * attempting anything, and reused by the Adapter itself immediately before it would transmit.
+   */
+  async preflightExternalSend(threadId: string, adapterId: string, transport?: ExternalTransport): Promise<ExternalPreflight> {
+    const thread = await this.getConversationState(threadId)
+    const profile = getAdapterProfile(adapterId)
+    // The role comes from the registered Adapter instance, never from the profile's role list.
+    const adapterRole = this.resolveAdapter(adapterId).role
+    const events = await this.readThreadEvents(threadId)
+    const attempt = this.attemptForSequence(events, thread.turns.length)
+    const packet = buildSyntheticPacket(thread, adapterRole, attempt, this.now())
+    assertPacketBoundary(packet)
+    return preflightExternalSend({
+      profile,
+      adapterRole,
+      transport: transport ?? this.requireTransport(adapterId),
+      packet,
+      approval: await readExternalApproval(this.runtimeRoot, threadId),
+      sendsAlreadyMade: await this.countExternalCalls(threadId),
+      now: this.clock()
+    })
+  }
+
+  private requireTransport(adapterId: string): ExternalTransport {
+    const transport = this.externalTransports.get(adapterId)
+    if (!transport) throw new ThreadRejectedError([`no external transport registered for ${adapterId}`])
+    return transport
+  }
+
+  /**
+   * Owner cancel by threadId. The renderer never holds an Adapter instance, so the abort path
+   * runs entirely inside the main process.
+   */
+  cancelExternalSend(threadId: string, reason = 'cancelled by Owner'): boolean {
+    const open = this.inFlight.get(threadId)
+    if (!open) return false
+    const adapter = this.adapters.get(open.adapterId)
+    return adapter?.cancel?.(open.dispatchId, reason) ?? false
+  }
+
+  /** True while an external dispatch is open for this Thread, so the UI can enable cancel. */
+  hasInFlightExternalSend(threadId: string): boolean {
+    return this.inFlight.has(threadId)
+  }
+
+  /** Hooks an external Adapter uses to obtain its packet, pass the Owner gate, and record the call. */
+  externalHooks(adapterId: string, transport: ExternalTransport): ExternalAdapterHooks {
+    return {
+      authorise: async (request) => {
+        const thread = await this.getConversationState(request.threadId)
+        const profile = getAdapterProfile(adapterId)
+        const packet = buildSyntheticPacket(thread, request.role, request.attempt ?? 0, this.now())
+        assertPacketBoundary(packet)
+        const preflight = preflightExternalSend({
+          profile,
+          adapterRole: request.role,
+          transport,
+          packet,
+          approval: await readExternalApproval(this.runtimeRoot, request.threadId),
+          sendsAlreadyMade: await this.countExternalCalls(request.threadId),
+          now: this.clock()
+        })
+        assertExternalSendAllowed(preflight)
+        await this.record(request.threadId, 'external.preflight-passed', { provider: preflight.provider, adapterId: preflight.adapterId, packetHash: preflight.packetHash, approvalId: preflight.approvalId, costTier: preflight.costTier })
+        return { packet, preflight }
+      },
+      recordCall: async (record) => {
+        await appendEvent(path.join(this.threadDirectory(record.threadId), 'external-calls.jsonl'), record as unknown as JobEvent)
+        await this.record(record.threadId, 'external.call-recorded', { callId: record.callId, provider: record.provider, status: record.status, durationMs: record.durationMs, costTier: record.costTier, terminationReason: record.terminationReason })
+      },
+      now: () => this.clock()
+    }
+  }
+
+  private async countExternalCalls(threadId: string): Promise<number> {
+    return (await readEvents(path.join(this.threadDirectory(threadId), 'external-calls.jsonl'))).length
   }
 
   private async writeEvidenceLinks(thread: ConversationThread): Promise<void> {

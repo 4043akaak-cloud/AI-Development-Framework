@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useState, type JSX } from 'react'
 import type { ConversationThread, OwnerAction, RecoveryAction, RecoveryReason, ThreadState, ThreadSummary } from '../../shared/threadTypes'
+import type { ExternalPreflight } from '../../shared/externalAdapterTypes'
+
+const externalAdapterId = 'claude-external'
 
 const stateCopy: Record<ThreadState, string> = {
   open: '送信可能',
@@ -50,6 +53,8 @@ export default function ThreadPanel(): JSX.Element {
   const [thread, setThread] = useState<ConversationThread | null>(null)
   const [message, setMessage] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [preflight, setPreflight] = useState<ExternalPreflight | null>(null)
+  const [inFlight, setInFlight] = useState(false)
 
   const refresh = useCallback(async (): Promise<void> => {
     const [threads, approved] = await Promise.all([window.adfRelay.listThreads(), window.adfRelay.listApprovedTaskIds()])
@@ -79,6 +84,30 @@ export default function ThreadPanel(): JSX.Element {
   const decisions = thread ? allowedDecisions[thread.state] : []
   const recovery = thread?.recovery
   const expired = Boolean(recovery?.expiresAt && new Date(recovery.expiresAt).getTime() < Date.now())
+
+  const runPreflight = async (): Promise<void> => {
+    if (!thread) return
+    setBusy(true)
+    const result = await window.adfRelay.preflightExternal(thread.threadId, externalAdapterId)
+    setPreflight(result.ok ? result.value : null)
+    if (!result.ok) setMessage(result.error)
+    setBusy(false)
+  }
+
+  const runExternalSend = async (): Promise<void> => {
+    if (!thread) return
+    setBusy(true)
+    setMessage(null)
+    // Poll while the send is open so the cancel button reflects the real in-flight state.
+    const poll = setInterval(() => void window.adfRelay.externalSendState(thread.threadId).then((s) => setInFlight(s.ok && s.value.inFlight)), 250)
+    const result = await window.adfRelay.sendExternal(thread.threadId, externalAdapterId)
+    clearInterval(poll)
+    setInFlight(false)
+    if (result.ok) setThread(result.value)
+    else setMessage(result.error)
+    await Promise.all([refresh(), runPreflight()])
+    setBusy(false)
+  }
   const hasEvidence = thread ? thread.turns.some((turn) => turn.resultEnvelopeRef && (turn.status === 'success' || turn.status === 'partial')) : false
 
   return (
@@ -187,6 +216,55 @@ export default function ThreadPanel(): JSX.Element {
                 ))}
                 {decisions.length === 0 && !canSendFirst && !canContinue && !inRecovery && <small className="turn-refs">このThreadは終端状態です。Owner操作はありません。</small>}
               </div>
+
+              <section className="external-panel" aria-label="外部AI Adapter">
+                <div className="thread-heading">
+                  <div>
+                    <p className="eyebrow">EXTERNAL ADAPTER · OWNER APPROVAL REQUIRED</p>
+                    <h3>外部AIへの送信</h3>
+                    <p className="turn-refs">送信できるのは合成Packetだけです。承認ファイルはこの画面からは作成できません。Ownerが直接配置してください。</p>
+                  </div>
+                  <button type="button" className="text-button" disabled={busy} onClick={() => void runPreflight()}>preflightを確認</button>
+                </div>
+
+                {!preflight && <p className="lane-empty">「preflightを確認」を押すと、送信前に照合される項目が表示されます。ネットワークへは接続しません。</p>}
+                {preflight && (
+                  <>
+                    <dl className="detail-grid">
+                      <div><dt>Adapter / role</dt><dd>{preflight.adapterId} / {preflight.role}</dd></div>
+                      <div><dt>Provider / 接続</dt><dd>{preflight.provider} / {preflight.connection}</dd></div>
+                      <div><dt>packetHash</dt><dd>{preflight.packetHash.slice(0, 24)}…</dd></div>
+                      <div><dt>scopeHash</dt><dd>{preflight.scopeHash.slice(0, 24)}…</dd></div>
+                      <div><dt>contextHash</dt><dd>{preflight.contextHash.slice(0, 24)}…</dd></div>
+                      <div><dt>認証</dt><dd>{!preflight.credential.required ? '不要' : preflight.credential.present ? `設定済み（${preflight.credential.source}）` : `未設定（${preflight.credential.source}）`}</dd></div>
+                      <div><dt>承認</dt><dd>{preflight.approvalId ?? '未配置'}</dd></div>
+                      <div><dt>有効期限</dt><dd>{preflight.expiresAt ?? '—'}</dd></div>
+                      <div><dt>費用Tier</dt><dd>{preflight.costTier}</dd></div>
+                      <div><dt>残り送信回数</dt><dd>{preflight.sendsRemaining}</dd></div>
+                    </dl>
+                    <ul className="preflight-checks">
+                      {preflight.checks.map((check) => (
+                        <li key={check.name} className={check.status === 'pass' ? 'check-complete' : 'check-missing'}>
+                          {check.status === 'pass' ? '✓' : '○'} {check.name} — {check.detail}
+                        </li>
+                      ))}
+                    </ul>
+                    {!preflight.ok && (
+                      <p className="failure" role="status">送信できません: {preflight.blockingReasons.join(' / ')}</p>
+                    )}
+                  </>
+                )}
+
+                <div className="owner-actions" aria-label="外部送信操作">
+                  <button type="button" className="text-button" disabled={busy || !preflight?.ok || inFlight} title={preflight?.ok ? undefined : 'preflightがPassするまで送信できません'} onClick={() => void runExternalSend()}>
+                    外部AIへ送信（Ownerの明示操作）
+                  </button>
+                  <button type="button" className="text-button" disabled={!inFlight} onClick={() => void window.adfRelay.cancelExternal(thread.threadId)}>
+                    送信を中断
+                  </button>
+                  {inFlight && <small className="turn-refs">送信中…中断できます。</small>}
+                </div>
+              </section>
 
               {thread.turns.length === 0 && <p className="lane-empty">まだ発言がありません。「次のAIへ送信」でProposal役から開始します。</p>}
               <ol className="turn-list" aria-label="Turnの時系列">

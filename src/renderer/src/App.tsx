@@ -1,8 +1,9 @@
-import { useMemo, useState, type JSX } from 'react'
+import { useEffect, useMemo, useState, type JSX } from 'react'
 import type { BoardCard, BoardLane, SnapshotState } from '../../shared/boardTypes'
 import { artifactSnapshot, adapterSnapshot, grantSnapshot, integrationGateSnapshot, jobSnapshot } from './data/foundationSnapshot'
 import { boardSnapshot } from './data/boardSnapshot'
 import { registeredProjectFor, registeredProjects } from '../../shared/projectRegistry'
+import { liveLaneCounts, projectLiveBoard, type LiveBoardEntry } from './boardProjection'
 import ThreadPanel from './ThreadPanel'
 import './styles.css'
 
@@ -38,6 +39,22 @@ function SourceButton({ label, sourceId }: { label: string; sourceId: string }):
   )
 }
 
+function LiveCard({ entry }: { entry: LiveBoardEntry }): JSX.Element {
+  return (
+    <div className="task-card live-card" aria-label={`${entry.taskId} (${entry.statusLabel})`}>
+      <span className="card-id">{entry.taskId}</span>
+      <span className="card-objective">{entry.title}</span>
+      <span className="card-status">状態: {entry.statusLabel}</span>
+      {entry.kind === 'thread' && <span className="card-status">Turn: {entry.turnCount} / {entry.maxTurns}</span>}
+      <div className="live-badges">
+        {entry.ownerActionRequired && <span className="live-badge owner-action">Owner確認待ち</span>}
+        {entry.recoveryRequired && <span className="live-badge recovery">Recovery</span>}
+      </div>
+      {entry.updatedAt && <small className="turn-refs">更新: {entry.updatedAt}</small>}
+    </div>
+  )
+}
+
 function Card({ card, selected, onSelect }: { card: BoardCard; selected: boolean; onSelect: () => void }): JSX.Element {
   const project = registeredProjectFor(card.projectId)
   return (
@@ -56,6 +73,39 @@ export default function App(): JSX.Element {
   const selected = boardSnapshot.find((card) => card.id === selectedId)
   const actionCards = useMemo(() => boardSnapshot.filter((card) => card.boardLane === 'waiting-approval' || card.boardLane === 'blocked' || card.boardLane === 'verifying-review'), [])
   const selectedProject = registeredProjectFor(selected?.projectId ?? '')
+
+  // Live Board state. Independent from the Legacy Snapshot above: fetched from the Runtime Ledger
+  // via the existing read-only relay IPC, never merged into the Legacy Snapshot's own lane counts.
+  const [liveEntries, setLiveEntries] = useState<LiveBoardEntry[] | null>(null)
+  const [liveError, setLiveError] = useState<string | null>(null)
+  const [liveLoading, setLiveLoading] = useState(false)
+
+  const refreshLiveBoard = async (): Promise<void> => {
+    setLiveLoading(true)
+    const [threadsResult, tasksResult] = await Promise.all([window.adfRelay.listThreads(), window.adfRelay.listApprovedTaskIds()])
+    if (!threadsResult.ok) {
+      setLiveError(threadsResult.error)
+      setLiveLoading(false)
+      return
+    }
+    if (!tasksResult.ok) {
+      setLiveError(tasksResult.error)
+      setLiveLoading(false)
+      return
+    }
+    setLiveError(null)
+    setLiveEntries(projectLiveBoard(threadsResult.value, tasksResult.value))
+    setLiveLoading(false)
+  }
+
+  // Loads once on startup. No automatic polling — the Owner refreshes explicitly.
+  useEffect(() => {
+    void refreshLiveBoard()
+  }, [])
+
+  const liveCounts = useMemo(() => liveLaneCounts(liveEntries ?? []), [liveEntries])
+  const liveOwnerActionCount = (liveEntries ?? []).filter((entry) => entry.ownerActionRequired).length
+  const liveRecoveryCount = (liveEntries ?? []).filter((entry) => entry.recoveryRequired).length
 
   if (!selected) return <main className="empty-state">表示できるTaskスナップショットがありません。</main>
 
@@ -77,18 +127,68 @@ export default function App(): JSX.Element {
         </section>
       </header>
 
-      <section className="board" aria-label="Task Board">
-        {lanes.map((lane) => {
-          const cards = boardSnapshot.filter((card) => card.boardLane === lane.id)
-          return (
-            <section key={lane.id} className="lane">
-              <h2>{lane.label}<span>{cards.length}</span></h2>
-              <div className="lane-cards">
-                {cards.length === 0 ? <p className="lane-empty">対象なし</p> : cards.map((card) => <Card key={card.id} card={card} selected={card.id === selected.id} onSelect={() => setSelectedId(card.id)} />)}
-              </div>
-            </section>
-          )
-        })}
+      <section className="live-board" aria-label="Live Board">
+        <div className="thread-heading">
+          <div>
+            <p className="eyebrow">LIVE · RUNTIME LEDGER · READ ONLY</p>
+            <h2>Live Board（Thread実行状態）</h2>
+            <p>ADF Runtime LedgerのThread / 承認済みTask状態を読み取り専用で表示します。承認・停止・継続・Packet書込みはこの画面から行いません。件数はLegacy Snapshotとは別集計です。</p>
+          </div>
+          <button type="button" className="text-button" disabled={liveLoading} onClick={() => void refreshLiveBoard()}>
+            {liveLoading ? '更新中…' : 'Refresh'}
+          </button>
+        </div>
+
+        {liveError && <p className="failure" role="alert">Live Boardを読み込めませんでした: {liveError}</p>}
+
+        {!liveError && liveEntries !== null && (
+          <p className="turn-refs">
+            Owner確認待ち {liveOwnerActionCount}件 · Recovery {liveRecoveryCount}件 · 合計 {liveEntries.length}件
+          </p>
+        )}
+
+        {!liveError && liveEntries !== null && liveEntries.length === 0 && (
+          <p className="lane-empty">Threadも承認済みTaskもまだありません（Runtime Ledgerは空です）。</p>
+        )}
+
+        {!liveError && liveEntries !== null && liveEntries.length > 0 && (
+          <div className="board">
+            {lanes.map((lane) => {
+              const entries = liveEntries.filter((entry) => entry.lane === lane.id)
+              return (
+                <section key={lane.id} className="lane">
+                  <h2>{lane.label}<span>{liveCounts[lane.id]}</span></h2>
+                  <div className="lane-cards">
+                    {entries.length === 0 ? <p className="lane-empty">対象なし</p> : entries.map((entry) => <LiveCard key={entry.threadId ?? entry.taskId} entry={entry} />)}
+                  </div>
+                </section>
+              )
+            })}
+          </div>
+        )}
+      </section>
+
+      <section className="legacy-board-wrapper" aria-label="Legacy Snapshot">
+        <div className="thread-heading">
+          <div>
+            <p className="eyebrow">LEGACY · STATIC SNAPSHOT</p>
+            <h2>Legacy Snapshot</h2>
+            <p>手作業で確認・更新される固定Snapshotです。現在のThread状態は表しません。上のLive Boardとは別集計で、自動書き換え・自動同期は行いません。</p>
+          </div>
+        </div>
+        <section className="board" aria-label="Legacy Task Board">
+          {lanes.map((lane) => {
+            const cards = boardSnapshot.filter((card) => card.boardLane === lane.id)
+            return (
+              <section key={lane.id} className="lane">
+                <h2>{lane.label}<span>{cards.length}</span></h2>
+                <div className="lane-cards">
+                  {cards.length === 0 ? <p className="lane-empty">対象なし</p> : cards.map((card) => <Card key={card.id} card={card} selected={card.id === selected.id} onSelect={() => setSelectedId(card.id)} />)}
+                </div>
+              </section>
+            )
+          })}
+        </section>
       </section>
 
       <section className="focus-panel" aria-label="選択Taskの詳細">

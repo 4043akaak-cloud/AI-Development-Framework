@@ -1,0 +1,37 @@
+{
+  "compilerOptions": {
+    "module": "CommonJS",
+    "target": "ES2022",
+    "outDir": "out/cli",
+    "rootDir": "src",
+    "strict": true,
+    "skipLibCheck": true,
+    "types": ["node"],
+    "declaration": false
+  },
+  "include": [
+    "src/cli/executionSummary.ts",
+    "src/cli/buildApprovedTaskPacket.ts",
+    "src/cli/bin.ts",
+    "src/cli/ollamaConnectivityProbe.ts",
+    "src/main/jobLoop/hash.ts",
+    "src/main/jobLoop/adapterRegistry.ts",
+    "src/main/jobLoop/contracts.ts",
+    "src/main/jobLoop/ledger.ts",
+    "src/main/jobLoop/relay.ts",
+    "src/main/jobLoop/externalAdapter.ts",
+    "src/main/jobLoop/externalApproval.ts",
+    "src/main/jobLoop/externalTransport.ts",
+    "src/main/jobLoop/ollamaTransport.ts",
+    "src/main/jobLoop/anthropicTransport.ts",
+    "src/main/jobLoop/conversationAdapters.ts",
+    "src/main/jobLoop/syntheticPacket.ts",
+    "src/main/jobLoop/resultEnvelope.ts",
+    "src/main/jobLoop/thread.ts",
+    "src/main/jobLoop/runtime.ts",
+    "src/main/jobLoop/dispatchAck.ts",
+    "src/shared/jobLoopTypes.ts",
+    "src/shared/threadTypes.ts",
+    "src/shared/externalAdapterTypes.ts"
+  ]
+}

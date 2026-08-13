@@ -46,8 +46,27 @@ export function validateApprovedTask(packet: ApprovedTaskPacket, clock = new Dat
   if (errors.length) throw new TaskPacketRejectedError(errors)
 }
 
+/**
+ * Identifies one Job registration. Must change whenever the *approved authorisation* changes — not
+ * just the narrative Scope/Context — so a Packet approving a different adapterPlan (or issued under a
+ * different Approval) always gets its own Job Ledger rather than silently reusing one written for a
+ * different Plan. `approvalId` and `routingPlanHash` are included for exactly this reason: two Packets
+ * with the same Scope/Context/Target but a different adapterPlan (different routingPlanHash) or a
+ * different Approval event (different approvalId) must never collide into the same jobId.
+ * Re-running the identical Packet (same approvalId, same routingPlanHash) is unaffected and still
+ * reuses the existing Job — that idempotency is intentional and unchanged.
+ */
 export function createDispatchKey(packet: ApprovedTaskPacket): string {
-  return hashJson([packet.taskId, packet.scopeHash, packet.contextHash, packet.target, packet.adapter, 'debate-round-1'])
+  return hashJson([
+    packet.taskId,
+    packet.scopeHash,
+    packet.contextHash,
+    packet.target,
+    packet.adapter,
+    packet.approval.approvalId,
+    packet.approval.routingPlanHash,
+    'debate-round-1'
+  ])
 }
 
 const transitions: Record<JobState, readonly JobState[]> = {

@@ -1,7 +1,7 @@
 # Task — ADF-DISPATCH-ACK-001: Dispatch握手と実行前照合を実装する
 
 > Type: Implementation
-> Status: Verifying
+> Status: Done
 > Owner: Codex
 > Review AI: Project Owner（最終Review）
 > Related Task: [ADF-JOB-LOOP-001](./ADF-JOB-LOOP-001.md)
@@ -108,4 +108,19 @@
 | 対象 | 決定 | 根拠・確認内容 | 日時 |
 |---|---|---|---|
 | Plan / Scope | Approved | `設計OK` | 2026-08-10 |
-| Diff / Verification | Pending | 自動検証はPass。Project Ownerの差分・受入レビュー待ち | |
+| Diff / Verification | Approved / Done | 本Taskの中核（Dispatch Packet生成とACK完全照合）は、`registerApprovedJob`を通じて現行アプリでLiveであり、`ADF-JOB-LOOP-001`のような広範なLegacy化ではない。詳細は「### 個別レビュー記録」を参照 | 2026-08-12 |
+
+### 個別レビュー記録（2026-08-12）
+
+- **対象**: `ADF-DISPATCH-ACK-001`
+- **判定**: Approved / Done
+- **判定日**: 2026-08-12
+- **判定理由**:
+  - Dispatch Packet生成が現行の`registerApprovedJob`経由でLiveである。
+  - ACK完全照合が現行Thread開始経路で実行されている。
+  - 実runtimeに`dispatch-packet.json` / `dispatch-ack.json`が存在する（`ADF-CONVERSATION-RELAY-001`・`ADF-EXTERNAL-ADAPTER-001`の実Job双方で確認）。
+  - `dispatchId` / `packetHash` / `scopeHash` / `capabilities` / `target`の一致を実ファイルで確認済み。
+  - ACK欠落・packet hash不一致・target不一致・capability不一致の拒否テスト（`jobLoop.test.ts`）がPass。
+  - 外部送信、正本自動変更、未承認Capabilityが存在しない。
+- **本Taskの中核は現行アプリでLiveである。** `ADF-JOB-LOOP-001`のような広範なLegacy化ではない。
+- **残存リスク**: dispatch状態のBoard UI表示は未実装。Receiver区間（Dispatch/ACKからJob登録までの間）のプロセス中断復旧は未検証。実Claude Adapter、実worktree、MCP、署名は対象外または未検証のまま。

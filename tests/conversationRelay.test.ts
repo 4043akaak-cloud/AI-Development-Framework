@@ -2,16 +2,18 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import type { ApprovedTaskPacket, FixtureMode } from '../src/shared/jobLoopTypes'
-import type { ConversationThread, ConversationTurn } from '../src/shared/threadTypes'
+import type { AdapterPlan, AdapterRole, ApprovedTaskPacket, FixtureMode } from '../src/shared/jobLoopTypes'
+import type { ConversationThread, ConversationTurn, RelayTurnPayload } from '../src/shared/threadTypes'
 import { ConversationRelay } from '../src/main/jobLoop/relay'
 import { JobRuntime } from '../src/main/jobLoop/runtime'
 import { FakeDispatchReceiver } from '../src/main/jobLoop/dispatchAck'
-import { routeAdapters } from '../src/main/jobLoop/adapterRegistry'
+import { buildExplicitAdapterPlan, routeAdapters } from '../src/main/jobLoop/adapterRegistry'
 import { hashJson } from '../src/main/jobLoop/hash'
-import type { ConversationAdapter } from '../src/main/jobLoop/conversationAdapters'
+import type { AdapterAcceptance, AdapterRequest, ConversationAdapter } from '../src/main/jobLoop/conversationAdapters'
 import { FakeCriticConversationAdapter, FakeProposalConversationAdapter } from '../src/main/jobLoop/conversationAdapters'
 import { appendRecoveryTurn, appendTurn, applyOwnerDecision, assertThreadTransition, createThread, ThreadRejectedError, turnHash } from '../src/main/jobLoop/thread'
+import { ExternalConversationAdapter } from '../src/main/jobLoop/externalAdapter'
+import { OllamaLocalHttpTransport } from '../src/main/jobLoop/ollamaTransport'
 
 function approvedPacket(overrides: Partial<ApprovedTaskPacket> = {}, fixtureMode: FixtureMode = 'success', taskId = 'ADF-CONVERSATION-RELAY-001'): ApprovedTaskPacket {
   const scope = { inScope: ['Thread', 'Turn', 'Owner操作'], outOfScope: ['外部送信', '認証', '課金'] }
@@ -56,6 +58,52 @@ function approvedPacket(overrides: Partial<ApprovedTaskPacket> = {}, fixtureMode
   }
 }
 
+/**
+ * A Packet whose adapterPlan explicitly names one Owner-chosen adapter for one role (not auto-routed).
+ * `approval.routingPlanHash` is derived from this same plan, so it always passes `validateApprovedTask`.
+ */
+function explicitAdapterPacket(adapterId: string, role: AdapterRole, taskId = 'ADF-OLLAMA-LIVE-CONNECTION-001'): ApprovedTaskPacket {
+  const scope = { inScope: ['Thread', 'Turn', 'Owner操作'], outOfScope: ['外部送信', '認証', '課金'] }
+  const context = {
+    githubTask: `manual-fixture://${taskId}`,
+    obsidianContext: [],
+    adoptedPrinciples: ['owner-approval', 'source-boundary']
+  }
+  const scopeHash = hashJson(scope)
+  const adapterPlan = buildExplicitAdapterPlan(taskId, adapterId, role, ['read', 'propose'])
+  return {
+    taskId,
+    objective: `Explicit adapterId dispatch fixture for ${adapterId} (not auto-routed)`,
+    scope,
+    scopeHash,
+    context,
+    contextHash: hashJson(context),
+    acceptance: [`Threadが承認済み${adapterId}のPlanに紐づく`],
+    stopConditions: ['Approval不在', '最大Turn超過'],
+    approval: {
+      approvalId: `approval-${taskId.toLowerCase()}`,
+      taskId,
+      status: 'active',
+      approvedBy: 'Project Owner',
+      approvedAt: '2026-08-13T00:00:00.000Z',
+      expiresAt: '2099-12-31T23:59:59.000Z',
+      scopeHash,
+      routingPlanHash: hashJson(adapterPlan),
+      capabilities: ['read', 'propose']
+    },
+    adapter: 'multi-ai-routing-v1',
+    fixtureMode: 'success',
+    target: {
+      repository: `fixture://${taskId}`,
+      branch: `fixture/${taskId}`,
+      worktree: `fixture://${taskId}-worktree`,
+      allowedFiles: [`docs/tasks/${taskId}.md`],
+      forbiddenChanges: ['commit', 'push']
+    },
+    adapterPlan
+  }
+}
+
 async function relay(options: ConstructorParameters<typeof ConversationRelay>[0] = {}): Promise<ConversationRelay> {
   return new ConversationRelay({ runtimeRoot: await mkdtemp(path.join(tmpdir(), 'adf-relay-')), ...options })
 }
@@ -64,6 +112,8 @@ async function startedThread(current: ConversationRelay, maxTurns = 6): Promise<
   const thread = await current.startThread(approvedPacket(), { maxTurns })
   return thread.threadId
 }
+
+const fixtureAdapterPlan: AdapterPlan = { version: 'v1', selections: [{ adapterId: 'fake-ai-a', role: 'proposal', rationale: 'fixture' }], externalSend: false, maxCostTier: 'free' }
 
 function threadFixture(maxTurns = 6): ConversationThread {
   return createThread({
@@ -75,6 +125,7 @@ function threadFixture(maxTurns = 6): ConversationThread {
     scopeHash: 'scope-hash',
     contextHash: 'context-hash',
     routingPlanHash: 'routing-hash',
+    adapterPlan: fixtureAdapterPlan,
     inputHash: 'input-hash',
     createdAt: '2026-08-10T00:00:00.000Z',
     maxTurns
@@ -98,8 +149,9 @@ function turnFixture(overrides: Partial<ConversationTurn> = {}): ConversationTur
 
 describe('ADF-CONVERSATION-RELAY-001 thread rules', () => {
   it('requires an approval binding to create a thread', () => {
-    expect(() => createThread({ threadId: 't1', taskId: 'T', jobId: 'J', title: 'x', approvalId: '', scopeHash: 's', contextHash: 'c', routingPlanHash: 'r', inputHash: 'i', createdAt: 'now' })).toThrow(/requires an approvalId/)
-    expect(() => createThread({ threadId: 't1', taskId: 'T', jobId: 'J', title: 'x', approvalId: 'a', scopeHash: 's', contextHash: 'c', routingPlanHash: 'r', inputHash: '', createdAt: 'now' })).toThrow(/inputHash/)
+    expect(() => createThread({ threadId: 't1', taskId: 'T', jobId: 'J', title: 'x', approvalId: '', scopeHash: 's', contextHash: 'c', routingPlanHash: 'r', adapterPlan: fixtureAdapterPlan, inputHash: 'i', createdAt: 'now' })).toThrow(/requires an approvalId/)
+    expect(() => createThread({ threadId: 't1', taskId: 'T', jobId: 'J', title: 'x', approvalId: 'a', scopeHash: 's', contextHash: 'c', routingPlanHash: 'r', adapterPlan: fixtureAdapterPlan, inputHash: '', createdAt: 'now' })).toThrow(/inputHash/)
+    expect(() => createThread({ threadId: 't1', taskId: 'T', jobId: 'J', title: 'x', approvalId: 'a', scopeHash: 's', contextHash: 'c', routingPlanHash: 'r', adapterPlan: { version: 'v1', selections: [], externalSend: false, maxCostTier: 'free' }, inputHash: 'i', createdAt: 'now' })).toThrow(/non-empty adapterPlan/)
   })
 
   it('refuses to approve a thread that produced no validated result envelope', () => {
@@ -424,11 +476,13 @@ describe('ADF-CONVERSATION-RELAY-001 relay conversation', () => {
     expect(beyond.turns).toHaveLength(2)
   })
 
-  it('refuses to dispatch a planned external adapter', async () => {
+  it('refuses to dispatch external adapters from a local-only relay', async () => {
     const current = await relay()
     const threadId = await startedThread(current)
-    await expect(current.sendToAdapter(threadId, 'claude-external')).rejects.toThrow(/not available for dispatch/)
+    // Still `planned`: no connection method decided, so it can never be dispatched.
     await expect(current.sendToAdapter(threadId, 'codex-external')).rejects.toThrow(/not available for dispatch/)
+    // Decided connection method, but not registered in this relay — and its own Owner gate follows.
+    await expect(current.sendToAdapter(threadId, 'claude-external')).rejects.toThrow(/not registered in this relay/)
   })
 
   it('reads thread state back and lists threads for the Board', async () => {
@@ -466,6 +520,114 @@ class ThrowingGetStateAdapter extends FakeProposalConversationAdapter {
     throw new Error(`probe failed ${'x'.repeat(400)}`)
   }
 }
+
+class PlannedLocalHttpAdapter implements ConversationAdapter {
+  readonly adapterId = 'ollama-local'
+  readonly role = 'proposal' as const
+
+  async send(_request: AdapterRequest): Promise<AdapterAcceptance> {
+    throw new Error('planned local-http adapter must not be auto-routed')
+  }
+
+  async getState(_acceptance: AdapterAcceptance): Promise<'failed'> {
+    return 'failed'
+  }
+
+  async receive(_acceptance: AdapterAcceptance): Promise<RelayTurnPayload> {
+    throw new Error('planned local-http adapter must not receive a turn')
+  }
+}
+
+describe('ADF-ADAPTER-PROVIDER-NEUTRAL-001 automatic routing boundary', () => {
+  it('does not auto-route a planned local-http Adapter when an explicit local fake is available', async () => {
+    const current = await relay({ adapters: [new PlannedLocalHttpAdapter(), new FakeProposalConversationAdapter(), new FakeCriticConversationAdapter()] })
+    const threadId = await startedThread(current)
+
+    const handle = await current.sendToAdapter(threadId)
+
+    expect(handle.adapterId).toBe('fake-ai-a')
+  })
+})
+
+describe('ADF-OLLAMA-LIVE-CONNECTION-001 explicit dispatch to ollama-local (injected fetch, no real network)', () => {
+  it('is still never auto-routed even though the Registry now marks it available', async () => {
+    const ollamaTransport = new OllamaLocalHttpTransport({ fetchImpl: async () => { throw new Error('must not be called: this is an auto-route attempt') } })
+    let current: ConversationRelay
+    current = new ConversationRelay({
+      runtimeRoot: await mkdtemp(path.join(tmpdir(), 'adf-relay-')),
+      adapters: [
+        new ExternalConversationAdapter('ollama-local', 'proposal', ollamaTransport, {
+          authorise: (request) => current.externalHooks('ollama-local', ollamaTransport).authorise(request),
+          recordCall: (record) => current.externalHooks('ollama-local', ollamaTransport).recordCall(record),
+          now: () => new Date()
+        }),
+        new FakeProposalConversationAdapter(),
+        new FakeCriticConversationAdapter()
+      ]
+    })
+    const threadId = await startedThread(current)
+    const handle = await current.sendToAdapter(threadId)
+    expect(handle.adapterId).toBe('fake-ai-a')
+  })
+
+  it('completes a real round trip end to end when the Packet explicitly approved ollama-local for this role (fetch injected, never touches the network)', async () => {
+    const ollamaTransport = new OllamaLocalHttpTransport({
+      fetchImpl: async (input) => {
+        expect(input).toContain('/api/generate')
+        return new Response(JSON.stringify({ response: 'Ollama local connection OK!', done: true }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+    })
+    let current: ConversationRelay
+    current = new ConversationRelay({
+      runtimeRoot: await mkdtemp(path.join(tmpdir(), 'adf-relay-')),
+      adapters: [
+        new ExternalConversationAdapter('ollama-local', 'proposal', ollamaTransport, {
+          authorise: (request) => current.externalHooks('ollama-local', ollamaTransport).authorise(request),
+          recordCall: (record) => current.externalHooks('ollama-local', ollamaTransport).recordCall(record),
+          now: () => new Date()
+        })
+      ]
+    })
+    // The Packet's own adapterPlan names ollama-local/proposal — not the default fake-ai-a/-b Plan.
+    const thread0 = await current.startThread(explicitAdapterPacket('ollama-local', 'proposal'))
+
+    const thread = await current.continueJob(thread0.threadId, 'ollama-local')
+
+    expect(thread.state).toBe('awaiting-owner')
+    expect(thread.turns[0]).toMatchObject({ adapterId: 'ollama-local', role: 'proposal', status: 'success', content: 'Ollama local connection OK!' })
+    expect(thread.turns[0].resultEnvelopeRef).toBeTruthy()
+  })
+
+  it('rejects the explicit dispatch when the Thread\'s approved Plan names a different adapter — the exact Owner-flagged bug (Packet approved fake-ai-a, Thread dispatched to ollama-local)', async () => {
+    const ollamaTransport = new OllamaLocalHttpTransport({ fetchImpl: async () => { throw new Error('must not be called: dispatch must be rejected before any send') } })
+    let current: ConversationRelay
+    current = new ConversationRelay({
+      runtimeRoot: await mkdtemp(path.join(tmpdir(), 'adf-relay-')),
+      adapters: [
+        new ExternalConversationAdapter('ollama-local', 'proposal', ollamaTransport, {
+          authorise: (request) => current.externalHooks('ollama-local', ollamaTransport).authorise(request),
+          recordCall: (record) => current.externalHooks('ollama-local', ollamaTransport).recordCall(record),
+          now: () => new Date()
+        }),
+        new FakeProposalConversationAdapter(),
+        new FakeCriticConversationAdapter()
+      ]
+    })
+    // approvedPacket() (default) resolves to the auto-routed Plan: fake-ai-a / fake-ai-b only.
+    const threadId = await startedThread(current)
+
+    await expect(current.continueJob(threadId, 'ollama-local')).rejects.toThrow(/not part of this Thread's approved adapterPlan: ollama-local/)
+    // No Turn was recorded: the rejection happened before any dispatch was attempted.
+    expect((await current.getConversationState(threadId)).turns).toHaveLength(0)
+  })
+
+  it('rejects starting a Thread when the approval.routingPlanHash does not match the Packet\'s own adapterPlan (stale or tampered approval)', async () => {
+    const current = await relay()
+    const tampered = explicitAdapterPacket('ollama-local', 'proposal')
+    tampered.approval.routingPlanHash = 'wrong-routing-hash'
+    await expect(current.startThread(tampered)).rejects.toThrow(/routing plan hash mismatch/)
+  })
+})
 
 describe('ADF-RELAY-RECOVERY-001 detection', () => {
   it('detects an interrupted send whose answer is gone (Case A)', async () => {
