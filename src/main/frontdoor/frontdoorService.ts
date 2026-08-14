@@ -1,11 +1,13 @@
 import { access, readdir } from 'node:fs/promises'
 import path from 'node:path'
 import type { ApprovedTaskPacket } from '../../shared/jobLoopTypes'
-import type { FrontdoorInspection, FrontdoorPrepareResult, FrontdoorRunSummary, OwnerDecisionEnvelope, OwnerGate, OrchestrationRun } from '../../shared/frontdoorTypes'
+import type { FrontdoorInspection, FrontdoorPlanProposal, FrontdoorPrepareResult, FrontdoorRequestInput, FrontdoorRunSummary, OwnerDecisionEnvelope, OwnerGate, OrchestrationRun } from '../../shared/frontdoorTypes'
 import type { RelayResult } from '../../shared/threadTypes'
 import { readJson } from '../jobLoop/ledger'
 import { FrontdoorOrchestrator } from './orchestrator'
 import { prepareFrontdoorRunOrThrow } from './frontdoorPrepareService'
+import type { FrontdoorPlanner } from './planner'
+import { createFrontdoorRequest } from './intake'
 
 export interface FrontdoorApprovalInput {
   runId: unknown
@@ -44,6 +46,13 @@ export interface FrontdoorStopInput {
 
 export function prepareFrontdoorRun(orchestrator: FrontdoorOrchestrator, input: unknown): Promise<RelayResult<FrontdoorPrepareResult>> {
   return guard(() => prepareFrontdoorRunOrThrow(orchestrator, input))
+}
+
+export function proposeFrontdoorPlan(planner: FrontdoorPlanner, input: unknown): Promise<RelayResult<FrontdoorPlanProposal>> {
+  return guard(async () => {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('planner input must be a Request object')
+    return planner.propose(createFrontdoorRequest(input as FrontdoorRequestInput))
+  })
 }
 
 function guard<T>(run: () => Promise<T>): Promise<RelayResult<T>> {

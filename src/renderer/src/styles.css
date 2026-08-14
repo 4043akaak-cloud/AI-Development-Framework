@@ -84,5 +84,7 @@ h1, h2, h3, p { margin-top: 0; } h1 { margin-bottom: 8px; font-size: 32px; } h2 
 .frontdoor-intake-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 14px; }
 .frontdoor-plan-field { grid-column: 1 / -1; }
 .frontdoor-intake-actions { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.frontdoor-plan-proposal { display: grid; gap: 4px; padding: 12px; border: 1px solid #314a6a; border-radius: 8px; background: rgba(93, 124, 161, 0.08); font-size: 0.82rem; }
+.frontdoor-message { color: #9df0dd; }
 @media (max-width: 1150px) { .frontdoor-layout { grid-template-columns: 1fr; } .frontdoor-run-list { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 760px) { .frontdoor-intake-grid { grid-template-columns: 1fr; } .frontdoor-plan-field, .frontdoor-intake-actions { grid-column: auto; } }
