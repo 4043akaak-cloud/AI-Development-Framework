@@ -1,6 +1,6 @@
 import type { AdapterRole } from '../../shared/jobLoopTypes'
 import type { SyntheticPacket } from '../../shared/externalAdapterTypes'
-import type { ConversationThread } from '../../shared/threadTypes'
+import type { AdapterDependencyResult, ConversationThread } from '../../shared/threadTypes'
 import { hashJson } from './hash'
 
 export class PacketBoundaryError extends Error {
@@ -33,7 +33,12 @@ const stopConditions = [
  * Builds the one payload an external Adapter may receive. Derived only from identifiers and
  * fixed text: no Turn content, no repo, no Vault, no approved-Task body.
  */
-export function buildSyntheticPacket(thread: ConversationThread, role: AdapterRole, attempt: number, createdAt: string): SyntheticPacket {
+export function buildSyntheticPacket(thread: ConversationThread, role: AdapterRole, attempt: number, createdAt: string, dependencyResults?: readonly AdapterDependencyResult[]): SyntheticPacket {
+  const dependencyContext = dependencyResults?.filter((dependency) => dependency.content?.trim()).map((dependency) => ({
+    nodeId: dependency.nodeId,
+    resultHash: dependency.resultHash,
+    content: dependency.content!.slice(0, 1000)
+  }))
   const body = {
     kind: 'synthetic-connectivity-probe' as const,
     taskId: thread.taskId,
@@ -46,7 +51,8 @@ export function buildSyntheticPacket(thread: ConversationThread, role: AdapterRo
     contextHash: thread.contextHash,
     instruction,
     resultFormat,
-    stopConditions
+    stopConditions,
+    ...(dependencyContext?.length ? { dependencyContext } : {})
   }
   const packetHash = hashJson(body)
   return { ...body, packetId: `synthetic-${packetHash.slice(0, 16)}`, packetHash, createdAt }
@@ -70,7 +76,7 @@ export function assertPacketBoundary(packet: SyntheticPacket): void {
   const serialised = JSON.stringify(packet)
   const details = forbiddenPatterns.filter((rule) => rule.pattern.test(serialised)).map((rule) => `packet contains ${rule.name}`)
   if (packet.kind !== 'synthetic-connectivity-probe') details.push('packet is not a synthetic connectivity probe')
-  if (packet.packetHash !== hashJson({ kind: packet.kind, taskId: packet.taskId, threadId: packet.threadId, jobId: packet.jobId, role: packet.role, sequence: packet.sequence, attempt: packet.attempt, scopeHash: packet.scopeHash, contextHash: packet.contextHash, instruction: packet.instruction, resultFormat: packet.resultFormat, stopConditions: packet.stopConditions })) {
+  if (packet.packetHash !== hashJson({ kind: packet.kind, taskId: packet.taskId, threadId: packet.threadId, jobId: packet.jobId, role: packet.role, sequence: packet.sequence, attempt: packet.attempt, scopeHash: packet.scopeHash, contextHash: packet.contextHash, instruction: packet.instruction, resultFormat: packet.resultFormat, stopConditions: packet.stopConditions, ...(packet.dependencyContext?.length ? { dependencyContext: packet.dependencyContext } : {}) })) {
     details.push('packet hash does not match its content')
   }
   if (serialised.length > 4000) details.push(`packet is larger than the 4000 character probe limit: ${serialised.length}`)

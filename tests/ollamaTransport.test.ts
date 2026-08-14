@@ -35,6 +35,9 @@ describe('ADF-ADAPTER-PROVIDER-NEUTRAL-001 Ollama local-http transport', () => {
     // The exact misconfiguration this check exists for: a "local" adapter quietly pointed at a cloud host.
     expect(new OllamaLocalHttpTransport({ baseUrl: 'https://ollama.cloud-provider.example' }).isLocalEndpoint()).toBe(false)
     expect(new OllamaLocalHttpTransport({ baseUrl: 'http://192.168.1.50:11434' }).isLocalEndpoint()).toBe(false)
+    expect(new OllamaLocalHttpTransport({ baseUrl: 'http://user:secret@127.0.0.1:11434' }).isLocalEndpoint()).toBe(false)
+    expect(new OllamaLocalHttpTransport({ baseUrl: 'http://127.0.0.1:11434?token=secret' }).isLocalEndpoint()).toBe(false)
+    expect(new OllamaLocalHttpTransport({ baseUrl: 'http://127.0.0.1:11434/#secret' }).isLocalEndpoint()).toBe(false)
     expect(new OllamaLocalHttpTransport({ baseUrl: 'ftp://127.0.0.1:11434' }).isLocalEndpoint()).toBe(false)
     expect(new OllamaLocalHttpTransport({ baseUrl: 'not a url' }).isLocalEndpoint()).toBe(false)
   })
@@ -64,6 +67,13 @@ describe('ADF-ADAPTER-PROVIDER-NEUTRAL-001 Ollama local-http transport', () => {
     expect(body.prompt).toContain('合成パケット')
     expect(seenInit?.redirect).toBe('error')
     delete process.env.SHOULD_NOT_BE_READ
+  })
+
+  it('fails closed before fetch when a local-http transport is pointed at a non-loopback or credentialed URL', async () => {
+    let calls = 0
+    const transport = new OllamaLocalHttpTransport({ baseUrl: 'http://user:secret@127.0.0.1:11434?token=secret', fetchImpl: async () => { calls += 1; return json({ response: 'must not send' }) } })
+    await expect(transport.send(packet, options)).rejects.toThrow(/safe loopback URL/)
+    expect(calls).toBe(0)
   })
 
   it('does not silently follow or swallow a redirect: fetch refusing it (redirect: "error") surfaces as a thrown error, not a success', async () => {
@@ -169,6 +179,14 @@ describe('ADF-OLLAMA-LIVE-CONNECTION-001 checkOllamaReadiness — read-only /api
     expect(readiness).toMatchObject({ reachable: false, modelPresent: false, models: [] })
   })
 
+  it('stops a hung readiness check at its configured deadline', async () => {
+    const hanging: (input: string, init: RequestInit) => Promise<Response> = async (_input, init) => new Promise((_resolve, reject) => {
+      init.signal?.addEventListener('abort', () => reject(new Error('aborted')))
+    })
+    const readiness = await checkOllamaReadiness({ fetchImpl: hanging, timeoutMs: 10 })
+    expect(readiness).toMatchObject({ reachable: false, modelPresent: false, detail: 'readiness timeout after 10ms' })
+  })
+
   it('reports unreachable on a non-200 response, without throwing', async () => {
     const { fetchImpl } = stub(() => new Response('', { status: 500 }))
     const readiness = await checkOllamaReadiness({ fetchImpl })
@@ -185,6 +203,14 @@ describe('ADF-OLLAMA-LIVE-CONNECTION-001 checkOllamaReadiness — read-only /api
     const { calls, fetchImpl } = stub(() => json({ models: [] }))
     await checkOllamaReadiness({ fetchImpl })
     expect(calls[0]?.redirect).toBe('error')
+  })
+
+  it('redacts an invalid endpoint from readiness output and never calls it', async () => {
+    let calls = 0
+    const readiness = await checkOllamaReadiness({ baseUrl: 'http://user:secret@127.0.0.1:11434?token=secret', fetchImpl: async () => { calls += 1; return json({ models: [] }) } })
+    expect(readiness).toMatchObject({ reachable: false, modelPresent: false, baseUrl: '[invalid-local-endpoint]' })
+    expect(JSON.stringify(readiness)).not.toContain('secret')
+    expect(calls).toBe(0)
   })
 
   it('exposes the same readiness result through the Provider-neutral transport contract', async () => {

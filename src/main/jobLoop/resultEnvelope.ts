@@ -12,6 +12,8 @@ export interface AdapterResultEnvelope {
   scopeHash: string
   contextHash: string
   status: AdapterRunStatus
+  /** Present on newly generated Results; absent in legacy envelopes for backward compatibility. */
+  content?: string
   summary: string
   artifact: Record<string, unknown>
   verification: Array<{ name: string; status: 'pass' | 'fail' | 'not-run'; reason?: string }>
@@ -43,6 +45,7 @@ export function validateResultEnvelope(envelope: AdapterResultEnvelope, expected
   if (!envelope.adapterId || !envelope.role) errors.push('adapter identity is missing')
   if (!['success', 'partial', 'failed', 'invalid', 'timeout', 'cancelled'].includes(envelope.status)) errors.push('invalid result status')
   if (!envelope.summary || !envelope.terminationReason) errors.push('summary or termination reason is missing')
+  if (envelope.content !== undefined && typeof envelope.content !== 'string') errors.push('result content is invalid')
   if (!Array.isArray(envelope.verification) || !Array.isArray(envelope.risks)) errors.push('verification or risks is not an array')
   if (envelope.questions !== undefined && !Array.isArray(envelope.questions)) errors.push('questions is not an array')
   if (envelope.dependencyResults !== undefined && !Array.isArray(envelope.dependencyResults)) errors.push('dependencyResults is not an array')

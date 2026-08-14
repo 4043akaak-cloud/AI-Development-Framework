@@ -84,7 +84,7 @@ export const adapterProfiles: readonly AdapterProfile[] = [
     // still excludes `connection === 'local-http'` from auto-selection, so this flip does not let
     // ollama-local into any Fake-adapter auto-routed discussion. Dispatch also requires the calling
     // process's own `ConversationRelay` to have registered an Adapter instance for this id — the live
-    // Electron app's `index.ts` does not, so the running app cannot reach it through this change alone.
+    // Electron app and Frontdoor CLI now register it through the shared live Relay factory.
     adapterId: 'ollama-local',
     displayName: 'Ollama / Local HTTP Adapter',
     provider: 'ollama',

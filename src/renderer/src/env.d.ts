@@ -33,6 +33,7 @@ declare global {
       inspect: (runId: string) => Promise<RelayResult<FrontdoorInspection>>
       approve: (input: { runId: string; gate: OwnerGate; approvedBy: string; note?: string; nodeIds?: string[] }) => Promise<RelayResult<OwnerDecisionEnvelope>>
       dispatch: (runId: string) => Promise<RelayResult<FrontdoorReturn>>
+      reviewNode: (input: { runId: string; nodeId: string; approvedBy: string; decision: 'continue' | 'stop'; note?: string }) => Promise<RelayResult<{ decision: OwnerDecisionEnvelope; execution?: FrontdoorReturn }>>
       answer: (input: { runId: string; questionId: string; approvedBy: string; answerRef?: string; note?: string }) => Promise<RelayResult<OwnerDecisionEnvelope>>
       reviewResult: (input: { runId: string; approvedBy: string; decision: 'accept' | 'follow-up' | 'reject'; note?: string }) => Promise<RelayResult<OwnerDecisionEnvelope>>
       complete: (input: { runId: string; approvedBy: string; note?: string }) => Promise<RelayResult<OrchestrationRun>>

@@ -51,9 +51,8 @@ export function assertExplicitDispatchIsApproved(input: {
 
 /**
  * `ADF-OLLAMA-LIVE-CONNECTION-001`: one Owner-run, one-shot connectivity probe to the local Ollama
- * server, through the existing Provider-neutral Adapter contract. Deliberately outside `index.ts` —
- * this script builds its own `ConversationRelay` instance and is the only thing that can reach
- * `ollama-local`. The live Electron app is unmodified and still cannot dispatch to it.
+ * server, through the existing Provider-neutral Adapter contract. This remains a standalone
+ * single-node entry point; the Frontdoor two-node probe uses the shared live Relay factory.
  *
  * Run with the Electron app closed (per Owner instruction), using the same runtimeRoot as the real
  * app so the resulting Thread is visible read-only in ThreadPanel / Live Board afterward.

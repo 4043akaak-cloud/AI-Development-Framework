@@ -101,6 +101,7 @@ describe('multi-AI adapter foundation', () => {
       scopeHash: 'scope-hash',
       contextHash: 'context-hash',
       status: 'success',
+      content: 'Fake proposal returned',
       summary: 'Fake proposal returned',
       artifact: { artifactId: 'artifact-1' },
       verification: [{ name: 'shape', status: 'pass' }],

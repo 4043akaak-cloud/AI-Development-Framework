@@ -10,8 +10,8 @@ import { truncateAnswer } from './externalTransport'
  *
  * `ollama-local` is `status: 'available'` in the Registry and, since
  * `ADF-OLLAMA-FIRST-CLASS-ADAPTER-001`, registered as an explicit-adapterId Adapter in the live
- * Electron app's `index.ts` too (alongside `src/cli/ollamaConnectivityProbe.ts`, which remains a
- * separate standalone entry point). Auto-routing still excludes `local-http` (`supports()`) in both.
+ * Electron app and Frontdoor CLI through the shared live Relay factory. Auto-routing still
+ * excludes `local-http` (`supports()`) in all entry points.
  */
 export const defaultOllamaBaseUrl = 'http://127.0.0.1:11434'
 export const defaultOllamaModel = 'llama3'
@@ -28,20 +28,51 @@ interface OllamaTagsResponse {
   models?: Array<{ name?: string; model?: string }>
 }
 
+function dependencyPrompt(packet: SyntheticPacket): string {
+  if (!packet.dependencyContext?.length) return ''
+  const entries = packet.dependencyContext.map((dependency) => `\n依存Node ${dependency.nodeId} のResult（hash: ${dependency.resultHash}）:\n${dependency.content}`).join('\n')
+  return `\n\n承認済み依存Resultの内容を踏まえて、Criticとして応答すること。${entries}`
+}
+
+function safeDiagnostic(value: unknown): string {
+  return String(value)
+    .replace(/(authorization|bearer|api[-_]?key|token|password|secret)=?[^\s,;]*/gi, '$1=[redacted]')
+    .replace(/https?:\/\/[^\s]+/gi, '[url-redacted]')
+    .slice(0, 200)
+}
+
+function isLoopbackBaseUrl(baseUrl: string): boolean {
+  try {
+    const parsed = new URL(baseUrl)
+    const host = parsed.hostname
+    return (parsed.protocol === 'http:' || parsed.protocol === 'https:')
+      && !parsed.username && !parsed.password && !parsed.search && !parsed.hash
+      && (parsed.pathname === '' || parsed.pathname === '/')
+      && (host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]')
+  } catch {
+    return false
+  }
+}
+
 /**
  * Read-only `/api/tags` check, entirely separate from `preflightExternalSend` (which is not
  * modified by this Task). Confirms the server answers and the expected model is pulled, before any
  * `send()` is attempted. A model name without a tag matches its `:latest` — Ollama's own convention.
  */
 export async function checkOllamaReadiness(
-  { baseUrl = defaultOllamaBaseUrl, model = defaultOllamaModel, fetchImpl }: { baseUrl?: string; model?: string; fetchImpl?: FetchLike } = {}
+  { baseUrl = defaultOllamaBaseUrl, model = defaultOllamaModel, fetchImpl, timeoutMs = 5_000 }: { baseUrl?: string; model?: string; fetchImpl?: FetchLike; timeoutMs?: number } = {}
 ): Promise<OllamaReadiness> {
   const fetchFn = fetchImpl ?? ((input, init) => fetch(input, init))
+  if (!isLoopbackBaseUrl(baseUrl)) return { reachable: false, modelPresent: false, models: [], baseUrl: '[invalid-local-endpoint]', model, detail: 'invalid local Ollama endpoint' }
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
   let response: Response
   try {
-    response = await fetchFn(`${baseUrl}/api/tags`, { method: 'GET', redirect: 'error' })
+    response = await fetchFn(`${baseUrl}/api/tags`, { method: 'GET', redirect: 'error', signal: controller.signal })
   } catch (error) {
-    return { reachable: false, modelPresent: false, models: [], baseUrl, model, detail: `not reachable: ${String((error as Error)?.message ?? error)}`.slice(0, 200) }
+    return { reachable: false, modelPresent: false, models: [], baseUrl, model, detail: controller.signal.aborted ? `readiness timeout after ${timeoutMs}ms` : `not reachable: ${safeDiagnostic((error as Error)?.message ?? error)}` }
+  } finally {
+    clearTimeout(timer)
   }
   if (!response.ok) return { reachable: false, modelPresent: false, models: [], baseUrl, model, detail: `http-${response.status}` }
 
@@ -61,6 +92,7 @@ export interface OllamaTransportOptions {
   providerId?: string
   baseUrl?: string
   model?: string
+  readinessTimeoutMs?: number
   /** Injected for verification so tests never touch a real Ollama server. */
   fetchImpl?: FetchLike
 }
@@ -72,11 +104,14 @@ export class OllamaLocalHttpTransport implements ExternalTransport {
   private readonly model: string
   private readonly fetchImpl: FetchLike
 
-  constructor({ providerId = 'ollama-local-http', baseUrl = defaultOllamaBaseUrl, model = defaultOllamaModel, fetchImpl }: OllamaTransportOptions = {}) {
+  private readonly readinessTimeoutMs: number
+
+  constructor({ providerId = 'ollama-local-http', baseUrl = defaultOllamaBaseUrl, model = defaultOllamaModel, fetchImpl, readinessTimeoutMs = 5_000 }: OllamaTransportOptions = {}) {
     this.providerId = providerId
     this.baseUrl = baseUrl
     this.model = model
     this.fetchImpl = fetchImpl ?? ((input, init) => fetch(input, init))
+    this.readinessTimeoutMs = readinessTimeoutMs
   }
 
   /** Ollama is unauthenticated by default. No credential to check. */
@@ -97,8 +132,7 @@ export class OllamaLocalHttpTransport implements ExternalTransport {
       return false
     }
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false
-    const host = parsed.hostname
-    return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]'
+    return isLoopbackBaseUrl(this.baseUrl)
   }
 
   /**
@@ -107,12 +141,13 @@ export class OllamaLocalHttpTransport implements ExternalTransport {
    * can create a Job/Thread or send a request.
    */
   async checkReadiness(): Promise<TransportReadiness> {
-    const readiness = await checkOllamaReadiness({ baseUrl: this.baseUrl, model: this.model, fetchImpl: this.fetchImpl })
+    const readiness = await checkOllamaReadiness({ baseUrl: this.baseUrl, model: this.model, fetchImpl: this.fetchImpl, timeoutMs: this.readinessTimeoutMs })
     return { ready: readiness.reachable && readiness.modelPresent, detail: readiness.detail }
   }
 
   async send(packet: SyntheticPacket, options: TransportOptions): Promise<ExternalSendOutcome> {
     const startedAt = Date.now()
+    if (!this.isLocalEndpoint()) throw new Error('Ollama endpoint is not a safe loopback URL')
     // Already cancelled: never open the request at all.
     if (options.signal?.aborted) {
       return { status: 'cancelled', terminationReason: 'cancelled before the request was sent', durationMs: 0 }
@@ -131,7 +166,7 @@ export class OllamaLocalHttpTransport implements ExternalTransport {
         body: JSON.stringify({
           model: this.model,
           stream: false,
-          prompt: `${packet.instruction}\n\n役割: ${packet.role}\n形式: ${packet.resultFormat}`
+          prompt: `${packet.instruction}\n\n役割: ${packet.role}\n形式: ${packet.resultFormat}${dependencyPrompt(packet)}`
         }),
         signal: controller.signal
       })
@@ -142,7 +177,7 @@ export class OllamaLocalHttpTransport implements ExternalTransport {
       }
 
       const body = (await response.json()) as OllamaGenerateResponse
-      if (body.error) return { status: 'failed', terminationReason: `ollama-error:${body.error}`.slice(0, 200), durationMs }
+      if (body.error) return { status: 'failed', terminationReason: `ollama-error:${safeDiagnostic(body.error)}`, durationMs }
 
       const text = (body.response ?? '').trim()
       if (!text) return { status: 'invalid', terminationReason: 'no-response-text', durationMs }
@@ -171,7 +206,7 @@ export class OllamaLocalHttpTransport implements ExternalTransport {
 
   private async safeBody(response: Response): Promise<string> {
     try {
-      return await response.text()
+      return safeDiagnostic(await response.text())
     } catch {
       return 'response body unavailable'
     }

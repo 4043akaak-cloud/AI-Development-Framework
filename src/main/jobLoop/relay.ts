@@ -460,6 +460,7 @@ export class ConversationRelay {
       scopeHash: thread.scopeHash,
       contextHash: thread.contextHash,
       status: answer.envelopeStatus ?? answer.status,
+      content: answer.content,
       summary: answer.summary ?? answer.content.slice(0, 200),
       artifact: { turnId, threadId: thread.threadId, sequence: stored.sequence, respondsToTurnId: stored.respondsToTurnId ?? null },
       verification: answer.verification ?? [],
@@ -479,7 +480,7 @@ export class ConversationRelay {
    * Builds the Owner gate for one external send. Exposed so the UI can show the report without
    * attempting anything, and reused by the Adapter itself immediately before it would transmit.
    */
-  async preflightExternalSend(threadId: string, adapterId: string, transport?: ExternalTransport): Promise<ExternalPreflight> {
+  async preflightExternalSend(threadId: string, adapterId: string, transport?: ExternalTransport, dependencyResults?: readonly AdapterDependencyResult[]): Promise<ExternalPreflight> {
     const thread = await this.getConversationState(threadId)
     const profile = getAdapterProfile(adapterId)
     // Preflight must use exactly the role the next dispatch requires. Do not fall back to an
@@ -491,7 +492,7 @@ export class ConversationRelay {
     const adapterRole = nextRole
     const events = await this.readThreadEvents(threadId)
     const attempt = this.attemptForSequence(events, thread.turns.length)
-    const packet = buildSyntheticPacket(thread, adapterRole, attempt, this.now())
+    const packet = buildSyntheticPacket(thread, adapterRole, attempt, this.now(), dependencyResults)
     assertPacketBoundary(packet)
     return preflightExternalSend({
       profile,
@@ -533,7 +534,7 @@ export class ConversationRelay {
       authorise: async (request) => {
         const thread = await this.getConversationState(request.threadId)
         const profile = getAdapterProfile(adapterId)
-        const packet = buildSyntheticPacket(thread, request.role, request.attempt ?? 0, this.now())
+        const packet = buildSyntheticPacket(thread, request.role, request.attempt ?? 0, this.now(), request.dependencyResults)
         assertPacketBoundary(packet)
         const preflight = preflightExternalSend({
           profile,
@@ -803,6 +804,9 @@ export class ConversationRelay {
         scopeHash: thread.scopeHash,
         contextHash: thread.contextHash,
         status: 'failed',
+        content: info.reason === 'answer-unavailable'
+          ? 'Adapterは受理したが回答を取得できなかった。'
+          : 'Adapterへ届いたか確認できないまま中断した。',
         summary: info.reason === 'answer-unavailable'
           ? `Adapterは受理したが回答を取得できなかった（sequence ${info.sequence}、attempt ${info.attempt}）`
           : `Adapterへ届いたか確認できないまま中断した（sequence ${info.sequence}、attempt ${info.attempt}）`,

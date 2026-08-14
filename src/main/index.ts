@@ -3,13 +3,10 @@ import path from 'node:path'
 import { canonicalSources, rootFor } from '../shared/canonicalLinkPolicy'
 import { openResolvedCanonicalSource, type CanonicalSourceDefinition } from './canonicalSourceService'
 import { safeDevelopmentRendererUrl } from '../shared/rendererUrlPolicy'
-import { ConversationRelay } from './jobLoop/relay'
+import { createLiveRelay } from './liveRelay'
+import type { ConversationRelay } from './jobLoop/relay'
 import { cancelExternal, continueThread, decideThread, externalSendState, getThread, listApprovedTaskIds, listExternalAdapters, listThreads, ollamaReadiness, preflightExternal, recoverThread, scanForRecovery, sendExternal, sendFirstTurn, startApprovedThread } from './relayService'
-import { AnthropicMessagesTransport } from './jobLoop/anthropicTransport'
-import { OllamaLocalHttpTransport } from './jobLoop/ollamaTransport'
-import { ExternalConversationAdapter } from './jobLoop/externalAdapter'
-import { FakeCriticConversationAdapter, FakeProposalConversationAdapter } from './jobLoop/conversationAdapters'
-import { approveFrontdoorRun, answerFrontdoorQuestion, completeFrontdoorRun, dispatchFrontdoorRun, inspectFrontdoorRun, listFrontdoorRuns, prepareFrontdoorRun, proposeFrontdoorPlan, recoverFrontdoorRun, reviewFrontdoorResult, stopFrontdoorRun } from './frontdoor/frontdoorService'
+import { approveFrontdoorRun, answerFrontdoorQuestion, completeFrontdoorRun, dispatchFrontdoorRun, inspectFrontdoorRun, listFrontdoorRuns, prepareFrontdoorRun, proposeFrontdoorPlan, recoverFrontdoorRun, reviewFrontdoorNode, reviewFrontdoorResult, stopFrontdoorRun } from './frontdoor/frontdoorService'
 import { FrontdoorOrchestrator } from './frontdoor/orchestrator'
 import { DeterministicFakePlanner } from './frontdoor/planner'
 
@@ -53,30 +50,8 @@ app.whenReady().then(async () => {
   // Constructed, not connected. Nothing here opens a socket or reads a credential — the transports
   // only touch the network inside `send` (Anthropic) or an explicit readiness check (Ollama), both
   // gated behind an Owner action. Neither is contacted just by building this Relay.
-  const externalAdapterId = 'claude-external'
-  const externalTransport = new AnthropicMessagesTransport()
-  const ollamaAdapterId = 'ollama-local'
-  const ollamaTransport = new OllamaLocalHttpTransport()
   const runtimeRoot = path.join(app.getPath('userData'), 'adf-runtime')
-
-  const relay: ConversationRelay = new ConversationRelay({
-    runtimeRoot,
-    externalTransports: { [externalAdapterId]: externalTransport, [ollamaAdapterId]: ollamaTransport },
-    adapters: [
-      new FakeProposalConversationAdapter(),
-      new FakeCriticConversationAdapter(),
-      new ExternalConversationAdapter(externalAdapterId, 'proposal', externalTransport, {
-        authorise: (request) => relay.externalHooks(externalAdapterId, externalTransport).authorise(request),
-        recordCall: (record) => relay.externalHooks(externalAdapterId, externalTransport).recordCall(record),
-        now: () => new Date()
-      }),
-      new ExternalConversationAdapter(ollamaAdapterId, ['proposal', 'critic'], ollamaTransport, {
-        authorise: (request) => relay.externalHooks(ollamaAdapterId, ollamaTransport).authorise(request),
-        recordCall: (record) => relay.externalHooks(ollamaAdapterId, ollamaTransport).recordCall(record),
-        now: () => new Date()
-      })
-    ]
-  })
+  const relay: ConversationRelay = createLiveRelay(runtimeRoot)
   const frontdoor = new FrontdoorOrchestrator({ relay })
   const planner = new DeterministicFakePlanner()
   ipcMain.handle('relay:list', () => listThreads(relay))
@@ -100,6 +75,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('frontdoor:inspect', (_event, runId: unknown) => inspectFrontdoorRun(frontdoor, runId))
   ipcMain.handle('frontdoor:approve', (_event, input: unknown) => approveFrontdoorRun(frontdoor, input as Parameters<typeof approveFrontdoorRun>[1]))
   ipcMain.handle('frontdoor:dispatch', (_event, runId: unknown) => dispatchFrontdoorRun(frontdoor, runId))
+  ipcMain.handle('frontdoor:review-node', (_event, input: unknown) => reviewFrontdoorNode(frontdoor, input as Parameters<typeof reviewFrontdoorNode>[1]))
   ipcMain.handle('frontdoor:answer', (_event, input: unknown) => answerFrontdoorQuestion(frontdoor, input as Parameters<typeof answerFrontdoorQuestion>[1]))
   ipcMain.handle('frontdoor:review-result', (_event, input: unknown) => reviewFrontdoorResult(frontdoor, input as Parameters<typeof reviewFrontdoorResult>[1]))
   ipcMain.handle('frontdoor:complete', (_event, input: unknown) => completeFrontdoorRun(frontdoor, input as Parameters<typeof completeFrontdoorRun>[1]))
