@@ -14,7 +14,7 @@ ADFの製品境界は、Project進捗管理とAI間の受け渡しに限定す�
 
 ## 最終目標への現在地
 
-Local Runtime基盤は完成しているが、最終目標である「窓口AI → ADF → 得意分野ごとの複数AI → ADF → 窓口AI」のEnd-to-End協調は未完成である。`ADF-FRONTDOOR-ORCHESTRATION-001`を2026-08-14に開始し、Fake Adapter限定でFrontdoorRequest、分解DAG、Node状態機械、Result / Question集約、FrontdoorReturnを一周させた。続く`ADF-FRONTDOOR-LEDGER-EVENT-SOURCING-001`では`events.jsonl`を正本とするtyped hash-chain Ledger、決定的Replay、atomic Bundle、claim安全性を実装しDoneとなった。`ADF-FRONTDOOR-OWNER-GATE-001`ではOwnerのIntake、完成形、分解、Dispatch、質問、Result Review、Completionを共通契約として実装し、`e38e31c`でDoneとなった。`ADF-FRONTDOOR-OLLAMA-TWO-NODE-E2E-001`では、Project Owner承認の4 Gateを通して実OllamaのProposal→Critic依存2 Nodeを一回実行し、Runtime再読込・Replay・Evidence／Ledger整合を確認済みである。`ADF-MCP-001`では窓口AIからlocal stdio MCPを経由してFrontdoor Request／Planを投入し、Owner承認済みRunの状態・Resultを取得する5 Toolの薄い入口を実装し、Verifyingへ進んだ。MCP client実機接続、Work Plane、実装AI、独立Review Job、実Providerの自動選定は後続Taskとする。
+Local Runtime基盤は完成しているが、最終目標である「窓口AI → ADF → 得意分野ごとの複数AI → ADF → 窓口AI」のEnd-to-End協調は未完成である。`ADF-FRONTDOOR-ORCHESTRATION-001`を2026-08-14に開始し、Fake Adapter限定でFrontdoorRequest、分解DAG、Node状態機械、Result / Question集約、FrontdoorReturnを一周させた。続く`ADF-FRONTDOOR-LEDGER-EVENT-SOURCING-001`では`events.jsonl`を正本とするtyped hash-chain Ledger、決定的Replay、atomic Bundle、claim安全性を実装しDoneとなった。`ADF-FRONTDOOR-OWNER-GATE-001`ではOwnerのIntake、完成形、分解、Dispatch、質問、Result Review、Completionを共通契約として実装し、`e38e31c`でDoneとなった。`ADF-FRONTDOOR-OLLAMA-TWO-NODE-E2E-001`では、Project Owner承認の4 Gateを通して実OllamaのProposal→Critic依存2 Nodeを一回実行し、Runtime再読込・Replay・Evidence／Ledger整合を確認済みである。`ADF-MCP-001`では窓口AIからlocal stdio MCPを経由してFrontdoor Request／Planを投入し、Owner承認済みRunの状態・Resultを取得する5 Toolの薄い入口を実装し、Verifyingへ進んだ。続く`ADF-MCP-CLIENT-E2E-001`では、コンパイル済みMCP Server子プロセスへ実MCP Clientで接続し、Owner Gate後のFake dispatch／Result取得を確認した。窓口AI設定登録、Work Plane、実装AI、独立Review Job、実Providerの自動選定は後続Taskとする。
 
 本Taskの停止ルール: 同じ原因による検証失敗が2回連続、または別原因でも3回続いた場合、Codexは実装を止めてProject Ownerへ確認する。Scope拡張、新規依存、外部送信、認証、費用、Work Plane書込み、既存安全境界の弱体化が必要になった場合も停止する。
 
@@ -35,6 +35,12 @@ Anthropic APIキーの取得と外部AIへの実送信は引き続き保留で�
 [`ADF-FRONTDOOR-OLLAMA-TWO-NODE-E2E-001`](../tasks/ADF-FRONTDOOR-OLLAMA-TWO-NODE-E2E-001.md): `Done`。Run `run-0cf084773023ec7ae222`で、同一Run／Planに束縛したProposal／Criticを`ollama-local`／`llama3:latest`へ一回実行。Proposal Job `job-89be27b4cf608952`／Thread `thread-506835efa498c4d4`、Critic Job `job-c465054faa0dca80`／Thread `thread-a8067f27d8d05bd4`。CriticへのProposal Result本文・hash、2 NodeのResult／Evidence／Job Ledger／Frontdoor Event Ledger／Aggregate、fresh Relay再読込・Replayを検証し、Project OwnerのResult Review／Completionを記録済み。追加送信は行っていない。
 
 [`ADF-MCP-001`](../tasks/ADF-MCP-001.md): `Verifying`。依存追加なしのlocal stdio JSON-RPC入口と5 Tool（prepare／inspect／dispatch_approved／get_result／list_runs）を実装。MCPはOwner Decisionを生成せず、dispatchは固定runtime root・Packet-bound Owner Decision・Packet hash一致を必須とし、旧来の非Packet-bound Decisionを子AI送信前に拒否する。`tests/frontdoorMcpServer.test.ts`を含む対象25/25、全体337/337（最終検証予定）、node/web/cli typecheck、Electron build、compiled stdio smoke、diff checkを確認。MCP client設定、実Provider送信、APIキー、commit／pushは未実施。
+
+[`ADF-MCP-CLIENT-E2E-001`](../tasks/ADF-MCP-CLIENT-E2E-001.md): `Verifying`。依存追加なしのstdio JSON-RPC Clientを追加し、コンパイル済みMCP Server子プロセスへの`initialize`／`tools/list`／`prepare`／`inspect`／`list_runs`接続、Owner承認前dispatch拒否、Owner Gate／Packet準備後のFake dispatch／Result取得を実プロセスで確認した。stdout非JSON、timeout、子プロセス環境allowlistのfail-closedもテスト済み。対象4/4、全体343/343（29 files）、node/web/cli typecheck、Electron build、compiled `mcp-client-probe`、diff checkはPass。窓口AIへのMCP設定登録は後続`ADF-MCP-FRONTDOOR-CONNECTION-001`で実施する。実Provider、APIキー、Work Plane、commit／pushは未実施。
+
+[`ADF-MCP-FRONTDOOR-CONNECTION-001`](../tasks/ADF-MCP-FRONTDOOR-CONNECTION-001.md): `Verifying`。既存local stdio MCP入口をCodexの`adf_frontdoor`として登録し、固定runtime rootと`HOME`／`PATH`／`ELECTRON_RUN_AS_NODE`の環境allowlistを設定した。既存5 Tool、Owner承認前Dispatch拒否、Packet／Ledger境界は変更していない。設定登録と内容確認は完了し、Codex設定再読込後の窓口AIからの実画面確認が残る。外部送信、APIキー、課金、Work Plane書込み、正本自動更新は行っていない。
+
+[`ADF-ACTIVITY-TRACE-VISUALIZATION-001`](../tasks/ADF-ACTIVITY-TRACE-VISUALIZATION-001.md): `Done`。既存Frontdoor Event LedgerからAI Node／Adapter、Owner Gate、Verification、待機理由を読み取り専用Activityへ派生し、FrontdoorPanelに初期非表示のActivity Timelineと表示／非表示スイッチを追加した。変更後Electron画面で表示／非表示を確認済み。明示された`skillId`だけ表示し、Codex内部Skill／サブエージェントは推測しない。対象3/3、全体346/346（30 files）、node/web/cli typecheck、Electron build、diff checkはPass。実Provider、Token／費用計測、外部通信、正本書込み、commit／pushは未実施。
 
 [`ADF-FRONTDOOR-NODE-REVIEW-GATE-001`](../tasks/ADF-FRONTDOOR-NODE-REVIEW-GATE-001.md): `Verifying`。Frontdoorを1回のDispatch＝1 Nodeへ変更し、Proposal完了後に`node-review` GateでResult／Evidence／verification／risks／次NodeをOwnerへ提示する。Ownerの`continue`後だけCritic等の次Nodeを実行し、`stop`では依存NodeのJob／Threadを作らずRunを停止する。Node Review target hashとEvent Ledger replayで改ざん・古いDecisionを拒否し、CLI `review-node`とElectron IPC／Rendererへ接続した。Vitest 339/339、Node/Web/CLI typecheck、Electron build Pass。実Ollama再送信、外部送信、Work Plane書込み、commit／pushは未実施。最終Diffレビューと完了承認待ち。
 
@@ -103,7 +109,7 @@ Anthropic APIキーの取得と外部AIへの実送信は引き続き保留で�
 ## 未実施・阻害要因
 
 - 次は[`ADF-EXTERNAL-ADAPTER-001`](../tasks/ADF-EXTERNAL-ADAPTER-001.md)の実送信可否である。実装とElectron接続は完了し、Project Ownerの「外部送信OK」指示、`ANTHROPIC_API_KEY`の設定、実行承認ファイルの配置を待つ。ADFはこの3つをいずれも自分では用意しない。
-- `ADF-MCP-001`は実装・自動検証済みの`Verifying`。残るのは最終DiffレビューとProject Ownerの完了承認、別TaskでのMCP client実機接続である。MCPからOwner承認・自動Completion・正本書込みは行わない。
+- `ADF-MCP-001`は実装・自動検証済みの`Verifying`。`ADF-MCP-CLIENT-E2E-001`で実MCP ClientとMCP Serverのプロセス接続は確認済み。残るのは各Taskの最終DiffレビューとProject Ownerの完了承認、窓口AIアプリへの実MCP設定登録である。MCPからOwner承認・自動Completion・正本書込みは行わない。
 - [`ADF-BOARD-PROJECTION-001`](../tasks/ADF-BOARD-PROJECTION-001.md)は、`open + turnCount > 0`の実機表示と`recovery-needed`のLive Board実機表示の2項目が未確認のまま残っている。単体テストで検証済みであり、Doneの判断は妨げないとProject Ownerが2026-08-11に受諾した。
 - [`ADF-TASK-PACKET-CLI-001`](../tasks/ADF-TASK-PACKET-CLI-001.md)は、Execution Summaryの内容面（要約の妥当性）のOwner確認が残っている。
 - 外部AIは受理と回答の間隔が長いため、既存Recoveryを共通基盤として使う。Providerごとの冪等性、費用、保持、telemetryは実測して記録する。

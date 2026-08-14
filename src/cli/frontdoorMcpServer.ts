@@ -171,7 +171,8 @@ function projectInspection(inspection: Awaited<ReturnType<FrontdoorOrchestrator[
     openQuestions: inspection.openQuestions.map((question) => ({ questionId: question.questionId, nodeId: question.nodeId, kind: question.kind, text: boundedText(question.text, 2000), required: question.required, blocking: question.blocking, status: question.status })),
     nextAction: boundedText(inspection.nextAction, 1000),
     eventCount: inspection.eventCount,
-    nodeTargetHashes: inspection.nodeTargetHashes
+    nodeTargetHashes: inspection.nodeTargetHashes,
+    activities: inspection.activities
   }
 }
 

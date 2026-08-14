@@ -79,6 +79,8 @@ export interface DecompositionNode {
   objective: string
   role: AdapterRole
   adapterId: string
+  /** Optional explicit skill contract. Codex-internal skill use is not inferred when absent. */
+  skillId?: string
   scope: JobScope
   contextReferences: string[]
   acceptance: string[]
@@ -201,6 +203,25 @@ export interface FrontdoorInspection {
   eventCount: number
   nodeTargetHashes: Record<string, string>
   nodeReview?: FrontdoorNodeReview
+  activities: FrontdoorActivity[]
+}
+
+export type FrontdoorActivityKind = 'system' | 'owner' | 'agent' | 'verification'
+export type FrontdoorActivityStatus = 'complete' | 'running' | 'waiting' | 'failed' | 'stopped'
+
+export interface FrontdoorActivity {
+  activityId: string
+  kind: FrontdoorActivityKind
+  status: FrontdoorActivityStatus
+  label: string
+  detail: string
+  occurredAt: string
+  eventType: FrontdoorEventType
+  nodeId?: string
+  adapterId?: string
+  role?: AdapterRole
+  /** Present only when the caller explicitly records a skill contract. */
+  skillId?: string
 }
 
 export interface FrontdoorRunSummary {

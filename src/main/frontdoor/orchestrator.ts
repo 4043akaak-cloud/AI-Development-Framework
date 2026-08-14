@@ -15,6 +15,7 @@ import { readJson } from '../jobLoop/ledger'
 import type { AdapterResultEnvelope } from '../jobLoop/resultEnvelope'
 import { assertDispatchApproved, buildDecisionEnvelope, FrontdoorOwnerGateService, nodeReviewTargetHash, nodeTargetHash } from './ownerGates'
 import { getAdapterProfile } from '../jobLoop/adapterRegistry'
+import { buildActivityTrace } from './activityTrace'
 
 export interface FrontdoorOrchestratorOptions {
   relay: ConversationRelay
@@ -404,7 +405,8 @@ export class FrontdoorOrchestrator {
       nextAction: aggregate?.nextAction ?? (run.ownerGate ?? 'awaiting-owner'),
       eventCount: events.length,
       nodeTargetHashes: Object.fromEntries(run.nodes.map((record) => [record.node.nodeId, nodeTargetHash(run, record)])),
-      nodeReview: run.nodeReview
+      nodeReview: run.nodeReview,
+      activities: buildActivityTrace(events, run)
     }
   }
 

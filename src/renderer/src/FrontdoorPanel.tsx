@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type JSX } from 'react'
-import type { FrontdoorInspection, FrontdoorPlanProposal, FrontdoorPrepareInput, FrontdoorRequestInput, FrontdoorRunSummary, OwnerGate, OwnerGateState } from '../../shared/frontdoorTypes'
+import type { FrontdoorActivity, FrontdoorInspection, FrontdoorPlanProposal, FrontdoorPrepareInput, FrontdoorRequestInput, FrontdoorRunSummary, OwnerGate, OwnerGateState } from '../../shared/frontdoorTypes'
 
 const gateLabels: Record<OwnerGate, string> = {
   intake: 'Intake',
@@ -26,6 +26,26 @@ function formatValue(value: unknown): string {
 
 function listValue(value: string): string[] {
   return value.split(',').map((item) => item.trim()).filter(Boolean)
+}
+
+const activityKindLabels: Record<FrontdoorActivity['kind'], string> = {
+  system: 'ADF',
+  owner: 'Owner Gate',
+  agent: 'AI Node',
+  verification: 'Verification'
+}
+
+const activityStatusLabels: Record<FrontdoorActivity['status'], string> = {
+  complete: '完了',
+  running: '実行中',
+  waiting: '待機中',
+  failed: '失敗',
+  stopped: '停止'
+}
+
+function activityTime(value: string): string {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 }
 
 const defaultPlanJson = JSON.stringify({
@@ -68,6 +88,13 @@ export default function FrontdoorPanel(): JSX.Element {
   const [intakePlanJson, setIntakePlanJson] = useState(defaultPlanJson)
   const [intakeRequestId, setIntakeRequestId] = useState<string | null>(null)
   const [plannerProposal, setPlannerProposal] = useState<FrontdoorPlanProposal | null>(null)
+  const [activityVisible, setActivityVisible] = useState(() => {
+    try {
+      return window.localStorage.getItem('adf.activity-trace.visible') === 'true'
+    } catch {
+      return false
+    }
+  })
 
   const inspect = useCallback(async (runId: string): Promise<void> => {
     const result = await window.adfFrontdoor.inspect(runId)
@@ -176,7 +203,19 @@ export default function FrontdoorPanel(): JSX.Element {
   const packetsReady = runs.find((entry) => entry.runId === selectedRunId)?.packetsReady ?? false
   const openQuestions = inspection?.openQuestions.filter((question) => question.status === 'open') ?? []
   const nodeReview = inspection?.nodeReview
+  const activities = inspection?.activities ?? []
+  const latestActivity = activities.at(-1)
+  const waitingActivity = [...activities].reverse().find((activity) => activity.status === 'waiting')
   const terminal = run ? ['complete', 'partial', 'failed', 'cancelled'].includes(run.state) : false
+
+  const toggleActivity = (visible: boolean): void => {
+    setActivityVisible(visible)
+    try {
+      window.localStorage.setItem('adf.activity-trace.visible', String(visible))
+    } catch {
+      // Local display preference is optional; the Activity projection remains read-only.
+    }
+  }
 
   const approveCurrentGate = async (): Promise<void> => {
     if (!run || !currentGate || !approvedBy.trim()) return
@@ -275,6 +314,51 @@ export default function FrontdoorPanel(): JSX.Element {
                 {inspection.plan.nodes.map((node) => <li key={node.nodeId}><strong>{node.nodeId}</strong> · {node.role} / {node.adapterId} · {node.dependsOn.length ? `依存: ${node.dependsOn.join(', ')}` : '依存なし'}<br /><small>target hash: {inspection.nodeTargetHashes[node.nodeId]}</small></li>)}
               </ul>
             </section>
+
+            <section className="frontdoor-card frontdoor-activity-toggle" aria-label="AI Activity表示設定">
+              <div>
+                <h3>AI Activity（おまけ）</h3>
+                <p className="turn-refs">Event Ledgerから、ADFが観測できるAI Node・Owner Gate・Verificationの進行を表示します。</p>
+              </div>
+              <label className="activity-switch">
+                <input type="checkbox" checked={activityVisible} onChange={(event) => toggleActivity(event.target.checked)} />
+                <span>Activityを表示</span>
+              </label>
+            </section>
+
+            {activityVisible && (
+              <section className="frontdoor-card frontdoor-activity-panel" aria-label="AI Activity Timeline">
+                <div className="activity-summary">
+                  <div>
+                    <h3>AI Activity Timeline</h3>
+                    <p className="turn-refs">{waitingActivity ? waitingActivity.label : latestActivity ? latestActivity.label : 'まだActivityがありません'}</p>
+                  </div>
+                  <span className={`activity-state ${waitingActivity ? 'waiting' : latestActivity?.status ?? 'complete'}`}>{waitingActivity ? 'Owner判断待ち' : latestActivity ? activityStatusLabels[latestActivity.status] : '未開始'}</span>
+                </div>
+                {activities.length === 0 && <p className="lane-empty">ADF Event LedgerにActivityがまだありません。</p>}
+                {activities.length > 0 && (
+                  <ol className="activity-timeline">
+                    {[...activities].reverse().map((activity) => (
+                      <li key={activity.activityId} className={`activity-item ${activity.status}`}>
+                        <span className="activity-dot" aria-hidden="true" />
+                        <div className="activity-content">
+                          <div className="activity-meta"><strong>{activityKindLabels[activity.kind]}</strong><span>{activityStatusLabels[activity.status]}</span><time dateTime={activity.occurredAt}>{activityTime(activity.occurredAt)}</time></div>
+                          <h4>{activity.label}</h4>
+                          <p>{activity.detail}</p>
+                          <div className="activity-tags">
+                            {activity.adapterId && <span>Adapter: {activity.adapterId}</span>}
+                            {activity.role && <span>Role: {activity.role}</span>}
+                            <span>Skill: {activity.skillId ?? 'ADF未記録'}</span>
+                            {activity.nodeId && <span>Node: {activity.nodeId}</span>}
+                          </div>
+                        </div>
+                      </li>
+                    ))}
+                  </ol>
+                )}
+                <p className="turn-refs activity-disclosure">Codex内部のSkill／サブエージェントはADFから自動観測できません。明示的に記録されたSkill IDだけを表示し、未記録は推測しません。</p>
+              </section>
+            )}
 
             <section className="frontdoor-card" aria-label="Owner Decision">
               <h3>Owner Decision</h3>

@@ -17,6 +17,8 @@
     "src/cli/frontdoorOwnerLoop.ts",
     "src/cli/frontdoorOllamaE2eProbe.ts",
     "src/cli/frontdoorMcpServer.ts",
+    "src/cli/frontdoorMcpClient.ts",
+    "src/cli/frontdoorMcpClientProbe.ts",
     "src/main/liveRelay.ts",
     "src/main/jobLoop/hash.ts",
     "src/main/jobLoop/adapterRegistry.ts",
