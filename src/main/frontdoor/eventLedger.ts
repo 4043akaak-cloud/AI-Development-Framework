@@ -73,7 +73,13 @@ export function replayFrontdoorRun(events: readonly FrontdoorLedgerEvent[]): Orc
     const nodeId = typeof payload.nodeId === 'string' ? payload.nodeId : undefined
     const currentNode = nodeId ? run.nodes.find((node) => node.node.nodeId === nodeId) : undefined
     if (event.type === 'frontdoor.approval-bound' && run.state !== 'ready-for-approval') throw new Error('Frontdoor approval-bound event has an invalid prior state')
-    if (event.type === 'frontdoor.completion-proposed' && !['awaiting-owner', 'blocked-by-question'].includes(run.state)) throw new Error('Frontdoor completion-proposed event has an invalid prior state')
+    if (event.type === 'frontdoor.completion-proposed') {
+      const unfinishedNodes = run.nodes.some((node) => ['queued', 'ready', 'running', 'recovery-needed'].includes(node.state))
+      const completionProposalCanFollowExecution = run.state === 'running' && !unfinishedNodes
+      if (!['awaiting-owner', 'blocked-by-question'].includes(run.state) && !completionProposalCanFollowExecution) {
+        throw new Error('Frontdoor completion-proposed event has an invalid prior state')
+      }
+    }
     if (event.type === 'frontdoor.completion-approved' && run.state !== 'awaiting-owner') throw new Error('Frontdoor completion-approved event has an invalid prior state')
     if (event.type === 'frontdoor.owner-decision-recorded') {
       const decision = payload.decision as OwnerDecisionEnvelope | undefined

@@ -1,7 +1,7 @@
 # Task — ADF-FRONTDOOR-REAL-ADAPTER-DISPATCH-001: Frontdoor Real Adapter Dispatch
 
 > Type: Design + Implementation + Local Runtime Verification
-> Status: Verifying
+> Status: Done
 > Owner: Codex
 > Review: Project Owner + role-separated review
 > Branch: `codex/adf-frontdoor-real-adapter-dispatch`
@@ -73,8 +73,8 @@
 - [x] `ollama-local`は明示Plan／明示Dispatchでのみ到達し、自動RoutingやPlanner生成では到達しない。
 - [x] Dispatch承認なし、Plan／Node／Packet hash不一致、local endpoint不一致を拒否する。
 - [x] local-http readinessがPassしない場合、Dispatch前に停止し、Job／Thread／Ollama送信を発生させない。
-- [ ] Owner承認済みPlan／Child Packetで、Frontdoorから実Ollamaへ1回送信できる。
-- [ ] 実行結果にResult Envelope、Evidence、Job Ledger、Thread Ledger、Frontdoor Event Ledger、AggregateResultが残り、Run／Node／Job／Threadが一致する。
+- [x] Owner承認済みPlan／Child Packetで、Frontdoorから実Ollamaへ1回送信できる。
+- [x] 実行結果にResult Envelope、Evidence、Job Ledger、Thread Ledger、Frontdoor Event Ledger、AggregateResultが残り、Run／Node／Job／Threadが一致する。
 - [x] Fake Frontdoor、既存Ollama standalone、Anthropic未送信経路が回帰しない。
 - [x] timeout／cancel／malformed／readiness failureは既存の失敗・停止・Recovery契約を壊さない。
 - [x] Node/Web/CLI typecheck、Vitest、Electron build、`git diff --check`がPassする。
@@ -112,7 +112,7 @@
 - Frontdoor／Relay／Ollama関連テスト
 - 本Task、`docs/project/CURRENT_STATE.md`、Obsidianマイルストーン、ADF MOC
 
-`planner.ts`、既存Event Ledger、Owner GateのDecision契約、Anthropic Transport、Claude CLI Transportの動作仕様は変更しない。
+`planner.ts`、Event Ledgerのイベント契約、Owner GateのDecision契約、Anthropic Transport、Claude CLI Transportの動作仕様は変更しない。今回、実行後Replayで発見した`completion-proposed`の状態検証だけを、イベント契約を変えずに修正した。
 
 ## 9. Implementation log
 
@@ -124,10 +124,13 @@
 | 2026-08-14 | Codex | PrepareでRelay登録Adapter／roleを照合し、OrchestratorとDirect external sendの両経路で、Owner Dispatch承認後かつChild Job／Thread生成前にAdapter登録・local endpoint・readinessを再検証する境界を追加。 |
 | 2026-08-14 | Codex | 未登録Adapter拒否、readiness成功／model missing、Frontdoor Ollama 1 Node成功、readiness失敗時のJob／Thread未生成、既存Planner fixture回帰をテスト。 |
 | 2026-08-14 | Codex | Node/Web/CLI typecheck、Vitest **314/314（26 files）**、Electron build、`git diff --check`をPass。実Ollama送信は未実施（別途Owner実行承認待ち）。 |
+| 2026-08-14 | Codex | push済みコードでElectronアプリを終了し、Ollama到達性／`llama3:latest`を確認。Frontdoorの全Owner Gate（Intake／Completion Shape／Decomposition／Dispatch）を経由して、`ollama-local`へ実送信を1回実施。 |
+| 2026-08-14 | Codex | 実証跡：Run `run-79bba1a471695ed3671d`、Job `job-331233de30855d6d`、Thread `thread-3f7f22e500ca1b23`。Result `success`、Evidence／Job／Thread／Frontdoor Event Ledger／Aggregateを確認。Runは意図どおり`awaiting-owner:result-review`で停止。 |
+| 2026-08-14 | Codex | 実送信後のRun再読込でReplay条件の欠陥を検出。`completion-proposed`が全Node完了後の`running`状態から遷移する実イベント順を許容する修正と回帰アサーションを追加。実Runtimeの再読込、全テスト、typecheck、Electron build、diff checkを再Pass。 |
 
 ## 10. Current status
 
-`Verifying`。Adapter登録照合、Dispatch readiness境界、テスト、型検査、Electron buildまで完了。実Ollama送信とResult／Evidence／Ledgerの実ファイル確認は、別途Owner実行承認後に行う。最終Diff／Verificationレビュー後にDone判断を行う。
+`Done`。FrontdoorのOwner Gateを通した実Ollama送信、Result／Evidence／Job／Thread／Frontdoor Event Ledger／Aggregateの整合確認、実行後Replay確認、全自動検証が完了。Run自体はOwnerのResult Review待ちとして保持している。
 
 ## ADF Execution Summary
 
@@ -140,6 +143,6 @@
     "outOfScope": ["real planner", "Anthropic API", "Claude CLI", "external send", "Work Plane", "MCP", "auto-approval", "auto-retry", "canonical writes"]
   },
   "approval": { "status": "approved", "approvedBy": "Project Owner", "approvedAt": "2026-08-14", "externalSend": false, "newDependencies": false },
-  "verification": { "status": "verifying", "tests": "314/314 passed", "typecheck": "node/web/cli passed", "electronBuild": "passed", "diffCheck": "passed", "realOllama": "pending: separate Owner execution approval required" }
+  "verification": { "status": "done", "tests": "314/314 passed", "typecheck": "node/web/cli passed", "electronBuild": "passed", "diffCheck": "passed", "realOllama": "passed: run-79bba1a471695ed3671d / job-331233de30855d6d / thread-3f7f22e500ca1b23" }
 }
 ```

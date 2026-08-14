@@ -230,6 +230,7 @@ describe('ADF-FRONTDOOR-REAL-ADAPTER-DISPATCH-001', () => {
     expect(calls).toEqual(['http://127.0.0.1:11434/api/tags', 'http://127.0.0.1:11434/api/generate'])
     expect((await relay.listThreads())).toHaveLength(1)
     expect(result.evidenceRefs).toHaveLength(1)
+    await expect(orchestrator.getRun(run.runId)).resolves.toMatchObject({ state: 'awaiting-owner', ownerGate: 'awaiting-owner:result-review' })
   })
 
   it('blocks before Job/Thread creation when Owner dispatch readiness fails', async () => {
