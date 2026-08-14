@@ -13,6 +13,7 @@ import { assertBundleReady, claimRun, readPlan, readRequest, readRun, readRunCla
 import { replayFrontdoorRun } from './eventLedger'
 import { readJson } from '../jobLoop/ledger'
 import type { AdapterResultEnvelope } from '../jobLoop/resultEnvelope'
+import { assertDispatchApproved, FrontdoorOwnerGateService } from './ownerGates'
 
 export interface FrontdoorOrchestratorOptions {
   relay: ConversationRelay
@@ -55,7 +56,7 @@ async function assertRunIntegrity(runtimeRoot: string, run: OrchestrationRun, re
 }
 
 function runProjection(run: OrchestrationRun): unknown {
-  return { runId: run.runId, requestId: run.requestId, requestHash: run.requestHash, planHash: run.planHash, state: run.state, nodes: run.nodes, approvalIds: run.approvalIds, openQuestionIds: run.openQuestionIds, aggregateResultRef: run.aggregateResultRef }
+  return { runId: run.runId, requestId: run.requestId, requestHash: run.requestHash, planHash: run.planHash, state: run.state, ownerGate: run.ownerGate, nodes: run.nodes, approvalIds: run.approvalIds, openQuestionIds: run.openQuestionIds, aggregateResultRef: run.aggregateResultRef }
 }
 
 function assertRunEventConsistency(run: OrchestrationRun, events: readonly FrontdoorLedgerEvent[]): void {
@@ -97,11 +98,41 @@ export class FrontdoorOrchestrator {
   readonly relay: ConversationRelay
   readonly runtimeRoot: string
   readonly clock: () => Date
+  readonly ownerGates: FrontdoorOwnerGateService
 
   constructor({ relay, clock = () => new Date() }: FrontdoorOrchestratorOptions) {
     this.relay = relay
     this.runtimeRoot = relay.runtimeRoot
     this.clock = clock
+    this.ownerGates = new FrontdoorOwnerGateService({ runtimeRoot: this.runtimeRoot, clock })
+  }
+
+  async approveDispatch(runId: string, nodeIds: readonly string[], approvedBy = 'Project Owner', note?: string) {
+    return this.ownerGates.approveDispatch(runId, nodeIds, approvedBy, note)
+  }
+
+  async approveIntake(runId: string, approvedBy = 'Project Owner', note?: string) {
+    return this.ownerGates.approveIntake(runId, approvedBy, note)
+  }
+
+  async approveCompletionShape(runId: string, approvedBy = 'Project Owner', note?: string) {
+    return this.ownerGates.approveCompletionShape(runId, approvedBy, note)
+  }
+
+  async approveDecomposition(runId: string, approvedBy = 'Project Owner', note?: string) {
+    return this.ownerGates.approveDecomposition(runId, approvedBy, note)
+  }
+
+  async answerQuestion(runId: string, question: import('../../shared/frontdoorTypes').FrontdoorQuestion, approvedBy = 'Project Owner', answerRef?: string, note?: string) {
+    return this.ownerGates.answerQuestion(runId, question, approvedBy, answerRef, note)
+  }
+
+  async reviewResult(runId: string, approvedBy = 'Project Owner', decision: 'accept' | 'follow-up' | 'reject' = 'accept', note?: string) {
+    return this.ownerGates.reviewResult(runId, approvedBy, decision, note)
+  }
+
+  async completeRun(runId: string, approvedBy = 'Project Owner', note?: string) {
+    return this.ownerGates.completeRun(runId, approvedBy, note)
   }
 
   async createRun(requestInput: Parameters<typeof createFrontdoorRequest>[0], planInput: Parameters<typeof createDecompositionPlan>[1]): Promise<OrchestrationRun> {
@@ -110,7 +141,7 @@ export class FrontdoorOrchestrator {
     const now = this.clock().toISOString()
     const runId = `run-${hashJson([request.requestId, request.inputHash, plan.planHash]).slice(0, 20)}`
     const nodes: OrchestrationNodeRecord[] = plan.nodes.map((node) => ({ node, state: 'queued', childTaskId: childTaskId(request.requestId, node.nodeId), questionIds: [], attempt: 0 }))
-    const run: OrchestrationRun = { runId, requestId: request.requestId, requestHash: request.inputHash, planHash: plan.planHash, state: 'ready-for-approval', nodes, approvalIds: [], openQuestionIds: [], createdAt: now, updatedAt: now }
+    const run: OrchestrationRun = { runId, requestId: request.requestId, requestHash: request.inputHash, planHash: plan.planHash, state: 'ready-for-approval', nodes, approvalIds: [], openQuestionIds: [], createdAt: now, updatedAt: now, ownerGate: 'awaiting-owner:dispatch' }
     try {
       await writeRunBundleExclusive(this.runtimeRoot, request, plan, run)
     } catch (error) {
@@ -124,6 +155,7 @@ export class FrontdoorOrchestrator {
       return existing
     }
     await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.run-created', { requestId: request.requestId, planHash: plan.planHash, nodeIds: plan.nodes.map((node) => node.nodeId), snapshot: run })
+    await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.owner-gate-opened', { gate: 'dispatch', targetHash: hashJson({ runId, requestId: request.requestId, planHash: plan.planHash, nodeIds: plan.nodes.map((node) => node.nodeId).sort() }) })
     return run
   }
 
@@ -139,12 +171,13 @@ export class FrontdoorOrchestrator {
       const packetIds = Object.keys(packets).sort()
       const nodeIds = run.nodes.map((record) => record.node.nodeId).sort()
       if (packetIds.join('|') !== nodeIds.join('|')) throw new Error('approved child packet set does not exactly match the DecompositionPlan')
+      await assertDispatchApproved(this.runtimeRoot, runId, nodeIds)
       for (const node of run.nodes) {
         const packet = packets[node.node.nodeId]
         if (packet.frontdoorBinding?.requestHash !== run.requestHash || packet.frontdoorBinding?.planHash !== run.planHash || packet.frontdoorBinding?.runId !== run.runId) throw new Error(`packet Frontdoor binding mismatch for ${node.node.nodeId}`)
         assertPacketMatchesNode(request, run, node, packet)
       }
-      run = { ...run, state: 'running', updatedAt: this.clock().toISOString(), approvalIds: run.nodes.map((node) => packets[node.node.nodeId].approval.approvalId) }
+      run = { ...run, state: 'running', ownerGate: 'running', updatedAt: this.clock().toISOString(), approvalIds: run.nodes.map((node) => packets[node.node.nodeId].approval.approvalId) }
       await writeRun(this.runtimeRoot, run)
       await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.approval-bound', { approvalIds: run.approvalIds })
 
@@ -204,9 +237,13 @@ export class FrontdoorOrchestrator {
 
       const aggregate = aggregateResults(runId, run.nodes, questions, evidenceRefs, this.clock().toISOString())
       const aggregateRef = await writeAggregate(this.runtimeRoot, runId, aggregate)
-      run = { ...run, state: aggregate.status, openQuestionIds: aggregate.openQuestions.map((question) => question.questionId), aggregateResultRef: aggregateRef, updatedAt: this.clock().toISOString() }
+      run = { ...run, state: 'awaiting-owner', ownerGate: 'awaiting-owner:result-review', openQuestionIds: aggregate.openQuestions.map((question) => question.questionId), aggregateResultRef: aggregateRef, updatedAt: this.clock().toISOString() }
       await writeRun(this.runtimeRoot, run)
-      await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.run-completed', { status: aggregate.status, aggregateRef, openQuestionIds: run.openQuestionIds, runState: run.state })
+      if (aggregate.openQuestions.length > 0) {
+        await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.question-opened', { questionIds: run.openQuestionIds, runState: run.state })
+      } else {
+        await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.completion-proposed', { aggregateRef, aggregateHash: hashJson(aggregate), openQuestionIds: [], runState: run.state })
+      }
       return buildFrontdoorReturn(request, aggregate)
     } finally {
       await releaseRun(this.runtimeRoot, runId, claim.token)
@@ -225,7 +262,7 @@ export class FrontdoorOrchestrator {
     const completed = new Set(events.filter((event) => ['frontdoor.node-completed', 'frontdoor.node-failed'].includes(event.type)).map((event) => String(event.payload.nodeId)))
     const interrupted = new Set([...started].filter((nodeId) => !completed.has(nodeId)))
     const recovered = run.state === 'running' || interrupted.size > 0
-      ? { ...run, state: 'awaiting-owner' as const, nodes: run.nodes.map((node) => node.state === 'running' || interrupted.has(node.node.nodeId) ? { ...node, state: 'recovery-needed' as const, error: 'process interrupted before node completion' } : node), updatedAt: this.clock().toISOString() }
+      ? { ...run, state: 'awaiting-owner' as const, ownerGate: 'awaiting-owner:dispatch' as const, nodes: run.nodes.map((node) => node.state === 'running' || interrupted.has(node.node.nodeId) ? { ...node, state: 'recovery-needed' as const, error: 'process interrupted before node completion' } : node), updatedAt: this.clock().toISOString() }
       : run
     if (recovered !== run) {
       const claim = await readRunClaim(this.runtimeRoot, runId)
@@ -256,7 +293,7 @@ export class FrontdoorOrchestrator {
       await assertRunIntegrity(this.runtimeRoot, run, request, plan)
       assertRunEventConsistency(run, await readRunEvents(this.runtimeRoot, runId))
       if (['complete', 'partial', 'failed', 'cancelled'].includes(run.state)) return run
-      const stopped = { ...run, state: 'cancelled' as const, nodes: run.nodes.map((node) => ['queued', 'ready', 'running', 'recovery-needed', 'awaiting-question'].includes(node.state) ? { ...node, state: 'cancelled' as const, error: note } : node), updatedAt: this.clock().toISOString() }
+      const stopped = { ...run, state: 'cancelled' as const, ownerGate: 'stopped' as const, nodes: run.nodes.map((node) => ['queued', 'ready', 'running', 'recovery-needed', 'awaiting-question'].includes(node.state) ? { ...node, state: 'cancelled' as const, error: note } : node), updatedAt: this.clock().toISOString() }
       await writeRun(this.runtimeRoot, stopped)
       await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.run-stopped', { note, nodeRecords: stopped.nodes, runState: stopped.state })
       return stopped

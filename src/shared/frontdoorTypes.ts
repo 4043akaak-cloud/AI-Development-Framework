@@ -6,6 +6,27 @@ export type OrchestrationNodeState = 'queued' | 'ready' | 'running' | 'completed
 export type FrontdoorQuestionKind = 'clarification' | 'missing-context' | 'scope-change' | 'approval-required' | 'execution-blocked' | 'conflict'
 export type FrontdoorQuestionStatus = 'open' | 'answered' | 'dismissed'
 
+export type OwnerGate = 'intake' | 'completion-shape' | 'decomposition' | 'dispatch' | 'question' | 'result-review' | 'completion'
+export type OwnerDecision = 'clarify' | 'edit' | 'reject' | 'proceed' | 'approve' | 'approve-selected' | 'dispatch' | 'defer' | 'stop' | 'answer' | 'revise-plan' | 'accept' | 'follow-up' | 'continue' | 'complete'
+export type OwnerGateState = 'received' | `awaiting-owner:${OwnerGate}` | 'running' | 'completed' | 'stopped' | 'rejected' | 'blocked'
+
+export interface OwnerDecisionEnvelope {
+  decisionId: string
+  runId: string
+  requestId: string
+  gate: OwnerGate
+  nodeId?: string
+  decision: OwnerDecision
+  targetHash: string
+  approvedBy: string
+  decidedAt: string
+  allowedCapability?: Capability
+  dataPolicy?: string
+  expiresAt?: string
+  note?: string
+  answerRef?: string
+}
+
 export interface FrontdoorConstraints {
   allowedCapabilities: Capability[]
   maxNodes: number
@@ -84,6 +105,7 @@ export interface OrchestrationRun {
   aggregateResultRef?: string
   createdAt: string
   updatedAt: string
+  ownerGate?: OwnerGateState
 }
 
 export interface FrontdoorQuestion {
@@ -133,6 +155,15 @@ export interface FrontdoorReturn {
 export type FrontdoorEventType =
   | 'frontdoor.run-created'
   | 'frontdoor.approval-bound'
+  | 'frontdoor.owner-gate-opened'
+  | 'frontdoor.owner-decision-recorded'
+  | 'frontdoor.plan-revised'
+  | 'frontdoor.node-approved'
+  | 'frontdoor.question-answered'
+  | 'frontdoor.result-reviewed'
+  | 'frontdoor.completion-proposed'
+  | 'frontdoor.completion-approved'
+  | 'frontdoor.question-opened'
   | 'frontdoor.node-started'
   | 'frontdoor.node-completed'
   | 'frontdoor.node-failed'

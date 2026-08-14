@@ -55,6 +55,13 @@ function boundPacket(run: { runId: string; requestHash: string; planHash: string
   return packet(requestId, node_, fixtureMode, run)
 }
 
+async function approveDispatch(orchestrator: FrontdoorOrchestrator, runId: string, nodeIds: string[]): Promise<void> {
+  await orchestrator.approveIntake(runId)
+  await orchestrator.approveCompletionShape(runId)
+  await orchestrator.approveDecomposition(runId)
+  await orchestrator.approveDispatch(runId, nodeIds)
+}
+
 describe('Frontdoor orchestrator', () => {
   it('runs dependent Fake nodes and returns linked Result/Evidence references', async () => {
     const runtimeRoot = await mkdtemp(path.join(tmpdir(), 'adf-frontdoor-'))
@@ -62,6 +69,7 @@ describe('Frontdoor orchestrator', () => {
     const orchestrator = new FrontdoorOrchestrator({ relay })
     const planNodes = [node('proposal', 'fake-ai-a', 'proposal'), node('critic', 'fake-ai-b', 'critic', ['proposal'])]
     const run = await orchestrator.createRun(baseRequest, { planId: 'plan-e2e-001', requestId: baseRequest.requestId, version: 1, nodes: planNodes, aggregationPolicy: 'collect-all' })
+    await approveDispatch(orchestrator, run.runId, planNodes.map((node_) => node_.nodeId))
     const result = await orchestrator.executeApprovedRun(run.runId, { proposal: boundPacket(run, baseRequest.requestId, planNodes[0]), critic: boundPacket(run, baseRequest.requestId, planNodes[1]) })
     expect(result.status).toBe('complete')
     expect(result.childResultRefs).toHaveLength(2)
@@ -80,6 +88,7 @@ describe('Frontdoor orchestrator', () => {
     const orchestrator = new FrontdoorOrchestrator({ relay })
     const proposal = node('proposal', 'fake-ai-a', 'proposal')
     const run = await orchestrator.createRun(baseRequest, { planId: 'plan-question-001', requestId: baseRequest.requestId, version: 1, nodes: [proposal], aggregationPolicy: 'stop-on-blocking-question' })
+    await approveDispatch(orchestrator, run.runId, [proposal.nodeId])
     const result = await orchestrator.executeApprovedRun(run.runId, { proposal: boundPacket(run, baseRequest.requestId, proposal, 'partial') })
     expect(result.status).toBe('blocked-by-question')
     expect(result.openQuestions[0].blocking).toBe(true)
@@ -92,6 +101,7 @@ describe('Frontdoor orchestrator', () => {
     const proposal = node('proposal', 'fake-ai-a', 'proposal')
     const critic = node('critic', 'fake-ai-b', 'critic', ['proposal'])
     const run = await orchestrator.createRun(baseRequest, { planId: 'plan-question-stop-001', requestId: baseRequest.requestId, version: 1, nodes: [proposal, critic], aggregationPolicy: 'stop-on-blocking-question' })
+    await approveDispatch(orchestrator, run.runId, [proposal.nodeId, critic.nodeId])
     const result = await orchestrator.executeApprovedRun(run.runId, { proposal: boundPacket(run, baseRequest.requestId, proposal, 'partial'), critic: boundPacket(run, baseRequest.requestId, critic) })
     const saved = JSON.parse(await readFile(path.join(runtimeRoot, 'frontdoor-runs', run.runId, 'run.json'), 'utf8')) as { nodes: Array<{ node: { nodeId: string }; state: string; threadId?: string }> }
     expect(result.status).toBe('blocked-by-question')
@@ -108,6 +118,7 @@ describe('Frontdoor orchestrator', () => {
     const critic = node('critic', 'fake-ai-b', 'critic', ['proposal'])
     const aggregation = node('aggregation', 'fake-ai-b', 'critic', ['critic'])
     const run = await orchestrator.createRun({ ...baseRequest, constraints: { ...baseRequest.constraints, maxDepth: 3 } }, { planId: 'plan-failure-deep-001', requestId: baseRequest.requestId, version: 1, nodes: [proposal, critic, { ...aggregation, depth: 3 }], aggregationPolicy: 'collect-all' })
+    await approveDispatch(orchestrator, run.runId, [proposal.nodeId, critic.nodeId, aggregation.nodeId])
     const result = await orchestrator.executeApprovedRun(run.runId, { proposal: boundPacket(run, baseRequest.requestId, proposal, 'failed'), critic: boundPacket(run, baseRequest.requestId, critic), aggregation: boundPacket(run, baseRequest.requestId, aggregation) })
     const saved = JSON.parse(await readFile(path.join(runtimeRoot, 'frontdoor-runs', run.runId, 'run.json'), 'utf8')) as { nodes: Array<{ node: { nodeId: string }; state: string }> }
     expect(result.status).toBe('failed')
@@ -156,6 +167,7 @@ describe('Frontdoor orchestrator', () => {
     const orchestrator = new FrontdoorOrchestrator({ relay })
     const proposal = node('proposal', 'fake-ai-a', 'proposal')
     const run = await orchestrator.createRun(baseRequest, { planId: 'plan-claim-001', requestId: baseRequest.requestId, version: 1, nodes: [proposal], aggregationPolicy: 'collect-all' })
+    await approveDispatch(orchestrator, run.runId, [proposal.nodeId])
     const results = await Promise.allSettled([
       orchestrator.executeApprovedRun(run.runId, { proposal: boundPacket(run, baseRequest.requestId, proposal) }),
       orchestrator.executeApprovedRun(run.runId, { proposal: boundPacket(run, baseRequest.requestId, proposal) })
