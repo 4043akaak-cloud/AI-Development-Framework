@@ -56,6 +56,18 @@ export interface FrontdoorPrepareResult {
   reused: boolean
 }
 
+export interface FrontdoorPlanProposal {
+  plannerId: string
+  plannerVersion: string
+  requestId: string
+  requestHash: string
+  plan: DecompositionPlan
+  assumptions: string[]
+  risks: string[]
+  registrySnapshotHash: string
+  generatedAt: string
+}
+
 export interface FrontdoorRequest extends FrontdoorRequestInput {
   state: FrontdoorRequestState
   receivedAt: string

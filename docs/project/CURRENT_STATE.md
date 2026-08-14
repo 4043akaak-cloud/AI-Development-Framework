@@ -1,6 +1,6 @@
 # ADF Current State
 
-> Last updated: 2026-08-14（`ADF-FRONTDOOR-CLI-OWNER-LOOP-001`のDone承認・pushを反映。過去の個別Task記述には旧時点の記録が残る）
+> Last updated: 2026-08-14（`ADF-FRONTDOOR-PLANNER-PROPOSAL-001`の実装・実UI確認を反映。過去の個別Task記述には旧時点の記録が残る）
 
 ## 現在地
 
@@ -27,6 +27,8 @@ Local Runtime基盤は完成しているが、最終目標である「窓口AI �
 Anthropic APIキーの取得と外部AIへの実送信は引き続き保留である。External Adapterは接続経路（Electron main／IPC／preload／UI、認証状態preflight）まで実装済みだが、実送信は未実施である。`ADF-BOARD-PROJECTION-001`は、`open + turnCount > 0`の実機表示と`recovery-needed`のLive Board実機表示の2項目を、単体テストで検証済みかつDoneを妨げない残存リスクとして記録している。`ADF-TASK-PACKET-CLI-001`は、Task本文とExecution Summaryの将来的な乖離を検出できないことを残存リスクとして記録している。受信途中の中断と外部Adapter固有の冪等性は引き続き後続Taskで扱う。
 
 ## 次のTask
+
+[`ADF-FRONTDOOR-PLANNER-PROPOSAL-001`](../tasks/ADF-FRONTDOOR-PLANNER-PROPOSAL-001.md): `Verifying`。Request Intakeで手入力しているPlan JSONを、決定的Fake Plannerから安全な未承認Plan案として生成・表示し、Owner確認後だけ既存Prepareへ渡す経路を実装済み。最新ビルドのElectron Main／Rendererで`fake-planner/v1`のProposal／Critic案、Request hash／Plan hash、前提／リスクを表示確認し、Planner案だけでは新Run／Job／Thread／Dispatchが発生しないことを確認。Vitest 310/310、node/web/cli typecheck、Electron build、diff checkはPass。実AI Planner、外部送信、認証、動的Routing、Work Plane、正本自動書込みは対象外。最終Diff確認後にcommit／push予定。
 
 [`ADF-FRONTDOOR-CLI-OWNER-LOOP-001`](../tasks/ADF-FRONTDOOR-CLI-OWNER-LOOP-001.md): `Done`。既存Frontdoor Owner GateをCLIから一段ずつ操作する入口Task。`prepare`、`inspect`、前段Gate承認、Node単位Dispatch承認、`dispatch`、`answer`、`review-result`、`complete`、`stop`、`recover`を個別コマンドとして実装した。Vitest 301/301、node/web/cli typecheck、Electron build、compiled CLIのprepare→inspect、Fake Adapter一周を確認済み。実Provider、認証、Electron／MCP接続は後続へ分離し、commit `801ced8`をpush済み。
 

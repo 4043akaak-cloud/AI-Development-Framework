@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type JSX } from 'react'
-import type { FrontdoorInspection, FrontdoorPrepareInput, FrontdoorRunSummary, OwnerGate, OwnerGateState } from '../../shared/frontdoorTypes'
+import type { FrontdoorInspection, FrontdoorPlanProposal, FrontdoorPrepareInput, FrontdoorRequestInput, FrontdoorRunSummary, OwnerGate, OwnerGateState } from '../../shared/frontdoorTypes'
 
 const gateLabels: Record<OwnerGate, string> = {
   intake: 'Intake',
@@ -65,6 +65,8 @@ export default function FrontdoorPanel(): JSX.Element {
   const [intakeInScope, setIntakeInScope] = useState('frontdoor-request')
   const [intakeOutOfScope, setIntakeOutOfScope] = useState('external-send, write-canonical')
   const [intakePlanJson, setIntakePlanJson] = useState(defaultPlanJson)
+  const [intakeRequestId, setIntakeRequestId] = useState<string | null>(null)
+  const [plannerProposal, setPlannerProposal] = useState<FrontdoorPlanProposal | null>(null)
 
   const inspect = useCallback(async (runId: string): Promise<void> => {
     const result = await window.adfFrontdoor.inspect(runId)
@@ -103,25 +105,51 @@ export default function FrontdoorPanel(): JSX.Element {
     setBusy(false)
   }
 
+  const buildIntakeRequest = (requestId: string): FrontdoorRequestInput => ({
+    requestId,
+    source: 'owner',
+    objective: intakeObjective.trim(),
+    userInput: intakeUserInput.trim(),
+    projectRef: intakeProjectRef.trim(),
+    constraints: { allowedCapabilities: ['read', 'propose'], maxNodes: 8, maxDepth: 4, externalSend: false },
+    requestedOutput: intakeRequestedOutput.trim(),
+    contextReferences: listValue(intakeContext),
+    scope: { inScope: listValue(intakeInScope), outOfScope: listValue(intakeOutOfScope) }
+  })
+
+  const proposePlan = async (): Promise<void> => {
+    if (!intakeObjective.trim() || !intakeUserInput.trim()) return
+    setBusy(true)
+    setMessage(null)
+    const requestId = intakeRequestId ?? `frontdoor-ui-${Date.now().toString(36)}`
+    setIntakeRequestId(requestId)
+    try {
+      const result = await window.adfFrontdoor.proposePlan(buildIntakeRequest(requestId))
+      if (!result.ok) setMessage(result.error)
+      else {
+        const planInput = JSON.parse(JSON.stringify(result.value.plan)) as Record<string, unknown>
+        delete planInput.planHash
+        setIntakePlanJson(JSON.stringify(planInput, null, 2))
+        setPlannerProposal(result.value)
+        setMessage(`Planner案を生成しました（未承認）: ${result.value.plan.planHash}`)
+      }
+    } catch (error) {
+      setMessage(`Planner案の生成に失敗しました: ${String(error)}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const submitIntake = async (): Promise<void> => {
     if (!intakeObjective.trim() || !intakeUserInput.trim()) return
     setBusy(true)
     setMessage(null)
-    const requestId = `frontdoor-ui-${Date.now().toString(36)}`
+    const requestId = intakeRequestId ?? `frontdoor-ui-${Date.now().toString(36)}`
+    setIntakeRequestId(requestId)
     try {
       const plan = JSON.parse(intakePlanJson) as Record<string, unknown>
       const input: FrontdoorPrepareInput = {
-        request: {
-          requestId,
-          source: 'owner',
-          objective: intakeObjective.trim(),
-          userInput: intakeUserInput.trim(),
-          projectRef: intakeProjectRef.trim(),
-          constraints: { allowedCapabilities: ['read', 'propose'], maxNodes: 8, maxDepth: 4, externalSend: false },
-          requestedOutput: intakeRequestedOutput.trim(),
-          contextReferences: listValue(intakeContext),
-          scope: { inScope: listValue(intakeInScope), outOfScope: listValue(intakeOutOfScope) }
-        },
+        request: buildIntakeRequest(requestId),
         plan: { ...plan, requestId } as FrontdoorPrepareInput['plan']
       }
       const result = await window.adfFrontdoor.prepare(input)
@@ -165,7 +193,7 @@ export default function FrontdoorPanel(): JSX.Element {
         <button type="button" className="text-button" disabled={busy} onClick={() => void refresh()}>Refresh</button>
       </div>
 
-      {message && <p className="failure" role="alert">Frontdoor操作に失敗しました: {message}</p>}
+      {message && <p className="frontdoor-message" role="status">{message}</p>}
 
       <section className="frontdoor-card frontdoor-intake" aria-label="Frontdoor Request Intake">
         <div className="frontdoor-summary">
@@ -185,10 +213,19 @@ export default function FrontdoorPanel(): JSX.Element {
             <label className="frontdoor-field">Context参照（カンマ区切り）<input value={intakeContext} onChange={(event) => setIntakeContext(event.target.value)} disabled={busy} /></label>
             <label className="frontdoor-field">In scope（カンマ区切り）<input value={intakeInScope} onChange={(event) => setIntakeInScope(event.target.value)} disabled={busy} /></label>
             <label className="frontdoor-field">Out of scope（カンマ区切り）<input value={intakeOutOfScope} onChange={(event) => setIntakeOutOfScope(event.target.value)} disabled={busy} /></label>
-            <label className="frontdoor-field frontdoor-plan-field">Plan案 JSON（窓口AI／Ownerが確認して入力）<textarea value={intakePlanJson} onChange={(event) => setIntakePlanJson(event.target.value)} rows={12} disabled={busy} /></label>
+            <label className="frontdoor-field frontdoor-plan-field">Plan案 JSON（Planner案または窓口AI／Ownerが確認して入力）<textarea value={intakePlanJson} onChange={(event) => setIntakePlanJson(event.target.value)} rows={12} disabled={busy} /></label>
+            {plannerProposal && <div className="frontdoor-plan-proposal" aria-label="Planner Proposal">
+              <strong>未承認Planner案</strong>
+              <span>Planner: {plannerProposal.plannerId} / {plannerProposal.plannerVersion}</span>
+              <span>Request hash: {plannerProposal.requestHash}</span>
+              <span>Plan hash: {plannerProposal.plan.planHash}</span>
+              <span>前提: {plannerProposal.assumptions.join(' ／ ')}</span>
+              <span>リスク: {plannerProposal.risks.join(' ／ ')}</span>
+            </div>}
             <div className="frontdoor-intake-actions">
+              <button type="button" className="text-button" disabled={busy || !intakeObjective.trim() || !intakeUserInput.trim()} onClick={() => void proposePlan()}>Planner案を生成（未承認）</button>
               <button type="button" className="text-button" disabled={busy || !intakeObjective.trim() || !intakeUserInput.trim()} onClick={() => void submitIntake()}>Run案を作成（Intake待ち）</button>
-              <span className="turn-refs">Fake Adapter限定のPlan例。Prepareでは送信しません。</span>
+              <span className="turn-refs">Planner案の生成はRun／Job／Thread／送信を行いません。Run作成はOwner確認後に実行してください。</span>
             </div>
           </div>
         )}

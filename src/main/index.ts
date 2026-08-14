@@ -9,8 +9,9 @@ import { AnthropicMessagesTransport } from './jobLoop/anthropicTransport'
 import { OllamaLocalHttpTransport } from './jobLoop/ollamaTransport'
 import { ExternalConversationAdapter } from './jobLoop/externalAdapter'
 import { FakeCriticConversationAdapter, FakeProposalConversationAdapter } from './jobLoop/conversationAdapters'
-import { approveFrontdoorRun, answerFrontdoorQuestion, completeFrontdoorRun, dispatchFrontdoorRun, inspectFrontdoorRun, listFrontdoorRuns, prepareFrontdoorRun, recoverFrontdoorRun, reviewFrontdoorResult, stopFrontdoorRun } from './frontdoor/frontdoorService'
+import { approveFrontdoorRun, answerFrontdoorQuestion, completeFrontdoorRun, dispatchFrontdoorRun, inspectFrontdoorRun, listFrontdoorRuns, prepareFrontdoorRun, proposeFrontdoorPlan, recoverFrontdoorRun, reviewFrontdoorResult, stopFrontdoorRun } from './frontdoor/frontdoorService'
 import { FrontdoorOrchestrator } from './frontdoor/orchestrator'
+import { DeterministicFakePlanner } from './frontdoor/planner'
 
 let mainWindow: BrowserWindow | undefined
 
@@ -77,6 +78,7 @@ app.whenReady().then(async () => {
     ]
   })
   const frontdoor = new FrontdoorOrchestrator({ relay })
+  const planner = new DeterministicFakePlanner()
   ipcMain.handle('relay:list', () => listThreads(relay))
   ipcMain.handle('relay:get', (_event, threadId: unknown) => getThread(relay, threadId))
   ipcMain.handle('relay:approved-tasks', () => listApprovedTaskIds(relay))
@@ -93,6 +95,7 @@ app.whenReady().then(async () => {
   // Owner-explicit only: never invoked from startup, Thread selection, or any polling loop.
   ipcMain.handle('relay:ollama-readiness', () => ollamaReadiness())
   ipcMain.handle('frontdoor:list', () => listFrontdoorRuns(frontdoor))
+  ipcMain.handle('frontdoor:propose-plan', (_event, input: unknown) => proposeFrontdoorPlan(planner, input))
   ipcMain.handle('frontdoor:prepare', (_event, input: unknown) => prepareFrontdoorRun(frontdoor, input))
   ipcMain.handle('frontdoor:inspect', (_event, runId: unknown) => inspectFrontdoorRun(frontdoor, runId))
   ipcMain.handle('frontdoor:approve', (_event, input: unknown) => approveFrontdoorRun(frontdoor, input as Parameters<typeof approveFrontdoorRun>[1]))
