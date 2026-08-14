@@ -8,6 +8,8 @@ import { ConversationRelay } from '../src/main/jobLoop/relay'
 import { FrontdoorOrchestrator } from '../src/main/frontdoor/orchestrator'
 import { prepareFrontdoorRunOrThrow } from '../src/main/frontdoor/frontdoorPrepareService'
 import { prepareFrontdoorRun } from '../src/main/frontdoor/frontdoorService'
+import { ExternalConversationAdapter } from '../src/main/jobLoop/externalAdapter'
+import { OllamaLocalHttpTransport } from '../src/main/jobLoop/ollamaTransport'
 
 const scope = { inScope: ['frontdoor-request'], outOfScope: ['external-send', 'write-canonical'] }
 
@@ -87,5 +89,28 @@ describe('Frontdoor Request Intake boundary', () => {
     unregistered.plan.nodes[0].adapterId = 'ollama-local'
     expect((await prepareFrontdoorRun(fixture.orchestrator, unregistered)).ok).toBe(false)
     expect(await fixture.relay.listThreads()).toEqual([])
+  })
+
+  it('accepts a critic Plan when the Relay has one multi-role ollama-local Adapter registered', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'adf-frontdoor-prepare-ollama-'))
+    const transport = new OllamaLocalHttpTransport({ fetchImpl: async () => { throw new Error('readiness/send must not run during Prepare') } })
+    let relay!: ConversationRelay
+    relay = new ConversationRelay({
+      runtimeRoot: path.join(root, 'runtime'),
+      adapters: [new ExternalConversationAdapter('ollama-local', ['proposal', 'critic'], transport, {
+        authorise: (request) => relay.externalHooks('ollama-local', transport).authorise(request),
+        recordCall: (record) => relay.externalHooks('ollama-local', transport).recordCall(record),
+        now: () => new Date()
+      })],
+      externalTransports: { 'ollama-local': transport }
+    })
+    const orchestrator = new FrontdoorOrchestrator({ relay })
+    const critic = input({ requestId: 'frontdoor-prepare-ollama-critic-001' })
+    critic.plan.nodes[0] = { ...critic.plan.nodes[0], adapterId: 'ollama-local', role: 'critic' }
+
+    const result = await prepareFrontdoorRun(orchestrator, critic)
+
+    expect(result.ok).toBe(true)
+    expect(await relay.listThreads()).toEqual([])
   })
 })

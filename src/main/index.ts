@@ -70,7 +70,7 @@ app.whenReady().then(async () => {
         recordCall: (record) => relay.externalHooks(externalAdapterId, externalTransport).recordCall(record),
         now: () => new Date()
       }),
-      new ExternalConversationAdapter(ollamaAdapterId, 'proposal', ollamaTransport, {
+      new ExternalConversationAdapter(ollamaAdapterId, ['proposal', 'critic'], ollamaTransport, {
         authorise: (request) => relay.externalHooks(ollamaAdapterId, ollamaTransport).authorise(request),
         recordCall: (record) => relay.externalHooks(ollamaAdapterId, ollamaTransport).recordCall(record),
         now: () => new Date()

@@ -599,6 +599,30 @@ describe('ADF-OLLAMA-LIVE-CONNECTION-001 explicit dispatch to ollama-local (inje
     expect(thread.turns[0].resultEnvelopeRef).toBeTruthy()
   })
 
+  it('accepts the critic role through the same multi-role ollama-local Adapter instance', async () => {
+    const ollamaTransport = new OllamaLocalHttpTransport({
+      fetchImpl: async (input) => {
+        expect(input).toContain('/api/generate')
+        return new Response(JSON.stringify({ response: 'Ollama critic connection OK!', done: true }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+    })
+    let current: ConversationRelay
+    current = new ConversationRelay({
+      runtimeRoot: await mkdtemp(path.join(tmpdir(), 'adf-relay-')),
+      adapters: [
+        new ExternalConversationAdapter('ollama-local', ['proposal', 'critic'], ollamaTransport, {
+          authorise: (request) => current.externalHooks('ollama-local', ollamaTransport).authorise(request),
+          recordCall: (record) => current.externalHooks('ollama-local', ollamaTransport).recordCall(record),
+          now: () => new Date()
+        })
+      ]
+    })
+    const thread0 = await current.startThread(explicitAdapterPacket('ollama-local', 'critic'))
+    const thread = await current.continueJob(thread0.threadId, 'ollama-local')
+
+    expect(thread.turns[0]).toMatchObject({ adapterId: 'ollama-local', role: 'critic', status: 'success', content: 'Ollama critic connection OK!' })
+  })
+
   it('rejects the explicit dispatch when the Thread\'s approved Plan names a different adapter — the exact Owner-flagged bug (Packet approved fake-ai-a, Thread dispatched to ollama-local)', async () => {
     const ollamaTransport = new OllamaLocalHttpTransport({ fetchImpl: async () => { throw new Error('must not be called: dispatch must be rejected before any send') } })
     let current: ConversationRelay

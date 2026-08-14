@@ -39,12 +39,19 @@ export interface AdapterAcceptance {
  */
 export interface ConversationAdapter {
   readonly adapterId: string
+  /** Primary role kept for backward compatibility with single-role adapters. */
   readonly role: AdapterRole
+  /** Optional additional roles supported by the same provider-neutral Adapter instance. */
+  readonly supportedRoles?: readonly AdapterRole[]
   send(request: AdapterRequest): Promise<AdapterAcceptance>
   getState(acceptance: AdapterAcceptance): Promise<AdapterRunState>
   receive(acceptance: AdapterAcceptance): Promise<RelayTurnPayload>
   /** Aborts an in-flight send. Local in-process Adapters have nothing to abort and omit it. */
   cancel?(dispatchId: string, reason?: string): boolean
+}
+
+export function adapterSupportsRole(adapter: ConversationAdapter, role: AdapterRole): boolean {
+  return (adapter.supportedRoles ?? [adapter.role]).includes(role)
 }
 
 export class AdapterProtocolError extends Error {

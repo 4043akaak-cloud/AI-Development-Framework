@@ -12,6 +12,7 @@ import { buildExplicitAdapterPlan } from '../src/main/jobLoop/adapterRegistry'
 import { hashJson } from '../src/main/jobLoop/hash'
 import { FrontdoorOrchestrator } from '../src/main/frontdoor/orchestrator'
 import { recordRunEvent } from '../src/main/frontdoor/ledger'
+import { readFrontdoorEvents, validateFrontdoorEventChain } from '../src/main/frontdoor/eventLedger'
 
 const baseScope = { inScope: ['proposal', 'critique', 'aggregation'], outOfScope: ['external-send', 'write-canonical', 'commit'] }
 const baseRequest: FrontdoorRequestInput = {
@@ -206,7 +207,7 @@ describe('ADF-FRONTDOOR-REAL-ADAPTER-DISPATCH-001', () => {
       }
     })
     let relay!: ConversationRelay
-    const adapter = new ExternalConversationAdapter('ollama-local', 'proposal', transport, {
+    const adapter = new ExternalConversationAdapter('ollama-local', ['proposal', 'critic'], transport, {
       authorise: (request) => relay.externalHooks('ollama-local', transport).authorise(request),
       recordCall: (record) => relay.externalHooks('ollama-local', transport).recordCall(record),
       now: () => new Date('2026-08-14T00:00:00.000Z')
@@ -230,6 +231,51 @@ describe('ADF-FRONTDOOR-REAL-ADAPTER-DISPATCH-001', () => {
     expect(calls).toEqual(['http://127.0.0.1:11434/api/tags', 'http://127.0.0.1:11434/api/generate'])
     expect((await relay.listThreads())).toHaveLength(1)
     expect(result.evidenceRefs).toHaveLength(1)
+    await expect(orchestrator.getRun(run.runId)).resolves.toMatchObject({ state: 'awaiting-owner', ownerGate: 'awaiting-owner:result-review' })
+  })
+
+  it('dispatches dependent Proposal and Critic Nodes through the same multi-role Ollama Adapter', async () => {
+    const runtimeRoot = await mkdtemp(path.join(tmpdir(), 'adf-frontdoor-ollama-two-role-'))
+    const { relay, calls } = ollamaRelay(runtimeRoot, true)
+    const orchestrator = new FrontdoorOrchestrator({ relay })
+    const proposal = node('proposal', 'ollama-local', 'proposal')
+    const critic = node('critic', 'ollama-local', 'critic', ['proposal'])
+    const run = await orchestrator.createRun(baseRequest, { planId: 'plan-ollama-two-role-001', requestId: baseRequest.requestId, version: 1, nodes: [proposal, critic], aggregationPolicy: 'collect-all' })
+    await approveDispatch(orchestrator, run.runId, [proposal.nodeId, critic.nodeId])
+
+    const result = await orchestrator.executeApprovedRun(run.runId, {
+      proposal: boundPacket(run, baseRequest.requestId, proposal),
+      critic: boundPacket(run, baseRequest.requestId, critic)
+    })
+
+    expect(result.status).toBe('complete')
+    expect(result.childResultRefs).toHaveLength(2)
+    expect(calls).toEqual([
+      'http://127.0.0.1:11434/api/tags',
+      'http://127.0.0.1:11434/api/generate',
+      'http://127.0.0.1:11434/api/generate'
+    ])
+    const criticEnvelope = JSON.parse(await readFile(path.join(runtimeRoot, result.childResultRefs[1]), 'utf8')) as { role: string; taskId: string; jobId: string; inputHash: string; dependencyResults?: Array<{ runId: string; nodeId: string; resultRef: string; resultHash: string }> }
+    expect(criticEnvelope.role).toBe('critic')
+    expect(criticEnvelope.dependencyResults?.[0]).toMatchObject({ runId: run.runId, nodeId: 'proposal', resultRef: result.childResultRefs[0] })
+    const saved = JSON.parse(await readFile(path.join(runtimeRoot, 'frontdoor-runs', run.runId, 'run.json'), 'utf8')) as { nodes: Array<{ node: { nodeId: string; adapterId: string; role: string }; state: string; childJobId?: string; threadId?: string; childInputHash?: string; resultRef?: string; resultHash?: string }> }
+    const savedProposal = saved.nodes.find((record) => record.node.nodeId === 'proposal')
+    const savedCritic = saved.nodes.find((record) => record.node.nodeId === 'critic')
+    expect(savedProposal).toMatchObject({ state: 'completed', node: { adapterId: 'ollama-local', role: 'proposal' }, resultRef: result.childResultRefs[0] })
+    expect(savedCritic).toMatchObject({ state: 'completed', node: { adapterId: 'ollama-local', role: 'critic' }, resultRef: result.childResultRefs[1], resultHash: hashJson(criticEnvelope) })
+    if (!savedCritic?.childJobId || !savedCritic.threadId) throw new Error('completed Critic record is missing Job or Thread binding')
+    expect(savedCritic.childJobId).toBe(criticEnvelope.jobId)
+    expect(savedCritic.childInputHash).toBe(criticEnvelope.inputHash)
+    const criticThread = JSON.parse(await readFile(path.join(runtimeRoot, 'threads', savedCritic.threadId, 'thread.json'), 'utf8')) as { jobId: string; turns: Array<{ adapterId: string; role: string; orchestrationRunId?: string; resultEnvelopeHash?: string }> }
+    expect(criticThread.jobId).toBe(criticEnvelope.jobId)
+    expect(criticThread.turns[0]).toMatchObject({ adapterId: 'ollama-local', role: 'critic', orchestrationRunId: run.runId, resultEnvelopeHash: hashJson(criticEnvelope) })
+    const evidence = JSON.parse(await readFile(path.join(runtimeRoot, 'threads', savedCritic.threadId, 'evidence-links.json'), 'utf8')) as { jobId: string; turns: Array<{ adapterId: string; role: string; resultEnvelopeRef: string }> }
+    expect(evidence).toMatchObject({ jobId: criticEnvelope.jobId, turns: [{ adapterId: 'ollama-local', role: 'critic', resultEnvelopeRef: result.childResultRefs[1] }] })
+    const criticCalls = (await readFile(path.join(runtimeRoot, 'threads', savedCritic.threadId, 'external-calls.jsonl'), 'utf8')).split('\n').filter(Boolean).map((line) => JSON.parse(line) as { adapterId: string; role: string; threadId: string; jobId: string })
+    expect(criticCalls).toEqual(expect.arrayContaining([expect.objectContaining({ adapterId: 'ollama-local', role: 'critic', threadId: savedCritic.threadId, jobId: criticEnvelope.jobId })]))
+    const frontdoorEvents = await readFrontdoorEvents(runtimeRoot, run.runId)
+    validateFrontdoorEventChain(frontdoorEvents, run.runId)
+    expect(frontdoorEvents.some((event) => event.type === 'frontdoor.node-completed' && event.payload.nodeId === 'critic')).toBe(true)
     await expect(orchestrator.getRun(run.runId)).resolves.toMatchObject({ state: 'awaiting-owner', ownerGate: 'awaiting-owner:result-review' })
   })
 

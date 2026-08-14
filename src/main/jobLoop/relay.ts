@@ -5,7 +5,7 @@ import type { ConversationThread, ConversationTurn, OwnerAction, RecoveryInfo, R
 import { checkAdapterPlanMembership, getAdapterProfile } from './adapterRegistry'
 import { canTransition, validateApprovedTask } from './contracts'
 import type { AdapterAcceptance, AdapterDependencyResult, ConversationAdapter } from './conversationAdapters'
-import { FakeCriticConversationAdapter, FakeProposalConversationAdapter } from './conversationAdapters'
+import { adapterSupportsRole, FakeCriticConversationAdapter, FakeProposalConversationAdapter } from './conversationAdapters'
 import { hashJson } from './hash'
 import { appendEvent, ensureDir, readEvents, readJson, removeFile, writeJsonAtomic, writeJsonExclusive } from './ledger'
 import type { ExternalPreflight } from '../../shared/externalAdapterTypes'
@@ -104,7 +104,7 @@ export class ConversationRelay {
   /** Frontdoor Prepare uses this to reject a Registry-only Adapter that this Relay cannot execute. */
   assertAdapterRegistered(adapterId: string, role: AdapterRole): void {
     const adapter = this.resolveAdapter(adapterId)
-    if (adapter.role !== role) throw new ThreadRejectedError([`adapter ${adapterId} is registered for role ${adapter.role}, not ${role}`])
+    if (!adapterSupportsRole(adapter, role)) throw new ThreadRejectedError([`adapter ${adapterId} is registered for role(s) ${(adapter.supportedRoles ?? [adapter.role]).join(', ')}, not ${role}`])
   }
 
   /**
@@ -150,7 +150,7 @@ export class ConversationRelay {
   /** Automatic role routing never reaches outside this machine: an external Adapter must be named. */
   private adapterForRole(role: AdapterRole): ConversationAdapter {
     for (const adapter of this.adapters.values()) {
-      if (adapter.role !== role) continue
+      if (!adapterSupportsRole(adapter, role)) continue
       const profile = getAdapterProfile(adapter.adapterId)
       if (profile.status !== 'available') continue
       if (profile.dataPolicy !== 'local-only') continue
@@ -312,8 +312,8 @@ export class ConversationRelay {
 
     const expectedRole = this.nextRole(thread)
     const adapter = adapterId ? this.resolveAdapter(adapterId) : this.adapterForRole(expectedRole)
-    if (adapter.role !== expectedRole) throw new ThreadRejectedError([`turn ${thread.turns.length} requires role ${expectedRole}, but ${adapter.adapterId} is ${adapter.role}`])
-    if (adapterId) this.assertExplicitDispatchIsApprovedPlan(thread, adapterId, adapter.role)
+    if (!adapterSupportsRole(adapter, expectedRole)) throw new ThreadRejectedError([`turn ${thread.turns.length} requires role ${expectedRole}, but ${adapter.adapterId} supports ${(adapter.supportedRoles ?? [adapter.role]).join(', ')}`])
+    if (adapterId) this.assertExplicitDispatchIsApprovedPlan(thread, adapterId, expectedRole)
 
     const parent = lastTurn(thread)
     const sequence = thread.turns.length
@@ -331,7 +331,7 @@ export class ConversationRelay {
       taskId: thread.taskId,
       jobId: thread.jobId,
       adapterId: adapter.adapterId,
-      role: adapter.role,
+      role: expectedRole,
       sequence,
       attempt,
       ...(parent ? { respondsToTurnId: parent.turnId, respondsToHash: turnHash(parent) } : {}),
@@ -342,7 +342,7 @@ export class ConversationRelay {
     }
 
     // Recorded before the send so an interruption between send and persistence stays visible.
-    await this.record(threadId, 'relay.dispatch-intent', { dispatchId, adapterId: adapter.adapterId, role: adapter.role, sequence, attempt })
+    await this.record(threadId, 'relay.dispatch-intent', { dispatchId, adapterId: adapter.adapterId, role: expectedRole, sequence, attempt })
 
     let acceptance: AdapterAcceptance
     this.inFlight.set(threadId, { dispatchId, adapterId: adapter.adapterId })
@@ -353,7 +353,7 @@ export class ConversationRelay {
         threadId,
         jobId: thread.jobId,
         title: thread.title,
-        role: adapter.role,
+        role: expectedRole,
         sequence,
         priorTurns: thread.turns,
         attempt,
@@ -482,8 +482,13 @@ export class ConversationRelay {
   async preflightExternalSend(threadId: string, adapterId: string, transport?: ExternalTransport): Promise<ExternalPreflight> {
     const thread = await this.getConversationState(threadId)
     const profile = getAdapterProfile(adapterId)
-    // The role comes from the registered Adapter instance, never from the profile's role list.
-    const adapterRole = this.resolveAdapter(adapterId).role
+    // Preflight must use exactly the role the next dispatch requires. Do not fall back to an
+    // Adapter's primary role: that would show a passing Proposal preflight for a Critic dispatch
+    // that the actual send gate will reject.
+    const adapter = this.resolveAdapter(adapterId)
+    const nextRole = this.nextRole(thread)
+    this.assertAdapterRegistered(adapterId, nextRole)
+    const adapterRole = nextRole
     const events = await this.readThreadEvents(threadId)
     const attempt = this.attemptForSequence(events, thread.turns.length)
     const packet = buildSyntheticPacket(thread, adapterRole, attempt, this.now())
