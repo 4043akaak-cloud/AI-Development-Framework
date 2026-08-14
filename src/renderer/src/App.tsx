@@ -5,6 +5,7 @@ import { boardSnapshot } from './data/boardSnapshot'
 import { registeredProjectFor, registeredProjects } from '../../shared/projectRegistry'
 import { liveLaneCounts, projectLiveBoard, type LiveBoardEntry } from './boardProjection'
 import ThreadPanel from './ThreadPanel'
+import FrontdoorPanel from './FrontdoorPanel'
 import './styles.css'
 
 const lanes: ReadonlyArray<{ id: BoardLane; label: string }> = [
@@ -167,6 +168,8 @@ export default function App(): JSX.Element {
           </div>
         )}
       </section>
+
+      <FrontdoorPanel />
 
       <section className="legacy-board-wrapper" aria-label="Legacy Snapshot">
         <div className="thread-heading">

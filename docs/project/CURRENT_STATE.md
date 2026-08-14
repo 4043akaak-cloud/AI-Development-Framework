@@ -10,7 +10,7 @@ ADFの製品境界は、Project進捗管理とAI間の受け渡しに限定す�
 
 ## 現在のMVP到達点
 
-**ADFのローカルMVPコアループは完成している。** このPC内で、承認済みTaskに紐づいたThread上で複数のFake AIが議論し、Ownerが結果を確認・継続・承認できる。送信後のプロセス終了を起動時に検出し、Ownerが再送・失敗記録・停止を選べるRecoveryも完了している。Runtime LedgerのThread状態を読み取り専用でBoardへ反映するLive Board（`ADF-BOARD-PROJECTION-001`）と、Execution Summary方式でOwner承認済みTask Packetを生成するCLI（`ADF-TASK-PACKET-CLI-001`）も実装済みである。`ADF-CONVERSATION-RELAY-001`、`ADF-RELAY-RECOVERY-001`、`ADF-BOARD-PROJECTION-001`、`ADF-FRONTDOOR-LEDGER-EVENT-SOURCING-001`をDoneとし、Owner Gate契約を`e38e31c`として`origin/codex/adf-pilot-governance`へpush済みである。次TaskのCLI実装・検証差分は未commitである。
+**ADFのローカルMVPコアループは完成している。** このPC内で、承認済みTaskに紐づいたThread上で複数のFake AIが議論し、Ownerが結果を確認・継続・承認できる。送信後のプロセス終了を起動時に検出し、Ownerが再送・失敗記録・停止を選べるRecoveryも完了している。Runtime LedgerのThread状態を読み取り専用でBoardへ反映するLive Board（`ADF-BOARD-PROJECTION-001`）と、Execution Summary方式でOwner承認済みTask Packetを生成するCLI（`ADF-TASK-PACKET-CLI-001`）も実装済みである。`ADF-CONVERSATION-RELAY-001`、`ADF-RELAY-RECOVERY-001`、`ADF-BOARD-PROJECTION-001`、`ADF-FRONTDOOR-LEDGER-EVENT-SOURCING-001`をDoneとし、Owner Gate契約を`e38e31c`、Frontdoor CLIを`801ced8`／`5a62a9a`として`origin/codex/adf-pilot-governance`へpush済みである。
 
 ## 最終目標への現在地
 
@@ -29,6 +29,8 @@ Anthropic APIキーの取得と外部AIへの実送信は引き続き保留で�
 ## 次のTask
 
 [`ADF-FRONTDOOR-CLI-OWNER-LOOP-001`](../tasks/ADF-FRONTDOOR-CLI-OWNER-LOOP-001.md): `Done`。既存Frontdoor Owner GateをCLIから一段ずつ操作する入口Task。`prepare`、`inspect`、前段Gate承認、Node単位Dispatch承認、`dispatch`、`answer`、`review-result`、`complete`、`stop`、`recover`を個別コマンドとして実装した。Vitest 301/301、node/web/cli typecheck、Electron build、compiled CLIのprepare→inspect、Fake Adapter一周を確認済み。実Provider、認証、Electron／MCP接続は後続へ分離し、commit `801ced8`をpush済み。
+
+[`ADF-FRONTDOOR-UI-IPC-001`](../tasks/ADF-FRONTDOOR-UI-IPC-001.md): `Verifying`。完了済みFrontdoor Service／Event Ledger／CLI契約をElectron UI／IPCへ接続し、OwnerがRunのInspect、Gate承認、Dispatch、Question回答、Result Review、Completion、Stop、Recoveryを一段ずつ操作できる薄い入口を実装した。Main Serviceが既存Orchestrator・承認済みPacket・Event Ledgerを正本として再検証し、Rendererからの任意Packet書込みや自動承認／自動Dispatchは行わない。Vitest 303/303、node/web/cli typecheck、Electron build、diff checkはPass。開発ElectronでRun一覧・選択・Inspectを確認済み。Owner意思決定を伴う実機Gateボタン操作は自動実行せず、Fake Adapter限定の一周はIPC統合テストで確認した。Request生成、Planner、自動分解、実Provider、Work Planeは後続へ分離する。commit・pushは未実施。
 
 [`ADF-FRONTDOOR-OWNER-GATE-001`](../tasks/ADF-FRONTDOOR-OWNER-GATE-001.md): `Done`（2026-08-14、commit `e38e31c`）。Ownerが依頼から完成形まで各段階で確認・修正・承認・停止できる共通Gate契約をFrontdoor ServiceとEvent Ledgerへ追加した。Intake／Completion Shape／Decomposition／Dispatch／Question／Result Review／CompletionのDecisionをtarget hashへ束縛し、承認なしDispatch、自動回答、Result自動採用、承認なしCompletion、別Run由来AggregateのReviewを拒否する。Vitest 293/293、node/web/cli typecheck、Electron build、diff checkはPass。CLI／Electron／MCP入口、実Provider送信、認証は後続Task。
 

@@ -2,6 +2,7 @@ import type { OpenSourceResult } from '../../shared/boardTypes'
 import type { ConversationThread, OwnerAction, RecoveryAction, RelayResult, ThreadSummary } from '../../shared/threadTypes'
 import type { ExternalPreflight, OllamaReadiness } from '../../shared/externalAdapterTypes'
 import type { AdapterProfile } from '../../shared/jobLoopTypes'
+import type { FrontdoorInspection, FrontdoorReturn, FrontdoorRunSummary, OwnerDecisionEnvelope, OwnerGate, OrchestrationRun } from '../../shared/frontdoorTypes'
 
 declare global {
   interface Window {
@@ -24,6 +25,17 @@ declare global {
       listExternalAdapters: () => Promise<RelayResult<AdapterProfile[]>>
       // Owner-explicit only: never call from mount, Thread selection, or a polling loop.
       ollamaReadiness: () => Promise<RelayResult<OllamaReadiness>>
+    }
+    adfFrontdoor: {
+      list: () => Promise<RelayResult<FrontdoorRunSummary[]>>
+      inspect: (runId: string) => Promise<RelayResult<FrontdoorInspection>>
+      approve: (input: { runId: string; gate: OwnerGate; approvedBy: string; note?: string; nodeIds?: string[] }) => Promise<RelayResult<OwnerDecisionEnvelope>>
+      dispatch: (runId: string) => Promise<RelayResult<FrontdoorReturn>>
+      answer: (input: { runId: string; questionId: string; approvedBy: string; answerRef?: string; note?: string }) => Promise<RelayResult<OwnerDecisionEnvelope>>
+      reviewResult: (input: { runId: string; approvedBy: string; decision: 'accept' | 'follow-up' | 'reject'; note?: string }) => Promise<RelayResult<OwnerDecisionEnvelope>>
+      complete: (input: { runId: string; approvedBy: string; note?: string }) => Promise<RelayResult<OrchestrationRun>>
+      stop: (input: { runId: string; approvedBy: string; note?: string }) => Promise<RelayResult<OrchestrationRun>>
+      recover: (runId: string) => Promise<RelayResult<OrchestrationRun>>
     }
   }
 }

@@ -423,6 +423,17 @@ describe('ADF-EXTERNAL-ADAPTER-001 Electron wiring', () => {
       'relay:external-adapters',
       'relay:ollama-readiness'
     ])
+    expect(channels.filter((channel) => channel.startsWith('frontdoor:'))).toEqual([
+      'frontdoor:list',
+      'frontdoor:inspect',
+      'frontdoor:approve',
+      'frontdoor:dispatch',
+      'frontdoor:answer',
+      'frontdoor:review-result',
+      'frontdoor:complete',
+      'frontdoor:stop',
+      'frontdoor:recover'
+    ])
   })
 
   it('rejects a malformed threadId or adapterId before touching the Thread', async () => {

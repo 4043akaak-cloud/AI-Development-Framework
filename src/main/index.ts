@@ -9,6 +9,8 @@ import { AnthropicMessagesTransport } from './jobLoop/anthropicTransport'
 import { OllamaLocalHttpTransport } from './jobLoop/ollamaTransport'
 import { ExternalConversationAdapter } from './jobLoop/externalAdapter'
 import { FakeCriticConversationAdapter, FakeProposalConversationAdapter } from './jobLoop/conversationAdapters'
+import { approveFrontdoorRun, answerFrontdoorQuestion, completeFrontdoorRun, dispatchFrontdoorRun, inspectFrontdoorRun, listFrontdoorRuns, recoverFrontdoorRun, reviewFrontdoorResult, stopFrontdoorRun } from './frontdoor/frontdoorService'
+import { FrontdoorOrchestrator } from './frontdoor/orchestrator'
 
 let mainWindow: BrowserWindow | undefined
 
@@ -74,6 +76,7 @@ app.whenReady().then(async () => {
       })
     ]
   })
+  const frontdoor = new FrontdoorOrchestrator({ relay })
   ipcMain.handle('relay:list', () => listThreads(relay))
   ipcMain.handle('relay:get', (_event, threadId: unknown) => getThread(relay, threadId))
   ipcMain.handle('relay:approved-tasks', () => listApprovedTaskIds(relay))
@@ -89,6 +92,15 @@ app.whenReady().then(async () => {
   ipcMain.handle('relay:external-adapters', () => listExternalAdapters(relay))
   // Owner-explicit only: never invoked from startup, Thread selection, or any polling loop.
   ipcMain.handle('relay:ollama-readiness', () => ollamaReadiness())
+  ipcMain.handle('frontdoor:list', () => listFrontdoorRuns(frontdoor))
+  ipcMain.handle('frontdoor:inspect', (_event, runId: unknown) => inspectFrontdoorRun(frontdoor, runId))
+  ipcMain.handle('frontdoor:approve', (_event, input: unknown) => approveFrontdoorRun(frontdoor, input as Parameters<typeof approveFrontdoorRun>[1]))
+  ipcMain.handle('frontdoor:dispatch', (_event, runId: unknown) => dispatchFrontdoorRun(frontdoor, runId))
+  ipcMain.handle('frontdoor:answer', (_event, input: unknown) => answerFrontdoorQuestion(frontdoor, input as Parameters<typeof answerFrontdoorQuestion>[1]))
+  ipcMain.handle('frontdoor:review-result', (_event, input: unknown) => reviewFrontdoorResult(frontdoor, input as Parameters<typeof reviewFrontdoorResult>[1]))
+  ipcMain.handle('frontdoor:complete', (_event, input: unknown) => completeFrontdoorRun(frontdoor, input as Parameters<typeof completeFrontdoorRun>[1]))
+  ipcMain.handle('frontdoor:stop', (_event, input: unknown) => stopFrontdoorRun(frontdoor, input as Parameters<typeof stopFrontdoorRun>[1]))
+  ipcMain.handle('frontdoor:recover', (_event, runId: unknown) => recoverFrontdoorRun(frontdoor, runId))
 
   // One pass, before the window exists, so the renderer cannot act on a Thread mid-scan.
   await scanForRecovery(relay)

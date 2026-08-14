@@ -166,6 +166,18 @@ export interface FrontdoorInspection {
   nodeTargetHashes: Record<string, string>
 }
 
+export interface FrontdoorRunSummary {
+  runId: string
+  requestId: string
+  objective: string
+  state: OrchestrationState
+  ownerGate?: OwnerGateState
+  updatedAt: string
+  nodeCount: number
+  openQuestionCount: number
+  packetsReady: boolean
+}
+
 export type FrontdoorEventType =
   | 'frontdoor.run-created'
   | 'frontdoor.approval-bound'
