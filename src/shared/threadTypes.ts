@@ -38,11 +38,31 @@ export interface ConversationTurn {
   respondsToHash?: string
   content: string
   status: TurnStatus
+  questions?: AdapterQuestionDraft[]
+  dependencyResults?: AdapterDependencyResult[]
+  orchestrationRunId?: string
   resultEnvelopeRef?: string
   /** Hash of the stored Result Envelope, re-checked before the Owner can approve. */
   resultEnvelopeHash?: string
   errorRef?: string
   createdAt: string
+}
+
+/** Optional structured questions returned by an Adapter. The Frontdoor layer owns aggregation. */
+export interface AdapterQuestionDraft {
+  kind: 'clarification' | 'missing-context' | 'scope-change' | 'approval-required' | 'execution-blocked' | 'conflict'
+  text: string
+  required?: boolean
+  blocking?: boolean
+  options?: string[]
+}
+
+export interface AdapterDependencyResult {
+  runId: string
+  nodeId: string
+  resultRef: string
+  resultHash: string
+  status: string
 }
 
 export interface OwnerDecisionRecord {
@@ -94,6 +114,8 @@ export interface RelayDispatchHandle {
   sentAt: string
   /** Display-only deadline. Passing it never triggers an automatic action. */
   expiresAt: string
+  dependencyResults?: AdapterDependencyResult[]
+  orchestrationRunId?: string
 }
 
 export interface RelayTurnPayload {
@@ -103,6 +125,9 @@ export interface RelayTurnPayload {
   summary?: string
   verification?: Array<{ name: string; status: 'pass' | 'fail' | 'not-run'; reason?: string }>
   risks?: string[]
+  questions?: AdapterQuestionDraft[]
+  dependencyResults?: AdapterDependencyResult[]
+  orchestrationRunId?: string
   errorRef?: string
   /** Lets an Adapter record `timeout` / `cancelled`, which a Turn status cannot express. */
   envelopeStatus?: AdapterRunStatus

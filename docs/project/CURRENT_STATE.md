@@ -1,6 +1,6 @@
 # ADF Current State
 
-> Last updated: 2026-08-13（`ADF-OLLAMA-FIRST-CLASS-ADAPTER-001`のみ反映。それ以前の項目は前回更新時点のまま）
+> Last updated: 2026-08-14（`ADF-FRONTDOOR-LEDGER-EVENT-SOURCING-001`の実装・検証を追記。過去の個別Task記述には旧時点の記録が残る）
 
 ## 現在地
 
@@ -12,13 +12,23 @@ ADFの製品境界は、Project進捗管理とAI間の受け渡しに限定す�
 
 **ADFのローカルMVPコアループは完成している。** このPC内で、承認済みTaskに紐づいたThread上で複数のFake AIが議論し、Ownerが結果を確認・継続・承認できる。送信後のプロセス終了を起動時に検出し、Ownerが再送・失敗記録・停止を選べるRecoveryも完了している。Runtime LedgerのThread状態を読み取り専用でBoardへ反映するLive Board（`ADF-BOARD-PROJECTION-001`）と、Execution Summary方式でOwner承認済みTask Packetを生成するCLI（`ADF-TASK-PACKET-CLI-001`）も実装済みである。`ADF-CONVERSATION-RELAY-001`、`ADF-RELAY-RECOVERY-001`、`ADF-BOARD-PROJECTION-001`をDoneとし、最新commit `932357c`として`origin/codex/adf-pilot-governance`へpush済みである（`ADF-TASK-PACKET-CLI-001`のコード・ドキュメントは同branchのワーキングツリーにあり、未push）。
 
+## 最終目標への現在地
+
+Local Runtime基盤は完成しているが、最終目標である「窓口AI → ADF → 得意分野ごとの複数AI → ADF → 窓口AI」のEnd-to-End協調は未完成である。`ADF-FRONTDOOR-ORCHESTRATION-001`を2026-08-14に開始し、Fake Adapter限定でFrontdoorRequest、分解DAG、Node状態機械、Result / Question集約、FrontdoorReturnを一周させた。続く`ADF-FRONTDOOR-LEDGER-EVENT-SOURCING-001`では`events.jsonl`を正本とするtyped hash-chain Ledger、決定的Replay、atomic Bundle、claim安全性を実装し、現在`Verifying`である。MCP / IPC入口、Work Plane、実装AI、独立Review Job、実Providerの自動選定は後続Taskとする。
+
+本Taskの停止ルール: 同じ原因による検証失敗が2回連続、または別原因でも3回続いた場合、Codexは実装を止めてProject Ownerへ確認する。Scope拡張、新規依存、外部送信、認証、費用、Work Plane書込み、既存安全境界の弱体化が必要になった場合も停止する。
+
 **完了済み**: `ADF-BOARD-PROJECTION-001`、`ADF-JOB-LOOP-001`（Legacy化を受諾してDone。現行Liveなのは`registerApprovedJob`等の共通登録経路のみで、旧Fake討論・旧`projectBoard`/`readBoard`・`JobRuntime`直接実行経路は現行Electronから到達不能なLegacyコードとして記録）、`ADF-DISPATCH-ACK-001`（Dispatch Packet生成とACK完全照合が`registerApprovedJob`経由で現行アプリのLive機能。JOB-LOOP-001のような広範なLegacy化ではない）、`ADF-CLAUDE-ADAPTER-001`（**複数AI Adapter共通基盤は完成。ただし実AI接続は未実施。** Adapter Registry・Routing plan生成/hash検証・Result Envelope検証はLive、旧`adapter-results.json`/`buildResult`/`runApprovedTask`経由の独立Result記録はLegacy）、`ADF-TASK-PACKET-CLI-001`（**ローカルMVPの入口であるApproved Task Packet生成が完了した。** Execution Summaryは固定JSONブロック方式で確定し、3 Task文書で抽出・hash計算・`validateApprovedTask`がPass。既存Packetは要約fixtureであり、既存hashとの一致は必須にしない。既存Packetの自動上書き・自動再承認は行わない）、およびローカルMVPのThread／Fake AI／Owner Review／Recovery／Live Boardの一連の機能。
 
-**残存Verifying**: `ADF-EXTERNAL-ADAPTER-001`のみ（実送信可否がOwner判断待ち）。`ADF-OLLAMA-FIRST-CLASS-ADAPTER-001`はDone（下記参照）。
+**残存Verifying**: `ADF-EXTERNAL-ADAPTER-001`のみ（実送信可否がOwner判断待ち）。`ADF-OLLAMA-FIRST-CLASS-ADAPTER-001`と`ADF-FRONTDOOR-LEDGER-EVENT-SOURCING-001`はDone（下記参照）。
+
+`ADF-FRONTDOOR-LEDGER-EVENT-SOURCING-001`はDone。Vitest 288/288、node/web/cli typecheck、Electron build、diff checkはPass。Skill公式validatorは環境のPyYAML不足で未実施、frontmatter手動確認はPass。実Provider送信・認証は行っていない。
 
 Anthropic APIキーの取得と外部AIへの実送信は引き続き保留である。External Adapterは接続経路（Electron main／IPC／preload／UI、認証状態preflight）まで実装済みだが、実送信は未実施である。`ADF-BOARD-PROJECTION-001`は、`open + turnCount > 0`の実機表示と`recovery-needed`のLive Board実機表示の2項目を、単体テストで検証済みかつDoneを妨げない残存リスクとして記録している。`ADF-TASK-PACKET-CLI-001`は、Task本文とExecution Summaryの将来的な乖離を検出できないことを残存リスクとして記録している。受信途中の中断と外部Adapter固有の冪等性は引き続き後続Taskで扱う。
 
 ## 次のTask
+
+[`ADF-FRONTDOOR-LEDGER-EVENT-SOURCING-001`](../tasks/ADF-FRONTDOOR-LEDGER-EVENT-SOURCING-001.md): `Done`。Frontdoorの`events.jsonl`をcanonical sourceとし、typed hash chain、deterministic replay、run snapshot整合性、atomic bundle、claim token／Recovery安全性を実装した。新規Skill `adf-event-sourcing-ledger`を作成し、既存Skillにも検証導線を追加。Vitest 288件、node/web/cli typecheck、Electron build、diff checkはPass。Skill公式validatorはPyYAML不足で未実施、frontmatter手動確認はPass。実Provider送信・認証は未実施。
 
 [`ADF-OLLAMA-FIRST-CLASS-ADAPTER-001`](../tasks/ADF-OLLAMA-FIRST-CLASS-ADAPTER-001.md): `Done`（2026-08-13）。`ADF-OLLAMA-LIVE-CONNECTION-001`でCLIプローブ経由のみ実証されていた`ollama-local`を、Electronアプリの明示承認付き標準Adapterとして統合した。Main（`index.ts`）へ`OllamaLocalHttpTransport`/`ExternalConversationAdapter('ollama-local', ...)`を`claude-external`・Fake二種と共存登録し、Registry由来の読み取り専用Adapter選択UI（`listExternalAdapterProfiles`/`relay:external-adapters`）をRendererへ追加した。Packet承認Planと実Dispatch先の一致検証（`adapterId`・`role`・`routingPlanHash`）を、preflight表示と実Dispatchの両方で共通ヘルパー`checkAdapterPlanMembership`により行う設計とし、Anthropic経路には影響しない。Ollama readiness確認（`/api/tags`）はOwnerの明示操作でのみ実行され、`local-http`のAdapterでは送信ボタン有効化の必須条件とした。typecheck（node/web/cli）、Vitest 254件、`electron-vite build`、`git diff --check`をPass。2026-08-13、Owner承認のうえ実Ollamaへ1件送信し成功した（Thread `thread-18399ed229b8f47b` / Job `job-c33f22d42214f89f`、`ollama-local`/proposal、preflight全10項目Pass、Result Envelope・Evidence・Ledger生成、旧証跡は無変更）。この送信は`index.ts`のIPCハンドラが実際に呼ぶのと同一のMain／Relay／Transport本番経路をスクリプトから直接実行したものであり、マウスクリックによる実GUI操作そのものの確認ではない（本環境にElectronネイティブウィンドウを操作するツールが無いため）。Project Ownerはこの本番経路実証を受入可能と判断し、GUIクリック確認を完了条件から外したうえで`Done`とした。`ADF-EXTERNAL-ADAPTER-001`のStatusは変更していない。commit `edf12d2`として`origin/codex/adf-pilot-governance`へpush済み。
 

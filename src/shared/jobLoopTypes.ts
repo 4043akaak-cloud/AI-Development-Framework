@@ -84,6 +84,13 @@ export interface ApprovedTaskPacket {
   fixtureMode: FixtureMode
   target: DispatchTarget
   adapterPlan: AdapterPlan
+  /** Optional parent Frontdoor binding. Required when a packet is executed as a Frontdoor child. */
+  frontdoorBinding?: {
+    runId: string
+    requestHash: string
+    planHash: string
+    nodeId: string
+  }
 }
 
 export interface DispatchPacket {

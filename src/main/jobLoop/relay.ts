@@ -4,7 +4,7 @@ import type { AdapterProfile, AdapterRole, ApprovedTaskPacket, JobEvent, JobStat
 import type { ConversationThread, ConversationTurn, OwnerAction, RecoveryInfo, RelayDispatchHandle, RelayTurnPayload, ThreadSummary } from '../../shared/threadTypes'
 import { checkAdapterPlanMembership, getAdapterProfile } from './adapterRegistry'
 import { canTransition, validateApprovedTask } from './contracts'
-import type { AdapterAcceptance, ConversationAdapter } from './conversationAdapters'
+import type { AdapterAcceptance, AdapterDependencyResult, ConversationAdapter } from './conversationAdapters'
 import { FakeCriticConversationAdapter, FakeProposalConversationAdapter } from './conversationAdapters'
 import { hashJson } from './hash'
 import { appendEvent, ensureDir, readEvents, readJson, removeFile, writeJsonAtomic, writeJsonExclusive } from './ledger'
@@ -120,6 +120,7 @@ export class ConversationRelay {
   }
 
   private nextRole(thread: ConversationThread): AdapterRole {
+    if (thread.turns.length === 0) return thread.adapterPlan.selections[0]?.role ?? 'proposal'
     return thread.turns.length % 2 === 0 ? 'proposal' : 'critic'
   }
 
@@ -274,11 +275,11 @@ export class ConversationRelay {
   }
 
   /** `send_to_adapter`: hand the approved Thread context to the Adapter and claim the pending dispatch. */
-  sendToAdapter(threadId: string, adapterId?: string): Promise<RelayDispatchHandle> {
-    return this.serialise(threadId, () => this.sendToAdapterUnsafe(threadId, adapterId))
+  sendToAdapter(threadId: string, adapterId?: string, dependencyResults?: readonly AdapterDependencyResult[], orchestrationRunId?: string): Promise<RelayDispatchHandle> {
+    return this.serialise(threadId, () => this.sendToAdapterUnsafe(threadId, adapterId, dependencyResults, orchestrationRunId))
   }
 
-  private async sendToAdapterUnsafe(threadId: string, adapterId?: string): Promise<RelayDispatchHandle> {
+  private async sendToAdapterUnsafe(threadId: string, adapterId?: string, dependencyResults?: readonly AdapterDependencyResult[], orchestrationRunId?: string): Promise<RelayDispatchHandle> {
     const thread = await this.getConversationState(threadId)
     if (thread.state !== 'open') throw new ThreadRejectedError([`thread is not open: ${thread.state}`])
     if (thread.turns.length >= thread.maxTurns) throw new ThreadRejectedError([`max turns exceeded: ${thread.maxTurns}`])
@@ -312,7 +313,9 @@ export class ConversationRelay {
       attempt,
       ...(parent ? { respondsToTurnId: parent.turnId, respondsToHash: turnHash(parent) } : {}),
       sentAt,
-      expiresAt: new Date(new Date(sentAt).getTime() + this.pendingTtlMs).toISOString()
+      expiresAt: new Date(new Date(sentAt).getTime() + this.pendingTtlMs).toISOString(),
+      ...(dependencyResults?.length ? { dependencyResults: [...dependencyResults] } : {}),
+      ...(orchestrationRunId ? { orchestrationRunId } : {})
     }
 
     // Recorded before the send so an interruption between send and persistence stays visible.
@@ -333,7 +336,9 @@ export class ConversationRelay {
         attempt,
         inputHash: thread.inputHash,
         scopeHash: thread.scopeHash,
-        contextHash: thread.contextHash
+        contextHash: thread.contextHash,
+        ...(orchestrationRunId ? { orchestrationRunId } : {}),
+        ...(dependencyResults?.length ? { dependencyResults } : {})
       })
     } catch (error) {
       // A throw does not prove nothing was sent, so the intent stays unresolved on purpose.
@@ -394,6 +399,9 @@ export class ConversationRelay {
       ...(stored.respondsToTurnId ? { respondsToTurnId: stored.respondsToTurnId, respondsToHash: stored.respondsToHash } : {}),
       content: answer.content,
       status: answer.status,
+      ...(answer.questions ? { questions: answer.questions } : {}),
+      ...(stored.dependencyResults?.length ? { dependencyResults: stored.dependencyResults } : {}),
+      ...(stored.orchestrationRunId ? { orchestrationRunId: stored.orchestrationRunId } : {}),
       resultEnvelopeRef: `threads/${stored.threadId}/results/${turnId}.json`,
       resultEnvelopeHash: hashJson(envelope),
       ...(answer.errorRef ? { errorRef: answer.errorRef } : {}),
@@ -433,6 +441,9 @@ export class ConversationRelay {
       artifact: { turnId, threadId: thread.threadId, sequence: stored.sequence, respondsToTurnId: stored.respondsToTurnId ?? null },
       verification: answer.verification ?? [],
       risks: answer.risks ?? [],
+      ...(answer.questions ? { questions: answer.questions } : {}),
+      ...(stored.dependencyResults?.length ? { dependencyResults: stored.dependencyResults } : {}),
+      ...(stored.orchestrationRunId ? { orchestrationRunId: stored.orchestrationRunId } : {}),
       ownerDecisionRequired: true,
       nextOwnerDecision: answer.status === 'success' || answer.status === 'partial' ? 'このTurnを確認し、継続・停止・承認を判断する' : 'Turnの失敗理由を確認し、停止または再設計を判断する',
       createdAt,
@@ -537,11 +548,11 @@ export class ConversationRelay {
    * `continue_job`: add the next Turn to the same Thread. The Adapter is polled through its own
    * `getState`, so an external Adapter that answers later plugs in without changing this flow.
    */
-  continueJob(threadId: string, adapterId?: string): Promise<ConversationThread> {
-    return this.serialise(threadId, () => this.continueJobUnsafe(threadId, adapterId))
+  continueJob(threadId: string, adapterId?: string, dependencyResults?: readonly AdapterDependencyResult[], orchestrationRunId?: string): Promise<ConversationThread> {
+    return this.serialise(threadId, () => this.continueJobUnsafe(threadId, adapterId, dependencyResults, orchestrationRunId))
   }
 
-  private async continueJobUnsafe(threadId: string, adapterId?: string): Promise<ConversationThread> {
+  private async continueJobUnsafe(threadId: string, adapterId?: string, dependencyResults?: readonly AdapterDependencyResult[], orchestrationRunId?: string): Promise<ConversationThread> {
     const thread = await this.getConversationState(threadId)
     if (thread.state === 'recovery-needed') throw new ThreadRejectedError(['thread needs recovery; use a recovery action first'])
     if (thread.turns.length >= thread.maxTurns) {
@@ -551,7 +562,7 @@ export class ConversationRelay {
       return this.persist(stopped)
     }
 
-    const handle = await this.sendToAdapterUnsafe(threadId, adapterId)
+    const handle = await this.sendToAdapterUnsafe(threadId, adapterId, dependencyResults, orchestrationRunId)
     const pending = await this.readPending(threadId)
     if (!pending) throw new ThreadRejectedError(['pending dispatch disappeared before receive'])
     const adapter = this.resolveAdapter(handle.adapterId)
