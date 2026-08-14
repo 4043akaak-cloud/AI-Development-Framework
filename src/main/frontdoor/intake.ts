@@ -13,11 +13,13 @@ export class FrontdoorRequestRejectedError extends Error {
 
 export function validateFrontdoorRequest(input: FrontdoorRequestInput): void {
   const errors: string[] = []
-  if (!input?.requestId) errors.push('requestId is required')
-  if (!input?.objective?.trim()) errors.push('objective is required')
-  if (!input?.userInput?.trim()) errors.push('userInput is required')
-  if (!input?.projectRef?.trim()) errors.push('projectRef is required')
-  if (!input?.requestedOutput?.trim()) errors.push('requestedOutput is required')
+  const nonEmptyText = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0
+  if (!nonEmptyText(input?.requestId) || !/^[A-Za-z0-9._:-]{1,120}$/.test(input.requestId)) errors.push('requestId must be a safe non-empty identifier')
+  if (!nonEmptyText(input?.objective)) errors.push('objective is required')
+  if (!nonEmptyText(input?.userInput)) errors.push('userInput is required')
+  if (!nonEmptyText(input?.projectRef)) errors.push('projectRef is required')
+  if (!nonEmptyText(input?.requestedOutput)) errors.push('requestedOutput is required')
+  if (!['codex', 'chatgpt', 'owner', 'test'].includes(input?.source)) errors.push('source is invalid')
   if (!Array.isArray(input?.contextReferences)) errors.push('contextReferences must be an array')
   if (!Array.isArray(input?.scope?.inScope) || !Array.isArray(input?.scope?.outOfScope)) errors.push('scope is invalid')
   if (!input?.constraints || input.constraints.externalSend !== false) errors.push('externalSend must be false')

@@ -2,7 +2,7 @@ import type { OpenSourceResult } from '../../shared/boardTypes'
 import type { ConversationThread, OwnerAction, RecoveryAction, RelayResult, ThreadSummary } from '../../shared/threadTypes'
 import type { ExternalPreflight, OllamaReadiness } from '../../shared/externalAdapterTypes'
 import type { AdapterProfile } from '../../shared/jobLoopTypes'
-import type { FrontdoorInspection, FrontdoorReturn, FrontdoorRunSummary, OwnerDecisionEnvelope, OwnerGate, OrchestrationRun } from '../../shared/frontdoorTypes'
+import type { FrontdoorInspection, FrontdoorPrepareInput, FrontdoorPrepareResult, FrontdoorReturn, FrontdoorRunSummary, OwnerDecisionEnvelope, OwnerGate, OrchestrationRun } from '../../shared/frontdoorTypes'
 
 declare global {
   interface Window {
@@ -28,6 +28,7 @@ declare global {
     }
     adfFrontdoor: {
       list: () => Promise<RelayResult<FrontdoorRunSummary[]>>
+      prepare: (input: FrontdoorPrepareInput) => Promise<RelayResult<FrontdoorPrepareResult>>
       inspect: (runId: string) => Promise<RelayResult<FrontdoorInspection>>
       approve: (input: { runId: string; gate: OwnerGate; approvedBy: string; note?: string; nodeIds?: string[] }) => Promise<RelayResult<OwnerDecisionEnvelope>>
       dispatch: (runId: string) => Promise<RelayResult<FrontdoorReturn>>

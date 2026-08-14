@@ -80,4 +80,9 @@ h1, h2, h3, p { margin-top: 0; } h1 { margin-bottom: 8px; font-size: 32px; } h2 
 .frontdoor-question { border-left: 3px solid #e8b86d; border-radius: 5px; background: #252238; padding: 10px; display: grid; gap: 8px; }
 .frontdoor-question p { margin-bottom: 0; }
 .frontdoor-json { max-height: 260px; overflow: auto; margin: 0; border-radius: 6px; background: #0b1525; color: #c8d8ef; padding: 10px; font-size: 11px; white-space: pre-wrap; }
+.frontdoor-intake { margin-bottom: 16px; }
+.frontdoor-intake-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 14px; }
+.frontdoor-plan-field { grid-column: 1 / -1; }
+.frontdoor-intake-actions { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 @media (max-width: 1150px) { .frontdoor-layout { grid-template-columns: 1fr; } .frontdoor-run-list { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 760px) { .frontdoor-intake-grid { grid-template-columns: 1fr; } .frontdoor-plan-field, .frontdoor-intake-actions { grid-column: auto; } }

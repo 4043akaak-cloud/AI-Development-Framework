@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type JSX } from 'react'
-import type { FrontdoorInspection, FrontdoorRunSummary, OwnerGate, OwnerGateState } from '../../shared/frontdoorTypes'
+import type { FrontdoorInspection, FrontdoorPrepareInput, FrontdoorRunSummary, OwnerGate, OwnerGateState } from '../../shared/frontdoorTypes'
 
 const gateLabels: Record<OwnerGate, string> = {
   intake: 'Intake',
@@ -23,6 +23,30 @@ function formatValue(value: unknown): string {
   return JSON.stringify(value, null, 2)
 }
 
+function listValue(value: string): string[] {
+  return value.split(',').map((item) => item.trim()).filter(Boolean)
+}
+
+const defaultPlanJson = JSON.stringify({
+  planId: 'frontdoor-ui-plan',
+  requestId: '__REQUEST_ID__',
+  version: 1,
+  aggregationPolicy: 'collect-all',
+  nodes: [{
+    nodeId: 'proposal',
+    objective: 'RequestのProposalを作成する',
+    role: 'proposal',
+    adapterId: 'fake-ai-a',
+    scope: { inScope: ['frontdoor-request'], outOfScope: ['external-send', 'write-canonical'] },
+    contextReferences: ['fixture://owner-request'],
+    acceptance: ['Proposalを返す'],
+    stopConditions: ['Scope外要求'],
+    capabilities: ['read', 'propose'],
+    dependsOn: [],
+    depth: 1
+  }]
+}, null, 2)
+
 export default function FrontdoorPanel(): JSX.Element {
   const [runs, setRuns] = useState<FrontdoorRunSummary[]>([])
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
@@ -32,6 +56,15 @@ export default function FrontdoorPanel(): JSX.Element {
   const [answer, setAnswer] = useState('')
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
+  const [intakeOpen, setIntakeOpen] = useState(false)
+  const [intakeObjective, setIntakeObjective] = useState('')
+  const [intakeUserInput, setIntakeUserInput] = useState('')
+  const [intakeProjectRef, setIntakeProjectRef] = useState('local://owner-request')
+  const [intakeRequestedOutput, setIntakeRequestedOutput] = useState('Ownerが確認できるProposal')
+  const [intakeContext, setIntakeContext] = useState('fixture://owner-request')
+  const [intakeInScope, setIntakeInScope] = useState('frontdoor-request')
+  const [intakeOutOfScope, setIntakeOutOfScope] = useState('external-send, write-canonical')
+  const [intakePlanJson, setIntakePlanJson] = useState(defaultPlanJson)
 
   const inspect = useCallback(async (runId: string): Promise<void> => {
     const result = await window.adfFrontdoor.inspect(runId)
@@ -70,6 +103,42 @@ export default function FrontdoorPanel(): JSX.Element {
     setBusy(false)
   }
 
+  const submitIntake = async (): Promise<void> => {
+    if (!intakeObjective.trim() || !intakeUserInput.trim()) return
+    setBusy(true)
+    setMessage(null)
+    const requestId = `frontdoor-ui-${Date.now().toString(36)}`
+    try {
+      const plan = JSON.parse(intakePlanJson) as Record<string, unknown>
+      const input: FrontdoorPrepareInput = {
+        request: {
+          requestId,
+          source: 'owner',
+          objective: intakeObjective.trim(),
+          userInput: intakeUserInput.trim(),
+          projectRef: intakeProjectRef.trim(),
+          constraints: { allowedCapabilities: ['read', 'propose'], maxNodes: 8, maxDepth: 4, externalSend: false },
+          requestedOutput: intakeRequestedOutput.trim(),
+          contextReferences: listValue(intakeContext),
+          scope: { inScope: listValue(intakeInScope), outOfScope: listValue(intakeOutOfScope) }
+        },
+        plan: { ...plan, requestId } as FrontdoorPrepareInput['plan']
+      }
+      const result = await window.adfFrontdoor.prepare(input)
+      if (!result.ok) setMessage(result.error)
+      else {
+        setIntakeOpen(false)
+        setMessage(`${result.value.reused ? '既存Runを再利用しました' : '新しいRunを作成しました'}: ${result.value.run.runId}`)
+        await refresh()
+        await inspect(result.value.run.runId)
+      }
+    } catch (error) {
+      setMessage(`Request／Plan入力を解釈できません: ${String(error)}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const run = inspection?.run
   const currentGate = gateFromState(run?.ownerGate)
   const dispatchApproved = Boolean(inspection?.decisions.some((decision) => decision.gate === 'dispatch' && decision.decision === 'dispatch'))
@@ -97,6 +166,33 @@ export default function FrontdoorPanel(): JSX.Element {
       </div>
 
       {message && <p className="failure" role="alert">Frontdoor操作に失敗しました: {message}</p>}
+
+      <section className="frontdoor-card frontdoor-intake" aria-label="Frontdoor Request Intake">
+        <div className="frontdoor-summary">
+          <div>
+            <p className="eyebrow">REQUEST INTAKE · NO DISPATCH</p>
+            <h3>窓口依頼をADFへ投入</h3>
+            <p className="turn-refs">PrepareはRunとPlan証跡だけを作成し、Intake承認待ちで停止します。</p>
+          </div>
+          <button type="button" className="text-button" disabled={busy} onClick={() => setIntakeOpen((open) => !open)}>{intakeOpen ? '入力を閉じる' : '新規Request'}</button>
+        </div>
+        {intakeOpen && (
+          <div className="frontdoor-intake-grid">
+            <label className="frontdoor-field">目的（必須）<input value={intakeObjective} onChange={(event) => setIntakeObjective(event.target.value)} disabled={busy} /></label>
+            <label className="frontdoor-field">窓口からの依頼（必須）<textarea value={intakeUserInput} onChange={(event) => setIntakeUserInput(event.target.value)} rows={3} disabled={busy} /></label>
+            <label className="frontdoor-field">Project参照<input value={intakeProjectRef} onChange={(event) => setIntakeProjectRef(event.target.value)} disabled={busy} /></label>
+            <label className="frontdoor-field">期待する出力<input value={intakeRequestedOutput} onChange={(event) => setIntakeRequestedOutput(event.target.value)} disabled={busy} /></label>
+            <label className="frontdoor-field">Context参照（カンマ区切り）<input value={intakeContext} onChange={(event) => setIntakeContext(event.target.value)} disabled={busy} /></label>
+            <label className="frontdoor-field">In scope（カンマ区切り）<input value={intakeInScope} onChange={(event) => setIntakeInScope(event.target.value)} disabled={busy} /></label>
+            <label className="frontdoor-field">Out of scope（カンマ区切り）<input value={intakeOutOfScope} onChange={(event) => setIntakeOutOfScope(event.target.value)} disabled={busy} /></label>
+            <label className="frontdoor-field frontdoor-plan-field">Plan案 JSON（窓口AI／Ownerが確認して入力）<textarea value={intakePlanJson} onChange={(event) => setIntakePlanJson(event.target.value)} rows={12} disabled={busy} /></label>
+            <div className="frontdoor-intake-actions">
+              <button type="button" className="text-button" disabled={busy || !intakeObjective.trim() || !intakeUserInput.trim()} onClick={() => void submitIntake()}>Run案を作成（Intake待ち）</button>
+              <span className="turn-refs">Fake Adapter限定のPlan例。Prepareでは送信しません。</span>
+            </div>
+          </div>
+        )}
+      </section>
 
       <div className="frontdoor-layout">
         <aside className="frontdoor-run-list" aria-label="Frontdoor Run一覧">
