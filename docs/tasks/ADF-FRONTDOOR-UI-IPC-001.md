@@ -1,7 +1,7 @@
 # Task — ADF-FRONTDOOR-UI-IPC-001: Electron Frontdoor Owner Loop
 
 > Type: Design + Implementation
-> Status: Verifying
+> Status: Done
 > Owner: Codex
 > Review: Project Owner + role-separated review
 > Related: [ADF-FRONTDOOR-OWNER-GATE-001](ADF-FRONTDOOR-OWNER-GATE-001.md) / [ADF-FRONTDOOR-CLI-OWNER-LOOP-001](ADF-FRONTDOOR-CLI-OWNER-LOOP-001.md) / [Goal](../project/GOAL.md) / [Current State](../project/CURRENT_STATE.md)
@@ -186,4 +186,10 @@ Project Ownerに次を承認依頼する。
 
 ## 15. Current status
 
-`Verifying`。設計承認後の実装・自動検証・開発Electronでの表示確認まで完了した。Owner意思決定を伴う実機Gate操作は自動実行していない。commit、pushは未実施。
+`Done`。設計承認後の実装・自動検証・開発Electronでの表示確認まで完了した。Owner意思決定を伴う実機Gate操作は自動実行していないが、Main Service経由のFake Adapter一周はIPC統合テストで確認済みである。実Provider・認証・外部送信・正本自動書込みは発生していない。commit `c3c26aa`として公開され、PR #1のmerge commit `9fbea9f`で`main`へ反映済み。
+
+## 16. Completion record
+
+- Project Ownerの「done、commit、プッシュ、マージがあればすべて実施」という指示に基づき、実装済み差分をcommit・push・PR mergeした。
+- Electron実機でのOwner意思決定そのものは自動代行せず、表示・InspectとIPC統合テストによるFake Adapter一周を完了条件の証拠とした。
+- Request生成、Planner、自動分解、実Provider、Work Plane、MCPは後続Taskへ引き継ぐ。
