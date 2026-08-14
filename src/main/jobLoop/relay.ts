@@ -101,6 +101,29 @@ export class ConversationRelay {
     return adapter
   }
 
+  /** Frontdoor Prepare uses this to reject a Registry-only Adapter that this Relay cannot execute. */
+  assertAdapterRegistered(adapterId: string, role: AdapterRole): void {
+    const adapter = this.resolveAdapter(adapterId)
+    if (adapter.role !== role) throw new ThreadRejectedError([`adapter ${adapterId} is registered for role ${adapter.role}, not ${role}`])
+  }
+
+  /**
+   * Re-checks live transport readiness only at an explicit dispatch boundary. A failed check is
+   * thrown before Frontdoor creates a child Job/Thread, and before the direct external-send path
+   * can invoke the transport. Non-local-http transports keep their existing approval contract.
+   */
+  async assertAdapterReadyForDispatch(adapterId: string): Promise<void> {
+    const profile = getAdapterProfile(adapterId)
+    if (profile.connection !== 'local-http') return
+    this.resolveAdapter(adapterId)
+    const transport = this.requireTransport(adapterId)
+    if (transport.connection !== profile.connection) throw new ThreadRejectedError([`profile and transport connection mismatch for ${adapterId}`])
+    if (!transport.isLocalEndpoint?.()) throw new ThreadRejectedError([`local-http adapter target is not confirmed as loopback: ${adapterId}`])
+    if (!transport.checkReadiness) throw new ThreadRejectedError([`local-http adapter has no readiness check: ${adapterId}`])
+    const readiness = await transport.checkReadiness()
+    if (!readiness.ready) throw new ThreadRejectedError([`adapter readiness failed for ${adapterId}: ${readiness.detail}`])
+  }
+
   /**
    * A local-only adapter named explicitly (not auto-routed) must be one of the Thread's own approved
    * `adapterPlan` selections — the Plan the Owner actually approved via `routingPlanHash`. This closes

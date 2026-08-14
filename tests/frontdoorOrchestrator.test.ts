@@ -6,6 +6,8 @@ import type { ApprovedTaskPacket, FixtureMode } from '../src/shared/jobLoopTypes
 import type { DecompositionNode, FrontdoorRequestInput } from '../src/shared/frontdoorTypes'
 import { ConversationRelay } from '../src/main/jobLoop/relay'
 import { FakeProposalConversationAdapter } from '../src/main/jobLoop/conversationAdapters'
+import { ExternalConversationAdapter } from '../src/main/jobLoop/externalAdapter'
+import { OllamaLocalHttpTransport } from '../src/main/jobLoop/ollamaTransport'
 import { buildExplicitAdapterPlan } from '../src/main/jobLoop/adapterRegistry'
 import { hashJson } from '../src/main/jobLoop/hash'
 import { FrontdoorOrchestrator } from '../src/main/frontdoor/orchestrator'
@@ -188,5 +190,59 @@ describe('Frontdoor orchestrator', () => {
     await writeFile(runPath, `${JSON.stringify(saved)}\n`, 'utf8')
     await recordRunEvent(runtimeRoot, run.runId, 'frontdoor.approval-bound', { approvalIds: ['approval-tampered'] })
     await expect(orchestrator.executeApprovedRun(run.runId, { proposal: boundPacket(run, baseRequest.requestId, proposal) })).rejects.toThrow(/execution events|event replay/)
+  })
+})
+
+describe('ADF-FRONTDOOR-REAL-ADAPTER-DISPATCH-001', () => {
+  function ollamaRelay(runtimeRoot: string, modelPresent: boolean): { relay: ConversationRelay; calls: string[] } {
+    const calls: string[] = []
+    const transport = new OllamaLocalHttpTransport({
+      fetchImpl: async (input) => {
+        calls.push(input)
+        if (input.endsWith('/api/tags')) {
+          return new Response(JSON.stringify({ models: modelPresent ? [{ name: 'llama3:latest' }] : [] }), { status: 200, headers: { 'content-type': 'application/json' } })
+        }
+        return new Response(JSON.stringify({ response: 'Frontdoor Ollama proposal', done: true }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+    })
+    let relay!: ConversationRelay
+    const adapter = new ExternalConversationAdapter('ollama-local', 'proposal', transport, {
+      authorise: (request) => relay.externalHooks('ollama-local', transport).authorise(request),
+      recordCall: (record) => relay.externalHooks('ollama-local', transport).recordCall(record),
+      now: () => new Date('2026-08-14T00:00:00.000Z')
+    })
+    relay = new ConversationRelay({ runtimeRoot, adapters: [adapter], externalTransports: { 'ollama-local': transport } })
+    return { relay, calls }
+  }
+
+  it('dispatches one Owner-approved Frontdoor Node through Ollama and returns Result/Evidence/Aggregate', async () => {
+    const runtimeRoot = await mkdtemp(path.join(tmpdir(), 'adf-frontdoor-ollama-'))
+    const { relay, calls } = ollamaRelay(runtimeRoot, true)
+    const orchestrator = new FrontdoorOrchestrator({ relay })
+    const proposal = node('proposal', 'ollama-local', 'proposal')
+    const run = await orchestrator.createRun(baseRequest, { planId: 'plan-ollama-001', requestId: baseRequest.requestId, version: 1, nodes: [proposal], aggregationPolicy: 'collect-all' })
+    await approveDispatch(orchestrator, run.runId, [proposal.nodeId])
+
+    const result = await orchestrator.executeApprovedRun(run.runId, { proposal: boundPacket(run, baseRequest.requestId, proposal) })
+
+    expect(result.status).toBe('complete')
+    expect(result.childResultRefs).toHaveLength(1)
+    expect(calls).toEqual(['http://127.0.0.1:11434/api/tags', 'http://127.0.0.1:11434/api/generate'])
+    expect((await relay.listThreads())).toHaveLength(1)
+    expect(result.evidenceRefs).toHaveLength(1)
+  })
+
+  it('blocks before Job/Thread creation when Owner dispatch readiness fails', async () => {
+    const runtimeRoot = await mkdtemp(path.join(tmpdir(), 'adf-frontdoor-ollama-blocked-'))
+    const { relay, calls } = ollamaRelay(runtimeRoot, false)
+    const orchestrator = new FrontdoorOrchestrator({ relay })
+    const proposal = node('proposal', 'ollama-local', 'proposal')
+    const run = await orchestrator.createRun(baseRequest, { planId: 'plan-ollama-blocked-001', requestId: baseRequest.requestId, version: 1, nodes: [proposal], aggregationPolicy: 'collect-all' })
+    await approveDispatch(orchestrator, run.runId, [proposal.nodeId])
+
+    await expect(orchestrator.executeApprovedRun(run.runId, { proposal: boundPacket(run, baseRequest.requestId, proposal) })).rejects.toThrow(/readiness failed/)
+    expect(calls).toEqual(['http://127.0.0.1:11434/api/tags'])
+    expect(await relay.listThreads()).toEqual([])
+    await expect(orchestrator.getRun(run.runId)).resolves.toMatchObject({ state: 'ready-for-approval' })
   })
 })

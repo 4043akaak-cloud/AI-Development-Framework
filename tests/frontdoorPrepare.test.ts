@@ -83,6 +83,9 @@ describe('Frontdoor Request Intake boundary', () => {
     const external = input({ requestId: 'frontdoor-prepare-external-001' })
     external.plan.nodes[0].adapterId = 'claude-external'
     expect((await prepareFrontdoorRun(fixture.orchestrator, external)).ok).toBe(false)
+    const unregistered = input({ requestId: 'frontdoor-prepare-unregistered-001' })
+    unregistered.plan.nodes[0].adapterId = 'ollama-local'
+    expect((await prepareFrontdoorRun(fixture.orchestrator, unregistered)).ok).toBe(false)
     expect(await fixture.relay.listThreads()).toEqual([])
   })
 })

@@ -1,6 +1,6 @@
 import type { AdapterConnection } from '../../shared/jobLoopTypes'
 import type { ExternalSendOutcome, OllamaReadiness, SyntheticPacket } from '../../shared/externalAdapterTypes'
-import type { CredentialStatus, ExternalTransport, TransportOptions } from './externalTransport'
+import type { CredentialStatus, ExternalTransport, TransportOptions, TransportReadiness } from './externalTransport'
 import { truncateAnswer } from './externalTransport'
 
 /**
@@ -99,6 +99,16 @@ export class OllamaLocalHttpTransport implements ExternalTransport {
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false
     const host = parsed.hostname
     return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]'
+  }
+
+  /**
+   * Live readiness is separate from construction and from the read-only UI preflight. The
+   * Frontdoor invokes this only after the Owner has approved Dispatch, immediately before a Node
+   * can create a Job/Thread or send a request.
+   */
+  async checkReadiness(): Promise<TransportReadiness> {
+    const readiness = await checkOllamaReadiness({ baseUrl: this.baseUrl, model: this.model, fetchImpl: this.fetchImpl })
+    return { ready: readiness.reachable && readiness.modelPresent, detail: readiness.detail }
   }
 
   async send(packet: SyntheticPacket, options: TransportOptions): Promise<ExternalSendOutcome> {

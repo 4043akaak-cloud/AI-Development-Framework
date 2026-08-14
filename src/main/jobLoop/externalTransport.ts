@@ -6,6 +6,11 @@ export interface TransportOptions {
   signal?: AbortSignal
 }
 
+export interface TransportReadiness {
+  ready: boolean
+  detail: string
+}
+
 /**
  * The seam every provider plugs into. A provider is swapped by supplying a different transport;
  * Thread, Relay, Recovery, Result validation and the Owner gates stay identical.
@@ -25,6 +30,8 @@ export interface ExternalTransport {
    * trusted for any other connection mode. Backs the `local-endpoint-confirmed` preflight check.
    */
   isLocalEndpoint?(): boolean
+  /** Optional live readiness check. It is invoked only by an explicit Owner dispatch action. */
+  checkReadiness?(): Promise<TransportReadiness>
   /** Must never read the filesystem, the repo, or the Vault. It receives only the packet. */
   send(packet: SyntheticPacket, options: TransportOptions): Promise<ExternalSendOutcome>
 }

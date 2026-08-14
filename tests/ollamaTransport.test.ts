@@ -186,4 +186,16 @@ describe('ADF-OLLAMA-LIVE-CONNECTION-001 checkOllamaReadiness — read-only /api
     await checkOllamaReadiness({ fetchImpl })
     expect(calls[0]?.redirect).toBe('error')
   })
+
+  it('exposes the same readiness result through the Provider-neutral transport contract', async () => {
+    const { calls, fetchImpl } = stub(() => json({ models: [{ name: 'llama3:latest' }] }))
+    const result = await new OllamaLocalHttpTransport({ fetchImpl }).checkReadiness()
+    expect(result).toEqual({ ready: true, detail: 'model llama3 present' })
+    expect(calls).toHaveLength(1)
+  })
+
+  it('fails closed through the transport contract when the model is missing', async () => {
+    const { fetchImpl } = stub(() => json({ models: [] }))
+    await expect(new OllamaLocalHttpTransport({ fetchImpl }).checkReadiness()).resolves.toMatchObject({ ready: false })
+  })
 })

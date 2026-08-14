@@ -28,6 +28,8 @@ Anthropic APIキーの取得と外部AIへの実送信は引き続き保留で�
 
 ## 次のTask
 
+[`ADF-FRONTDOOR-REAL-ADAPTER-DISPATCH-001`](../tasks/ADF-FRONTDOOR-REAL-ADAPTER-DISPATCH-001.md): `Verifying`。FrontdoorのOwner承認済みNodeから、現在のRelayへ登録されたProvider-neutral実Adapterへ安全にDispatchするTask。Prepare時のAdapter登録／role照合、Dispatch直前のloopback／readiness再確認、Result／Evidence／Job／Thread／Frontdoor Ledger／Aggregate整合の境界を実装し、Vitest 314/314、node/web/cli typecheck、Electron build、diff checkをPass。実Ollamaへの実送信と実Ledger確認のみ、別途Owner実行承認待ち。Anthropic実送信、Claude CLI、Work Plane、MCP、動的Routing、正本自動書込みは対象外。
+
 [`ADF-FRONTDOOR-PLANNER-PROPOSAL-001`](../tasks/ADF-FRONTDOOR-PLANNER-PROPOSAL-001.md): `Done`。Request Intakeで手入力しているPlan JSONを、決定的Fake Plannerから安全な未承認Plan案として生成・表示し、Owner確認後だけ既存Prepareへ渡す経路を実装済み。最新ビルドのElectron Main／Rendererで`fake-planner/v1`のProposal／Critic案、Request hash／Plan hash、前提／リスクを表示確認し、Planner案だけでは新Run／Job／Thread／Dispatchが発生しないことを確認。Vitest 310/310、node/web/cli typecheck、Electron build、diff checkはPass。commit `e63e7c0`、PR #4 merge commit `bcaece2`。実AI Planner、外部送信、認証、動的Routing、Work Plane、正本自動書込みは対象外。
 
 [`ADF-FRONTDOOR-CLI-OWNER-LOOP-001`](../tasks/ADF-FRONTDOOR-CLI-OWNER-LOOP-001.md): `Done`。既存Frontdoor Owner GateをCLIから一段ずつ操作する入口Task。`prepare`、`inspect`、前段Gate承認、Node単位Dispatch承認、`dispatch`、`answer`、`review-result`、`complete`、`stop`、`recover`を個別コマンドとして実装した。Vitest 301/301、node/web/cli typecheck、Electron build、compiled CLIのprepare→inspect、Fake Adapter一周を確認済み。実Provider、認証、Electron／MCP接続は後続へ分離し、commit `801ced8`をpush済み。

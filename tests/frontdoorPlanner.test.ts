@@ -4,6 +4,10 @@ import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { DecompositionPlan, DecompositionPlanInput, FrontdoorRequestInput } from '../src/shared/frontdoorTypes'
 import type { Capability } from '../src/shared/jobLoopTypes'
+import {
+  FakeCriticConversationAdapter,
+  FakeProposalConversationAdapter,
+} from '../src/main/jobLoop/conversationAdapters'
 import { ConversationRelay } from '../src/main/jobLoop/relay'
 import { createFrontdoorRequest } from '../src/main/frontdoor/intake'
 import { prepareFrontdoorRun } from '../src/main/frontdoor/frontdoorService'
@@ -71,7 +75,10 @@ describe('ADF-FRONTDOOR-PLANNER-PROPOSAL-001', () => {
 
   it('hands the Owner-reviewed proposal to Prepare only as an Intake-gated Run', async () => {
     const runtimeRoot = await mkdtemp(path.join(tmpdir(), 'adf-planner-proposal-'))
-    const relay = new ConversationRelay({ runtimeRoot, adapters: [] })
+    const relay = new ConversationRelay({
+      runtimeRoot,
+      adapters: [new FakeProposalConversationAdapter(), new FakeCriticConversationAdapter()],
+    })
     const orchestrator = new FrontdoorOrchestrator({ relay })
     const request = createFrontdoorRequest(requestInput, '2026-08-14T00:00:00.000Z')
     const proposal = await new DeterministicFakePlanner().propose(request)

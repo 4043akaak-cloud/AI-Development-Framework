@@ -178,6 +178,11 @@ export class FrontdoorOrchestrator {
         if (packet.frontdoorBinding?.requestHash !== run.requestHash || packet.frontdoorBinding?.planHash !== run.planHash || packet.frontdoorBinding?.runId !== run.runId) throw new Error(`packet Frontdoor binding mismatch for ${node.node.nodeId}`)
         assertPacketMatchesNode(request, run, node, packet)
       }
+      // This is the explicit Owner Dispatch boundary. Readiness is checked before any child
+      // Job/Thread is created, so a stopped Ollama or missing model leaves the Run untouched.
+      for (const adapterId of new Set(run.nodes.map((record) => record.node.adapterId))) {
+        await this.relay.assertAdapterReadyForDispatch(adapterId)
+      }
       run = { ...run, state: 'running', ownerGate: 'running', updatedAt: this.clock().toISOString(), approvalIds: run.nodes.map((node) => packets[node.node.nodeId].approval.approvalId) }
       await writeRun(this.runtimeRoot, run)
       await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.approval-bound', { approvalIds: run.approvalIds })
