@@ -1,7 +1,7 @@
 # Task — ADF-FRONTDOOR-CLI-OWNER-LOOP-001: CLI Owner Loop Entrance
 
 > Type: Design + Implementation
-> Status: Verifying
+> Status: Done
 > Owner: Codex
 > Review: Project Owner + role-separated review
 > Related: [ADF-FRONTDOOR-OWNER-GATE-001](ADF-FRONTDOOR-OWNER-GATE-001.md) / [ADF-FRONTDOOR-LEDGER-EVENT-SOURCING-001](ADF-FRONTDOOR-LEDGER-EVENT-SOURCING-001.md) / [Goal](../project/GOAL.md) / [Current State](../project/CURRENT_STATE.md)
@@ -185,4 +185,8 @@ Architecture担当Gaussは、CLIがOrchestratorを中心に呼ぶこと、Servic
 
 ## 15. Current status
 
-`Verifying`。実装と自動検証、およびFake Adapter限定のRuntime一周は完了。Project Ownerの最終Diffレビューと、commit／pushの指示を待つ。実Provider接続は後続Taskとする。
+`Done`。実装、自動検証、Fake Adapter限定のRuntime一周、Project Ownerの最終Diff確認、commit／pushが完了した。実Provider接続は後続Taskとする。完了承認は2026-08-14に取得し、commitは`801ced8`、branchとoriginは一致している。
+
+## 16. Owner completion
+
+2026-08-14、Project Ownerが`done`と承認した。Task Statusを`Done`へ更新し、commit `801ced8`を`codex/adf-pilot-governance`へpushした。Working treeはcleanで、HEADとoriginは一致している。

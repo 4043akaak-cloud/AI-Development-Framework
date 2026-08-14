@@ -1,6 +1,6 @@
 # ADF Current State
 
-> Last updated: 2026-08-14（`ADF-FRONTDOOR-CLI-OWNER-LOOP-001`の実装・検証を反映。過去の個別Task記述には旧時点の記録が残る）
+> Last updated: 2026-08-14（`ADF-FRONTDOOR-CLI-OWNER-LOOP-001`のDone承認・pushを反映。過去の個別Task記述には旧時点の記録が残る）
 
 ## 現在地
 
@@ -28,7 +28,7 @@ Anthropic APIキーの取得と外部AIへの実送信は引き続き保留で�
 
 ## 次のTask
 
-[`ADF-FRONTDOOR-CLI-OWNER-LOOP-001`](../tasks/ADF-FRONTDOOR-CLI-OWNER-LOOP-001.md): `Verifying`。既存Frontdoor Owner GateをCLIから一段ずつ操作する入口Task。`prepare`、`inspect`、前段Gate承認、Node単位Dispatch承認、`dispatch`、`answer`、`review-result`、`complete`、`stop`、`recover`を個別コマンドとして実装した。Vitest 301/301、node/web/cli typecheck、Electron build、compiled CLIのprepare→inspect、Fake Adapter一周を確認済み。実Provider、認証、Electron／MCP接続は後続へ分離し、commit／pushは最終Diffレビュー待ち。
+[`ADF-FRONTDOOR-CLI-OWNER-LOOP-001`](../tasks/ADF-FRONTDOOR-CLI-OWNER-LOOP-001.md): `Done`。既存Frontdoor Owner GateをCLIから一段ずつ操作する入口Task。`prepare`、`inspect`、前段Gate承認、Node単位Dispatch承認、`dispatch`、`answer`、`review-result`、`complete`、`stop`、`recover`を個別コマンドとして実装した。Vitest 301/301、node/web/cli typecheck、Electron build、compiled CLIのprepare→inspect、Fake Adapter一周を確認済み。実Provider、認証、Electron／MCP接続は後続へ分離し、commit `801ced8`をpush済み。
 
 [`ADF-FRONTDOOR-OWNER-GATE-001`](../tasks/ADF-FRONTDOOR-OWNER-GATE-001.md): `Done`（2026-08-14、commit `e38e31c`）。Ownerが依頼から完成形まで各段階で確認・修正・承認・停止できる共通Gate契約をFrontdoor ServiceとEvent Ledgerへ追加した。Intake／Completion Shape／Decomposition／Dispatch／Question／Result Review／CompletionのDecisionをtarget hashへ束縛し、承認なしDispatch、自動回答、Result自動採用、承認なしCompletion、別Run由来AggregateのReviewを拒否する。Vitest 293/293、node/web/cli typecheck、Electron build、diff checkはPass。CLI／Electron／MCP入口、実Provider送信、認証は後続Task。
 
