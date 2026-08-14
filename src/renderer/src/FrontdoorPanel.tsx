@@ -6,6 +6,7 @@ const gateLabels: Record<OwnerGate, string> = {
   'completion-shape': 'Completion Shape',
   decomposition: 'Decomposition',
   dispatch: 'Dispatch',
+  'node-review': 'Node Review',
   question: 'Question',
   'result-review': 'Result Review',
   completion: 'Completion'
@@ -174,6 +175,7 @@ export default function FrontdoorPanel(): JSX.Element {
   const canOwnerAct = approvedBy.trim().length > 0 && !busy
   const packetsReady = runs.find((entry) => entry.runId === selectedRunId)?.packetsReady ?? false
   const openQuestions = inspection?.openQuestions.filter((question) => question.status === 'open') ?? []
+  const nodeReview = inspection?.nodeReview
   const terminal = run ? ['complete', 'partial', 'failed', 'cancelled'].includes(run.state) : false
 
   const approveCurrentGate = async (): Promise<void> => {
@@ -286,6 +288,12 @@ export default function FrontdoorPanel(): JSX.Element {
                 {currentGate === 'dispatch' && (
                   <button type="button" className="text-button" disabled={!canOwnerAct || !dispatchApproved || !packetsReady} title={!packetsReady ? 'Owner-approved child Packetをapproved-tasksへ配置してください' : undefined} onClick={() => void runAction(() => window.adfFrontdoor.dispatch(run.runId))}>承認済みNodeをDispatch</button>
                 )}
+                {currentGate === 'node-review' && nodeReview && (
+                  <>
+                    <button type="button" className="text-button" disabled={!canOwnerAct} onClick={() => void runAction(() => window.adfFrontdoor.reviewNode({ runId: run.runId, nodeId: nodeReview.nodeId, approvedBy: approvedBy.trim(), decision: 'continue', note: note || undefined }))}>次のNodeへ進む</button>
+                    <button type="button" className="text-button" disabled={!canOwnerAct} onClick={() => void runAction(() => window.adfFrontdoor.reviewNode({ runId: run.runId, nodeId: nodeReview.nodeId, approvedBy: approvedBy.trim(), decision: 'stop', note: note || undefined }))}>ここで停止</button>
+                  </>
+                )}
                 {currentGate === 'result-review' && !terminal && (
                   <>
                     <button type="button" className="text-button" disabled={!canOwnerAct} onClick={() => void runAction(() => window.adfFrontdoor.reviewResult({ runId: run.runId, approvedBy: approvedBy.trim(), decision: 'accept', note: note || undefined }))}>Resultを受入</button>
@@ -300,6 +308,21 @@ export default function FrontdoorPanel(): JSX.Element {
                 {run.state === 'running' && <button type="button" className="text-button" disabled={busy} onClick={() => void runAction(() => window.adfFrontdoor.recover(run.runId))}>Recovery状態を確認</button>}
               </div>
             </section>
+
+            {currentGate === 'node-review' && nodeReview && (
+              <section className="frontdoor-card" aria-label="Node Result Review">
+                <h3>Node Result Review</h3>
+                <dl className="detail-grid">
+                  <div><dt>完了Node</dt><dd>{nodeReview.nodeId}</dd></div>
+                  <div><dt>Result status</dt><dd>{nodeReview.status ?? '未記録'}</dd></div>
+                  <div><dt>次のNode</dt><dd>{nodeReview.nextNodeIds.join(', ')}</dd></div>
+                  <div><dt>Evidence</dt><dd>{nodeReview.resultRef ?? '未生成'}</dd></div>
+                </dl>
+                {nodeReview.summary && <p className="turn-content">{nodeReview.summary}</p>}
+                {nodeReview.content && <pre className="frontdoor-json">{nodeReview.content}</pre>}
+                <p className="turn-refs">Node Resultを確認してから、次のNodeへの継続または停止を選択してください。target hash: {nodeReview.targetHash}</p>
+              </section>
+            )}
 
             {openQuestions.length > 0 && (
               <section className="frontdoor-card" aria-label="AI Question">

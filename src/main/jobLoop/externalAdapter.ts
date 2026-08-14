@@ -2,7 +2,7 @@ import type { AdapterRole } from '../../shared/jobLoopTypes'
 import type { ExternalCallRecord, ExternalOutcomeStatus, ExternalPreflight, SyntheticPacket } from '../../shared/externalAdapterTypes'
 import type { AdapterRunState, RelayTurnPayload } from '../../shared/threadTypes'
 import type { AdapterAcceptance, AdapterRequest, ConversationAdapter } from './conversationAdapters'
-import { AdapterProtocolError } from './conversationAdapters'
+import { AdapterProtocolError, adapterSupportsRole } from './conversationAdapters'
 import type { ExternalTransport } from './externalTransport'
 
 export const defaultExternalTimeoutMs = 60_000
@@ -39,16 +39,23 @@ export class ExternalConversationAdapter implements ConversationAdapter {
   /** One controller per in-flight dispatch, so an Owner cancel reaches the real request. */
   private readonly inFlight = new Map<string, AbortController>()
 
+  readonly role: AdapterRole
+  readonly supportedRoles: readonly AdapterRole[]
+
   constructor(
     readonly adapterId: string,
-    readonly role: AdapterRole,
+    role: AdapterRole | readonly AdapterRole[],
     private readonly transport: ExternalTransport,
     private readonly hooks: ExternalAdapterHooks,
     private readonly timeoutMs = defaultExternalTimeoutMs
-  ) {}
+  ) {
+    this.supportedRoles = Array.isArray(role) ? [...role] : [role]
+    if (this.supportedRoles.length === 0) throw new AdapterProtocolError(`adapter ${adapterId} must support at least one role`)
+    this.role = this.supportedRoles[0]
+  }
 
   async send(request: AdapterRequest): Promise<AdapterAcceptance> {
-    if (request.role !== this.role) throw new AdapterProtocolError(`adapter ${this.adapterId} cannot take role ${request.role}`)
+    if (!adapterSupportsRole(this, request.role)) throw new AdapterProtocolError(`adapter ${this.adapterId} cannot take role ${request.role}`)
 
     // The gate runs before the transport exists in the call path: no approval, no send.
     const { packet, preflight } = await this.hooks.authorise(request)
@@ -82,7 +89,7 @@ export class ExternalConversationAdapter implements ConversationAdapter {
         ? (outcome.content as string)
         : `【外部Adapter応答なし】provider=${this.transport.providerId} status=${outcome.status} reason=${outcome.terminationReason}`,
       status: answered ? 'success' : turnStatusFor[outcome.status],
-      summary: `${this.transport.providerId} / ${this.role} / ${outcome.status}`,
+      summary: `${this.transport.providerId} / ${request.role} / ${outcome.status}`,
       verification: [{ name: 'external-answer-received', status: answered ? 'pass' : 'not-run', reason: outcome.terminationReason }],
       risks: answered ? [] : ['外部Adapterから採用可能な回答を得られなかった'],
       envelopeStatus: outcome.status,
@@ -132,7 +139,7 @@ export class ExternalConversationAdapter implements ConversationAdapter {
       approvalId: preflight.approvalId ?? 'none',
       provider: this.transport.providerId,
       adapterId: this.adapterId,
-      role: this.role,
+      role: request.role,
       taskId: request.taskId,
       threadId: request.threadId,
       jobId: request.jobId,

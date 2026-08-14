@@ -25,6 +25,8 @@ export interface SyntheticPacket {
   instruction: string
   resultFormat: string
   stopConditions: string[]
+  /** Bounded, explicitly approved dependency content for a local Frontdoor Critic. */
+  dependencyContext?: Array<{ nodeId: string; resultHash: string; content: string }>
   createdAt: string
 }
 

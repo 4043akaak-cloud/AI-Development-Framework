@@ -78,7 +78,7 @@ async function wiredMain(transport: MockExternalTransport | AnthropicMessagesTra
     adapters: [
       new FakeProposalConversationAdapter(),
       new FakeCriticConversationAdapter(),
-      new ExternalConversationAdapter(adapterId, 'proposal', transport, {
+      new ExternalConversationAdapter(adapterId, adapterId === 'ollama-local' ? ['proposal', 'critic'] : 'proposal', transport, {
         authorise: (request) => relay.externalHooks(adapterId, transport).authorise(request),
         recordCall: (record) => relay.externalHooks(adapterId, transport).recordCall(record),
         now: () => new Date()
@@ -430,6 +430,7 @@ describe('ADF-EXTERNAL-ADAPTER-001 Electron wiring', () => {
       'frontdoor:inspect',
       'frontdoor:approve',
       'frontdoor:dispatch',
+      'frontdoor:review-node',
       'frontdoor:answer',
       'frontdoor:review-result',
       'frontdoor:complete',
@@ -490,7 +491,7 @@ async function wiredMainWithOllama(runtimeRoot?: string, anthropicFetchImpl?: Fe
         recordCall: (record) => relay.externalHooks('claude-external', anthropicTransport).recordCall(record),
         now: () => new Date()
       }),
-      new ExternalConversationAdapter('ollama-local', 'proposal', ollamaTransport, {
+      new ExternalConversationAdapter('ollama-local', ['proposal', 'critic'], ollamaTransport, {
         authorise: (request) => relay.externalHooks('ollama-local', ollamaTransport).authorise(request),
         recordCall: (record) => relay.externalHooks('ollama-local', ollamaTransport).recordCall(record),
         now: () => new Date()

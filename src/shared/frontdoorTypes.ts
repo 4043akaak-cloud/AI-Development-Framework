@@ -6,7 +6,7 @@ export type OrchestrationNodeState = 'queued' | 'ready' | 'running' | 'completed
 export type FrontdoorQuestionKind = 'clarification' | 'missing-context' | 'scope-change' | 'approval-required' | 'execution-blocked' | 'conflict'
 export type FrontdoorQuestionStatus = 'open' | 'answered' | 'dismissed'
 
-export type OwnerGate = 'intake' | 'completion-shape' | 'decomposition' | 'dispatch' | 'question' | 'result-review' | 'completion'
+export type OwnerGate = 'intake' | 'completion-shape' | 'decomposition' | 'dispatch' | 'node-review' | 'question' | 'result-review' | 'completion'
 export type OwnerDecision = 'clarify' | 'edit' | 'reject' | 'proceed' | 'approve' | 'approve-selected' | 'dispatch' | 'defer' | 'stop' | 'answer' | 'revise-plan' | 'accept' | 'follow-up' | 'continue' | 'complete'
 export type OwnerGateState = 'received' | `awaiting-owner:${OwnerGate}` | 'running' | 'completed' | 'stopped' | 'rejected' | 'blocked'
 
@@ -128,6 +128,20 @@ export interface OrchestrationRun {
   createdAt: string
   updatedAt: string
   ownerGate?: OwnerGateState
+  nodeReview?: FrontdoorNodeReview
+}
+
+export interface FrontdoorNodeReview {
+  nodeId: string
+  resultRef?: string
+  resultHash?: string
+  status?: ResultStatus
+  summary?: string
+  content?: string
+  verification: Array<{ name: string; status: 'pass' | 'fail' | 'not-run'; reason?: string }>
+  risks: string[]
+  nextNodeIds: string[]
+  targetHash: string
 }
 
 export interface FrontdoorQuestion {
@@ -186,6 +200,7 @@ export interface FrontdoorInspection {
   nextAction: string
   eventCount: number
   nodeTargetHashes: Record<string, string>
+  nodeReview?: FrontdoorNodeReview
 }
 
 export interface FrontdoorRunSummary {
@@ -207,6 +222,8 @@ export type FrontdoorEventType =
   | 'frontdoor.owner-decision-recorded'
   | 'frontdoor.plan-revised'
   | 'frontdoor.node-approved'
+  | 'frontdoor.node-review-opened'
+  | 'frontdoor.node-review-continued'
   | 'frontdoor.question-answered'
   | 'frontdoor.result-reviewed'
   | 'frontdoor.completion-proposed'

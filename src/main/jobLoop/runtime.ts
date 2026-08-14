@@ -145,6 +145,7 @@ export class JobRuntime {
         scopeHash: packet.scopeHash,
         contextHash: packet.contextHash,
         status: artifact.status,
+        content: artifact.proposal ?? artifact.critique ?? `${artifact.role} result`,
         summary: artifact.proposal ?? artifact.critique ?? `${artifact.role} result`,
         artifact: { artifactId: artifact.artifactId, changes: artifact.changes },
         verification: artifact.verification.map((item) => ({ name: item.name, status: item.status })),

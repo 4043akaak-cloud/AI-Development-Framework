@@ -30,7 +30,7 @@ function planBody(plan: DecompositionPlan): FrontdoorPrepareInput['plan'] {
   return body
 }
 
-function assertLocalAdapterPlan(plan: FrontdoorPrepareInput['plan']): void {
+function assertLocalAdapterPlan(orchestrator: FrontdoorOrchestrator, plan: FrontdoorPrepareInput['plan']): void {
   for (const node of plan.nodes) {
     let profile: AdapterProfile
     try {
@@ -44,6 +44,7 @@ function assertLocalAdapterPlan(plan: FrontdoorPrepareInput['plan']): void {
     if (!node.capabilities.every((capability) => profile.capabilities.includes(capability))) {
       throw new Error(`plan adapter ${node.adapterId} does not support the capabilities for ${node.nodeId}`)
     }
+    orchestrator.relay.assertAdapterRegistered(node.adapterId, node.role)
   }
 }
 
@@ -79,7 +80,7 @@ export async function prepareFrontdoorRunOrThrow(orchestrator: FrontdoorOrchestr
   const input = normalizeInput(value)
   const request = createFrontdoorRequest(input.request)
   const plan = createDecompositionPlan(request, input.plan)
-  assertLocalAdapterPlan(input.plan)
+  assertLocalAdapterPlan(orchestrator, input.plan)
 
   const existing = await existingRunForRequest(orchestrator, request.requestId)
   if (existing) {

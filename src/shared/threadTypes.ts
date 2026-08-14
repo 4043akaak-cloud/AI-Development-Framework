@@ -63,6 +63,8 @@ export interface AdapterDependencyResult {
   resultRef: string
   resultHash: string
   status: string
+  /** Bounded Result content explicitly passed to a dependent Node; never inferred from a ref. */
+  content?: string
 }
 
 export interface OwnerDecisionRecord {

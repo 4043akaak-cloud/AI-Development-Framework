@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises'
 import { parseArgs } from 'node:util'
 import type { ApprovedTaskPacket } from '../shared/jobLoopTypes'
 import type { DecompositionPlanInput, FrontdoorRequestInput, OwnerGate } from '../shared/frontdoorTypes'
-import { ConversationRelay } from '../main/jobLoop/relay'
+import { createLiveRelay } from '../main/liveRelay'
 import { FrontdoorOrchestrator } from '../main/frontdoor/orchestrator'
 import { prepareFrontdoorRunOrThrow } from '../main/frontdoor/frontdoorPrepareService'
 
@@ -33,15 +33,16 @@ const frontdoorOptions = {
   'approved-by': { type: 'string' },
   note: { type: 'string' },
   'question-id': { type: 'string' },
+  'node-id': { type: 'string' },
   'answer-ref': { type: 'string' },
   decision: { type: 'string' },
   json: { type: 'boolean' },
   help: { type: 'boolean' }
 } as const
 
-type FrontdoorCommand = 'prepare' | 'inspect' | 'approve' | 'dispatch' | 'answer' | 'review-result' | 'complete' | 'stop' | 'recover'
+type FrontdoorCommand = 'prepare' | 'inspect' | 'approve' | 'dispatch' | 'review-node' | 'answer' | 'review-result' | 'complete' | 'stop' | 'recover'
 
-const commands: readonly FrontdoorCommand[] = ['prepare', 'inspect', 'approve', 'dispatch', 'answer', 'review-result', 'complete', 'stop', 'recover']
+const commands: readonly FrontdoorCommand[] = ['prepare', 'inspect', 'approve', 'dispatch', 'review-node', 'answer', 'review-result', 'complete', 'stop', 'recover']
 
 function usage(command?: string): string {
   if (command === 'approve') {
@@ -59,6 +60,7 @@ function usage(command?: string): string {
     '  inspect         read the Run, hashes, Evidence, Decisions, and next action',
     '  approve         record one explicit Owner Gate decision',
     '  dispatch        execute only the previously approved Node set',
+    '  review-node     record Owner continue/stop for the completed Node; continue dispatches the next Node',
     '  answer          record an explicit answer to the current Question',
     '  review-result   record the Owner review of the current Aggregate/Evidence',
     '  complete        approve completion after accepted Result review',
@@ -76,6 +78,7 @@ function usage(command?: string): string {
     'prepare options: --input <request-plan.json>',
     'approve options: --gate <gate> --decision <expected positive Decision> --approved-by <name>',
     'dispatch options: --packets <packets.json>',
+    'review-node options: --node-id <node-id> --decision <continue|stop> [--packets <packets.json>]',
     'answer options: --question-id <id> plus --answer-ref <ref> or --note <text>',
     'review-result options: --decision <accept|follow-up|reject>',
     ''
@@ -135,7 +138,8 @@ async function inspectRun(orchestrator: FrontdoorOrchestrator, runId: string): P
     questions: inspection.openQuestions,
     nextAction: inspection.nextAction,
     eventCount: inspection.eventCount,
-    nodeTargetHashes: inspection.nodeTargetHashes
+    nodeTargetHashes: inspection.nodeTargetHashes,
+    nodeReview: inspection.nodeReview
   }
 }
 
@@ -165,7 +169,7 @@ export async function runFrontdoorCli(argv: string[], io: FrontdoorCliIO = defau
 
   const runtimeRoot = path.resolve(requiredString(values, 'runtime-root') ?? '.adf-runtime')
   const json = values.json === true
-  const relay = new ConversationRelay({ runtimeRoot })
+  const relay = createLiveRelay(runtimeRoot)
   const orchestrator = new FrontdoorOrchestrator({ relay })
 
   try {
@@ -186,7 +190,7 @@ export async function runFrontdoorCli(argv: string[], io: FrontdoorCliIO = defau
       return 0
     }
 
-    const requiresOwnerIdentity = command === 'approve' || command === 'answer' || command === 'review-result' || command === 'complete' || command === 'stop'
+    const requiresOwnerIdentity = command === 'approve' || command === 'review-node' || command === 'answer' || command === 'review-result' || command === 'complete' || command === 'stop'
     const approvedBy = requiredString(values, 'approved-by')
     if (requiresOwnerIdentity && !approvedBy) throw new Error(`${command} requires --approved-by <name>`)
     const note = requiredString(values, 'note') ?? undefined
@@ -215,6 +219,24 @@ export async function runFrontdoorCli(argv: string[], io: FrontdoorCliIO = defau
       const packets = ensurePackets(await io.readJsonFile(path.resolve(packetsPath)))
       const result = await orchestrator.executeApprovedRun(runId, packets)
       output(io, { command, runId, result }, json)
+      return 0
+    }
+
+    if (command === 'review-node') {
+      const nodeId = requiredString(values, 'node-id')
+      if (!nodeId) throw new Error('review-node requires --node-id <node-id>')
+      const decision = requiredString(values, 'decision')
+      if (decision !== 'continue' && decision !== 'stop') throw new Error('review-node requires --decision continue|stop')
+      const review = await orchestrator.reviewNode(runId, nodeId, approvedBy!, decision, note)
+      if (decision === 'stop') {
+        output(io, { command, decision: review }, json)
+        return 0
+      }
+      const packetsPath = requiredString(values, 'packets')
+      if (!packetsPath) throw new Error('review-node --decision continue requires --packets <packets.json>')
+      const packets = ensurePackets(await io.readJsonFile(path.resolve(packetsPath)))
+      const result = await orchestrator.executeApprovedRun(runId, packets)
+      output(io, { command, decision: review, result }, json)
       return 0
     }
 

@@ -2,7 +2,7 @@ import { mkdtemp, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import type { ApprovedTaskPacket } from '../src/shared/jobLoopTypes'
+import type { AdapterRole, ApprovedTaskPacket } from '../src/shared/jobLoopTypes'
 import type { ExternalSendApproval } from '../src/shared/externalAdapterTypes'
 import { routeAdapters } from '../src/main/jobLoop/adapterRegistry'
 import { hashJson } from '../src/main/jobLoop/hash'
@@ -13,7 +13,7 @@ import { externalApprovalPath, ExternalSendBlockedError } from '../src/main/jobL
 import { MockExternalTransport, TransportNotConfiguredError, UnconfiguredExternalTransport } from '../src/main/jobLoop/externalTransport'
 import { assertPacketBoundary, buildSyntheticPacket, PacketBoundaryError } from '../src/main/jobLoop/syntheticPacket'
 import { AnthropicMessagesTransport } from '../src/main/jobLoop/anthropicTransport'
-import { FakeCriticConversationAdapter } from '../src/main/jobLoop/conversationAdapters'
+import { FakeCriticConversationAdapter, type AdapterRequest } from '../src/main/jobLoop/conversationAdapters'
 
 const taskId = 'ADF-EXTERNAL-ADAPTER-001'
 const adapterId = 'external-probe-mock'
@@ -50,12 +50,12 @@ function approvedPacket(): ApprovedTaskPacket {
   }
 }
 
-async function relayWith(transport: MockExternalTransport | UnconfiguredExternalTransport | AnthropicMessagesTransport, selectedAdapterId = adapterId): Promise<{ relay: ConversationRelay; threadId: string }> {
+async function relayWith(transport: MockExternalTransport | UnconfiguredExternalTransport | AnthropicMessagesTransport, selectedAdapterId = adapterId, roles: AdapterRole | readonly AdapterRole[] = 'proposal'): Promise<{ relay: ConversationRelay; threadId: string }> {
   const runtimeRoot = await mkdtemp(path.join(tmpdir(), 'adf-external-'))
   const relay = new ConversationRelay({ runtimeRoot })
-  const adapter = new ExternalConversationAdapter(selectedAdapterId, 'proposal', transport, relay.externalHooks(selectedAdapterId, transport))
+  const adapter = new ExternalConversationAdapter(selectedAdapterId, roles, transport, relay.externalHooks(selectedAdapterId, transport))
   const withExternal = new ConversationRelay({ runtimeRoot, adapters: [adapter, new FakeCriticConversationAdapter()] })
-  const rebound = new ExternalConversationAdapter(selectedAdapterId, 'proposal', transport, withExternal.externalHooks(selectedAdapterId, transport))
+  const rebound = new ExternalConversationAdapter(selectedAdapterId, roles, transport, withExternal.externalHooks(selectedAdapterId, transport))
   const final = new ConversationRelay({ runtimeRoot, adapters: [rebound, new FakeCriticConversationAdapter()] })
   const thread = await final.startThread(approvedPacket())
   return { relay: final, threadId: thread.threadId }
@@ -209,7 +209,7 @@ describe('ADF-EXTERNAL-ADAPTER-001 approved send', () => {
 
   it('reports the approved send budget as exhausted after one call', async () => {
     const transport = new MockExternalTransport({ status: 'success', content: 'ok' })
-    const { relay, threadId } = await relayWith(transport)
+    const { relay, threadId } = await relayWith(transport, adapterId, ['proposal', 'critic'])
     await grantApproval(relay, threadId, { maxSends: 1 })
     await relay.continueJob(threadId, adapterId)
     expect(transport.received).toHaveLength(1)
@@ -217,6 +217,31 @@ describe('ADF-EXTERNAL-ADAPTER-001 approved send', () => {
     const preflight = await relay.preflightExternalSend(threadId, adapterId, transport)
     expect(preflight.ok).toBe(false)
     expect(preflight.blockingReasons.join(' ')).toMatch(/send-budget-remaining: 1 of 1 approved sends already used/)
+  })
+
+  it('rejects preflight when a single-role Adapter cannot serve the Thread\'s next role', async () => {
+    const transport = new MockExternalTransport({ status: 'success', content: 'ok' })
+    const { relay, threadId } = await relayWith(transport)
+    await grantApproval(relay, threadId)
+    await relay.continueJob(threadId, adapterId)
+
+    await expect(relay.preflightExternalSend(threadId, adapterId, transport)).rejects.toThrow(/registered for role\(s\) proposal, not critic/)
+  })
+
+  it('rejects an unsupported role before a multi-role Adapter reaches its hooks', async () => {
+    const transport = new MockExternalTransport({ status: 'success', content: 'must not send' })
+    const adapter = new ExternalConversationAdapter('multi-role-probe', ['proposal', 'critic'], transport, {
+      authorise: async () => { throw new Error('authorise must not run') },
+      recordCall: async () => { throw new Error('recordCall must not run') },
+      now: () => new Date()
+    })
+    const request: AdapterRequest = {
+      dispatchId: 'dispatch-unsupported-role', taskId: 'task', threadId: 'thread', jobId: 'job', title: 'title',
+      role: 'implementation', sequence: 0, priorTurns: []
+    }
+
+    await expect(adapter.send(request)).rejects.toThrow(/cannot take role implementation/)
+    expect(transport.received).toHaveLength(0)
   })
 
   it.each([

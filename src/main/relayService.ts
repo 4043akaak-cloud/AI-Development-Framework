@@ -133,6 +133,7 @@ export function sendExternal(relay: ConversationRelay, threadId: unknown, adapte
     const adapter = asIdentifier(adapterId, 'adapterId')
     const preflight = await relay.preflightExternalSend(id, adapter)
     if (!preflight.ok) throw new Error(`external send blocked: ${preflight.blockingReasons.join('; ')}`)
+    await relay.assertAdapterReadyForDispatch(adapter)
     return relay.continueJob(id, adapter)
   })
 }

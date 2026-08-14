@@ -1,4 +1,5 @@
 import path from 'node:path'
+import type { ApprovedTaskPacket } from '../../shared/jobLoopTypes'
 import type { AggregateResult, FrontdoorQuestion, OwnerDecision, OwnerDecisionEnvelope, OwnerGate, OrchestrationNodeRecord, OrchestrationRun } from '../../shared/frontdoorTypes'
 import { hashJson } from '../jobLoop/hash'
 import { readJson } from '../jobLoop/ledger'
@@ -9,6 +10,7 @@ const decisionByGate: Record<OwnerGate, readonly OwnerDecision[]> = {
   'completion-shape': ['edit', 'approve', 'reject', 'stop'],
   decomposition: ['edit', 'approve-selected', 'reject', 'stop'],
   dispatch: ['dispatch', 'approve-selected', 'defer', 'stop'],
+  'node-review': ['continue', 'stop'],
   question: ['answer', 'revise-plan', 'stop'],
   'result-review': ['accept', 'follow-up', 'reject', 'stop'],
   completion: ['approve', 'continue', 'stop', 'complete']
@@ -29,8 +31,20 @@ export function canApprove(input: DecisionCheckInput): boolean {
     && decisionByGate[input.gate].includes(input.decision)
 }
 
-export function dispatchTargetHash(run: Pick<OrchestrationRun, 'runId' | 'requestId' | 'planHash'>, nodeIds: readonly string[]): string {
-  return hashJson({ runId: run.runId, requestId: run.requestId, planHash: run.planHash, nodeIds: [...nodeIds].sort() })
+export type DispatchPacketHashes = Readonly<Record<string, string>>
+
+function sortedPacketHashes(packetHashes: DispatchPacketHashes): Record<string, string> {
+  return Object.fromEntries(Object.entries(packetHashes).sort(([left], [right]) => left.localeCompare(right)))
+}
+
+export function dispatchTargetHash(run: Pick<OrchestrationRun, 'runId' | 'requestId' | 'planHash'>, nodeIds: readonly string[], packetHashes?: DispatchPacketHashes): string {
+  return hashJson({
+    runId: run.runId,
+    requestId: run.requestId,
+    planHash: run.planHash,
+    nodeIds: [...nodeIds].sort(),
+    ...(packetHashes ? { packetHashes: sortedPacketHashes(packetHashes) } : {})
+  })
 }
 
 export function nodeTargetHash(run: Pick<OrchestrationRun, 'runId' | 'requestId' | 'planHash'>, record: Pick<OrchestrationNodeRecord, 'node'>): string {
@@ -45,14 +59,18 @@ export function resultReviewTargetHash(runId: string, aggregateRef: string, aggr
   return hashJson({ runId, aggregateRef, aggregateHash: hashJson(aggregate) })
 }
 
+export function nodeReviewTargetHash(run: Pick<OrchestrationRun, 'runId' | 'requestId' | 'planHash'>, nodeId: string, resultHash: string | undefined, nextNodeIds: readonly string[]): string {
+  return hashJson({ runId: run.runId, requestId: run.requestId, planHash: run.planHash, nodeId, resultHash: resultHash ?? null, nextNodeIds: [...nextNodeIds].sort() })
+}
+
 export function questionTargetHash(question: Pick<FrontdoorQuestion, 'questionId' | 'runId' | 'nodeId' | 'text'>): string {
   return hashJson({ questionId: question.questionId, runId: question.runId, nodeId: question.nodeId, text: question.text })
 }
 
-export function canDispatch(run: Pick<OrchestrationRun, 'runId' | 'requestId' | 'planHash' | 'state'>, nodeIds: readonly string[], input: Omit<DecisionCheckInput, 'expectedTargetHash'>): boolean {
+export function canDispatch(run: Pick<OrchestrationRun, 'runId' | 'requestId' | 'planHash' | 'state'>, nodeIds: readonly string[], input: Omit<DecisionCheckInput, 'expectedTargetHash'>, packetHashes?: DispatchPacketHashes): boolean {
   return run.state === 'ready-for-approval'
     && input.gate === 'dispatch'
-    && canApprove({ ...input, expectedTargetHash: dispatchTargetHash(run, nodeIds) })
+    && canApprove({ ...input, expectedTargetHash: dispatchTargetHash(run, nodeIds, packetHashes) })
 }
 
 export function canAnswer(question: Pick<FrontdoorQuestion, 'questionId' | 'runId' | 'nodeId' | 'text' | 'status'>, input: Omit<DecisionCheckInput, 'expectedTargetHash'> & { answerRef?: string; note?: string }): boolean {
@@ -64,6 +82,10 @@ export function canAnswer(question: Pick<FrontdoorQuestion, 'questionId' | 'runI
 
 export function canReviewResult(input: DecisionCheckInput): boolean {
   return input.gate === 'result-review' && ['accept', 'follow-up', 'reject', 'stop'].includes(input.decision) && canApprove({ ...input, expectedTargetHash: input.expectedTargetHash })
+}
+
+export function canReviewNode(input: DecisionCheckInput): boolean {
+  return input.gate === 'node-review' && input.decision === 'continue' && canApprove({ ...input, expectedTargetHash: input.expectedTargetHash })
 }
 
 export function canComplete(run: Pick<OrchestrationRun, 'state'>, input: Omit<DecisionCheckInput, 'expectedTargetHash'>, expectedTargetHash: string, resultReviewed: boolean): boolean {
@@ -108,19 +130,48 @@ function hasDecision(events: Awaited<ReturnType<typeof readRunEvents>>, gate: Ow
   })
 }
 
-export async function assertDispatchApproved(runtimeRoot: string, runId: string, nodeIds: readonly string[]): Promise<void> {
+async function readApprovedPacketHashes(runtimeRoot: string, run: OrchestrationRun, nodeIds: readonly string[]): Promise<DispatchPacketHashes | undefined> {
+  const hashes: Record<string, string> = {}
+  let missing = 0
+  for (const nodeId of nodeIds) {
+    const record = run.nodes.find((candidate) => candidate.node.nodeId === nodeId)
+    if (!record) throw new Error(`Dispatch references an unknown Node: ${nodeId}`)
+    try {
+      const packet = await readJson<ApprovedTaskPacket>(path.join(runtimeRoot, 'approved-tasks', `${record.childTaskId}.json`))
+      hashes[nodeId] = hashJson(packet)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        missing += 1
+        continue
+      }
+      throw error
+    }
+  }
+  if (missing === nodeIds.length) return undefined
+  if (missing > 0) throw new Error('Dispatch approval packet set is incomplete')
+  return hashes
+}
+
+export async function assertDispatchApproved(runtimeRoot: string, runId: string, nodeIds: readonly string[], packetHashes?: DispatchPacketHashes, requirePacketBinding = false): Promise<void> {
   const run = await readRun(runtimeRoot, runId)
-  const expectedTargetHash = dispatchTargetHash(run, nodeIds)
+  const expectedPacketHashes = packetHashes ?? await readApprovedPacketHashes(runtimeRoot, run, nodeIds)
+  const packetBoundTargetHash = dispatchTargetHash(run, nodeIds, expectedPacketHashes)
+  const legacyTargetHash = dispatchTargetHash(run, nodeIds)
   const events = await readRunEvents(runtimeRoot, runId)
+  const allowedTargetHashes = requirePacketBinding ? [packetBoundTargetHash] : [packetBoundTargetHash, legacyTargetHash]
   const decision = events.find((event) => event.type === 'frontdoor.owner-decision-recorded'
     && (event.payload.decision as OwnerDecisionEnvelope | undefined)?.gate === 'dispatch'
-    && (event.payload.decision as OwnerDecisionEnvelope | undefined)?.targetHash === expectedTargetHash
+    && allowedTargetHashes.includes((event.payload.decision as OwnerDecisionEnvelope | undefined)?.targetHash ?? '')
     && ['dispatch', 'approve-selected'].includes(String((event.payload.decision as OwnerDecisionEnvelope).decision)))
-  if (!decision) throw new Error('Frontdoor dispatch requires a matching Owner Decision')
+  if (!decision) throw new Error(requirePacketBinding ? 'Frontdoor local-http dispatch requires a Packet-bound Owner Decision' : 'Frontdoor dispatch requires a matching Owner Decision')
+  const approvedTargetHash = (decision.payload.decision as OwnerDecisionEnvelope).targetHash
+  const packetBindingEstablished = approvedTargetHash === packetBoundTargetHash
   const approvedNodes = new Set(events.filter((event) => {
-    if (event.type !== 'frontdoor.node-approved' || event.payload.targetHash !== expectedTargetHash || typeof event.payload.nodeTargetHash !== 'string') return false
+    if (event.type !== 'frontdoor.node-approved' || event.payload.targetHash !== approvedTargetHash || typeof event.payload.nodeTargetHash !== 'string') return false
     const record = run.nodes.find((candidate) => candidate.node.nodeId === event.payload.nodeId)
-    return Boolean(record && event.payload.nodeTargetHash === nodeTargetHash(run, record))
+    return Boolean(record
+      && event.payload.nodeTargetHash === nodeTargetHash(run, record)
+      && (!packetBindingEstablished || event.payload.packetHash === expectedPacketHashes?.[String(event.payload.nodeId)]))
   }).map((event) => String(event.payload.nodeId)))
   if (nodeIds.some((nodeId) => !approvedNodes.has(nodeId))) throw new Error('Frontdoor dispatch has an unapproved Node')
 }
@@ -177,15 +228,22 @@ export class FrontdoorOwnerGateService {
       if (!hasDecision(events, 'intake', ['proceed'], request.inputHash)) throw new Error('Dispatch requires an approved Intake')
       if (!hasDecision(events, 'completion-shape', ['approve'], completionShapeTargetHash(run, request.requestedOutput))) throw new Error('Dispatch requires an approved Completion Shape')
       if (!hasDecision(events, 'decomposition', ['approve-selected'], plan.planHash)) throw new Error('Dispatch requires an approved Decomposition')
-      const targetHash = dispatchTargetHash(run, selectedNodeIds)
+      const packetHashes = await readApprovedPacketHashes(this.runtimeRoot, run, selectedNodeIds)
+      const targetHash = dispatchTargetHash(run, selectedNodeIds, packetHashes)
       const envelope = buildDecisionEnvelope(run, 'dispatch', 'dispatch', targetHash, approvedBy, this.clock().toISOString(), { note })
-      if (!canDispatch(run, selectedNodeIds, envelope)) throw new Error('Dispatch approval is invalid or stale')
+      if (!canDispatch(run, selectedNodeIds, envelope, packetHashes)) throw new Error('Dispatch approval is invalid or stale')
       await assertDecisionBinding(this.runtimeRoot, envelope)
       await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.owner-decision-recorded', { decision: envelope })
       for (const nodeId of selectedNodeIds) {
         const record = run.nodes.find((candidate) => candidate.node.nodeId === nodeId)
         if (!record) throw new Error(`Dispatch approval references an unknown Node: ${nodeId}`)
-        await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.node-approved', { nodeId, targetHash, nodeTargetHash: nodeTargetHash(run, record), decisionId: envelope.decisionId })
+        await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.node-approved', {
+          nodeId,
+          targetHash,
+          nodeTargetHash: nodeTargetHash(run, record),
+          ...(packetHashes ? { packetHash: packetHashes[nodeId] } : {}),
+          decisionId: envelope.decisionId
+        })
       }
       return envelope
     } finally {
@@ -237,6 +295,34 @@ export class FrontdoorOwnerGateService {
     await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.owner-decision-recorded', { decision: envelope })
     await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.result-reviewed', { decision: envelope, aggregateRef: run.aggregateResultRef, aggregateHash: hashJson(aggregate) })
     return envelope
+  }
+
+  async reviewNode(runId: string, nodeId: string, approvedBy: string, decision: 'continue' | 'stop' = 'continue', note?: string): Promise<OwnerDecisionEnvelope> {
+    const claim = await claimRun(this.runtimeRoot, runId, `owner-node-review-${process.pid}`)
+    try {
+      const run = await readRun(this.runtimeRoot, runId)
+      const review = run.nodeReview
+      if (run.state !== 'awaiting-owner' || run.ownerGate !== 'awaiting-owner:node-review' || !review || review.nodeId !== nodeId) throw new Error('Node review is not the current Owner Gate')
+      const targetHash = nodeReviewTargetHash(run, review.nodeId, review.resultHash, review.nextNodeIds)
+      if (review.targetHash !== targetHash) throw new Error('Node review target is stale or tampered')
+      const envelope = buildDecisionEnvelope(run, 'node-review', decision, targetHash, approvedBy, this.clock().toISOString(), { nodeId, note })
+      if (decision !== 'continue' && decision !== 'stop') throw new Error('Node review decision is invalid')
+      if (!canApprove({ gate: 'node-review', decision, targetHash, expectedTargetHash: targetHash, approvedBy })) throw new Error('Node review decision is invalid')
+      await assertDecisionBinding(this.runtimeRoot, envelope)
+      await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.owner-decision-recorded', { decision: envelope })
+      if (decision === 'stop') {
+        const stopped = { ...run, state: 'cancelled' as const, ownerGate: 'stopped' as const, nodeReview: undefined, nodes: run.nodes.map((node) => ['queued', 'ready', 'running', 'recovery-needed', 'awaiting-question'].includes(node.state) ? { ...node, state: 'cancelled' as const, error: note ?? 'Owner stopped after Node review' } : node), updatedAt: this.clock().toISOString() }
+        await writeRun(this.runtimeRoot, stopped)
+        await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.run-stopped', { note: note ?? 'Owner stopped after Node review', nodeRecords: stopped.nodes, runState: stopped.state })
+        return envelope
+      }
+      const resumed = { ...run, state: 'ready-for-approval' as const, ownerGate: 'awaiting-owner:dispatch' as const, approvalIds: [], nodeReview: undefined, updatedAt: this.clock().toISOString() }
+      await writeRun(this.runtimeRoot, resumed)
+      await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.node-review-continued', { nodeId, targetHash, decisionId: envelope.decisionId, nextNodeIds: review.nextNodeIds, runState: resumed.state })
+      return envelope
+    } finally {
+      await releaseRun(this.runtimeRoot, runId, claim.token)
+    }
   }
 
   async completeRun(runId: string, approvedBy: string, note?: string): Promise<OrchestrationRun> {

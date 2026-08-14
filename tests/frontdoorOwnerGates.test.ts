@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -110,6 +110,19 @@ describe('Frontdoor Owner Gates', () => {
     expect(canAnswer(question, { gate: 'question', decision: 'answer', targetHash: questionHash, approvedBy: 'Project Owner' })).toBe(false)
     expect(canAnswer(question, { gate: 'question', decision: 'answer', targetHash: questionHash, approvedBy: 'Project Owner', note: '続行する' })).toBe(true)
     expect(canComplete({ state: 'awaiting-owner' }, { gate: 'completion', decision: 'complete', targetHash, approvedBy: 'Project Owner' }, targetHash, false)).toBe(false)
+  })
+
+  it('binds a new Dispatch Decision to the exact child Packet hash and rejects a tampered Packet before send', async () => {
+    const { runtimeRoot, orchestrator, run } = await createFixture()
+    const approvedPacket = packet(run)
+    await mkdir(path.join(runtimeRoot, 'approved-tasks'), { recursive: true })
+    await writeFile(path.join(runtimeRoot, 'approved-tasks', `${approvedPacket.taskId}.json`), `${JSON.stringify(approvedPacket)}\n`, 'utf8')
+    await approveInitialGates(orchestrator, run.runId)
+    await orchestrator.approveDispatch(run.runId, [proposal.nodeId])
+
+    const tamperedPacket = { ...approvedPacket, objective: 'Ownerが承認していない差し替え' }
+    await expect(orchestrator.executeApprovedRun(run.runId, { proposal: tamperedPacket })).rejects.toThrow(/matching Owner Decision/)
+    await expect(orchestrator.relay.listThreads()).resolves.toEqual([])
   })
 
   it('does not treat a raw service object or UI state as an approval', async () => {

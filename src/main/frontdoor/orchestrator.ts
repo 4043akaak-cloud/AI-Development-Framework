@@ -1,6 +1,6 @@
 import path from 'node:path'
 import type { ApprovedTaskPacket } from '../../shared/jobLoopTypes'
-import type { AggregateResult, DecompositionNode, DecompositionPlan, FrontdoorInspection, FrontdoorLedgerEvent, FrontdoorQuestion, FrontdoorRequest, FrontdoorReturn, OrchestrationNodeRecord, OrchestrationRun } from '../../shared/frontdoorTypes'
+import type { AggregateResult, DecompositionNode, DecompositionPlan, FrontdoorInspection, FrontdoorLedgerEvent, FrontdoorNodeReview, FrontdoorQuestion, FrontdoorRequest, FrontdoorReturn, OrchestrationNodeRecord, OrchestrationRun } from '../../shared/frontdoorTypes'
 import { hashJson } from '../jobLoop/hash'
 import { validateApprovedTask } from '../jobLoop/contracts'
 import type { ConversationRelay } from '../jobLoop/relay'
@@ -13,7 +13,8 @@ import { assertBundleReady, claimRun, readPlan, readRequest, readRun, readRunCla
 import { replayFrontdoorRun } from './eventLedger'
 import { readJson } from '../jobLoop/ledger'
 import type { AdapterResultEnvelope } from '../jobLoop/resultEnvelope'
-import { assertDispatchApproved, buildDecisionEnvelope, FrontdoorOwnerGateService, nodeTargetHash } from './ownerGates'
+import { assertDispatchApproved, buildDecisionEnvelope, FrontdoorOwnerGateService, nodeReviewTargetHash, nodeTargetHash } from './ownerGates'
+import { getAdapterProfile } from '../jobLoop/adapterRegistry'
 
 export interface FrontdoorOrchestratorOptions {
   relay: ConversationRelay
@@ -46,7 +47,8 @@ async function assertRunIntegrity(runtimeRoot: string, run: OrchestrationRun, re
   if (run.runId !== expectedRunId) throw new Error('Frontdoor run binding hash integrity check failed')
   if (run.requestId !== request.requestId) throw new Error('Frontdoor run request binding mismatch')
   if (!Array.isArray(run.nodes) || run.nodes.some((record) => record.childTaskId !== childTaskId(request.requestId, record.node.nodeId) || !Number.isInteger(record.attempt) || record.attempt < 0)) throw new Error('Frontdoor node record binding is invalid')
-  if (run.state === 'ready-for-approval' && (run.nodes.some((record) => record.state !== 'queued' || record.resultRef || record.threadId || record.childJobId) || run.approvalIds.length > 0 || run.aggregateResultRef)) throw new Error('Frontdoor ready state is inconsistent with node records')
+  const isNodeReviewContinuation = run.state === 'ready-for-approval' && run.ownerGate === 'awaiting-owner:dispatch' && run.nodes.some((record) => record.state === 'completed' || record.state === 'failed' || record.state === 'awaiting-question')
+  if (run.state === 'ready-for-approval' && (!isNodeReviewContinuation && run.nodes.some((record) => record.state !== 'queued' || record.resultRef || record.threadId || record.childJobId) || run.approvalIds.length > 0 || run.aggregateResultRef || run.nodeReview)) throw new Error('Frontdoor ready state is inconsistent with node records')
   if (['complete', 'partial', 'failed', 'cancelled'].includes(run.state) && run.nodes.some((record) => record.state === 'queued' || record.state === 'running')) throw new Error('Frontdoor terminal state has unfinished nodes')
   validateDecompositionPlan(request, plan)
   if (run.nodes.length !== plan.nodes.length || run.nodes.some((record) => {
@@ -56,15 +58,15 @@ async function assertRunIntegrity(runtimeRoot: string, run: OrchestrationRun, re
 }
 
 function runProjection(run: OrchestrationRun): unknown {
-  return { runId: run.runId, requestId: run.requestId, requestHash: run.requestHash, planHash: run.planHash, state: run.state, ownerGate: run.ownerGate, nodes: run.nodes, approvalIds: run.approvalIds, openQuestionIds: run.openQuestionIds, aggregateResultRef: run.aggregateResultRef }
+  return { runId: run.runId, requestId: run.requestId, requestHash: run.requestHash, planHash: run.planHash, state: run.state, ownerGate: run.ownerGate, nodes: run.nodes, approvalIds: run.approvalIds, openQuestionIds: run.openQuestionIds, aggregateResultRef: run.aggregateResultRef, nodeReview: run.nodeReview }
 }
 
 function assertRunEventConsistency(run: OrchestrationRun, events: readonly FrontdoorLedgerEvent[]): void {
   if (events.length === 0) throw new Error('Frontdoor run has no ledger events')
   const replayed = replayFrontdoorRun(events)
   if (hashJson(runProjection(replayed)) !== hashJson(runProjection(run))) throw new Error('Frontdoor event replay does not match run.json')
-  const lastQuestionResume = Math.max(-1, ...events.filter((event) => event.type === 'frontdoor.question-answered').map((event) => event.sequence))
-  const progressed = events.some((event) => event.sequence > lastQuestionResume && ['frontdoor.approval-bound', 'frontdoor.node-started', 'frontdoor.node-completed', 'frontdoor.node-failed', 'frontdoor.run-completed', 'frontdoor.run-stopped'].includes(event.type))
+  const lastResume = Math.max(-1, ...events.filter((event) => event.type === 'frontdoor.question-answered' || event.type === 'frontdoor.node-review-continued').map((event) => event.sequence))
+  const progressed = events.some((event) => event.sequence > lastResume && ['frontdoor.approval-bound', 'frontdoor.node-started', 'frontdoor.node-completed', 'frontdoor.node-failed', 'frontdoor.run-completed', 'frontdoor.run-stopped'].includes(event.type))
   if (run.state === 'ready-for-approval' && progressed) throw new Error('Frontdoor ready state conflicts with persisted execution events')
   if (['complete', 'partial', 'failed', 'blocked-by-question', 'cancelled'].includes(run.state) && !events.some((event) => event.type === 'frontdoor.run-completed' || event.type === 'frontdoor.run-stopped')) throw new Error('Frontdoor terminal state has no terminal ledger event')
 }
@@ -132,6 +134,10 @@ export class FrontdoorOrchestrator {
     return this.ownerGates.reviewResult(runId, approvedBy, decision, note)
   }
 
+  async reviewNode(runId: string, nodeId: string, approvedBy = 'Project Owner', decision: 'continue' | 'stop' = 'continue', note?: string) {
+    return this.ownerGates.reviewNode(runId, nodeId, approvedBy, decision, note)
+  }
+
   async completeRun(runId: string, approvedBy = 'Project Owner', note?: string) {
     return this.ownerGates.completeRun(runId, approvedBy, note)
   }
@@ -160,7 +166,7 @@ export class FrontdoorOrchestrator {
     return run
   }
 
-  async executeApprovedRun(runId: string, packets: Readonly<Record<string, ApprovedTaskPacket>>): Promise<FrontdoorReturn> {
+  async executeApprovedRun(runId: string, packets: Readonly<Record<string, ApprovedTaskPacket>>, options: { requirePacketBinding?: boolean } = {}): Promise<FrontdoorReturn> {
     const claim = await claimRun(this.runtimeRoot, runId, `orchestrator-${process.pid}`)
     try {
       let run = await readRun(this.runtimeRoot, runId)
@@ -172,27 +178,28 @@ export class FrontdoorOrchestrator {
       const packetIds = Object.keys(packets).sort()
       const nodeIds = run.nodes.map((record) => record.node.nodeId).sort()
       if (packetIds.join('|') !== nodeIds.join('|')) throw new Error('approved child packet set does not exactly match the DecompositionPlan')
-      await assertDispatchApproved(this.runtimeRoot, runId, nodeIds)
+      const packetHashes = Object.fromEntries(run.nodes.map((record) => [record.node.nodeId, hashJson(packets[record.node.nodeId])]))
+      const requiresPacketBinding = options.requirePacketBinding === true || run.nodes.some((record) => getAdapterProfile(record.node.adapterId).connection === 'local-http')
+      await assertDispatchApproved(this.runtimeRoot, runId, nodeIds, packetHashes, requiresPacketBinding)
       for (const node of run.nodes) {
         const packet = packets[node.node.nodeId]
         if (packet.frontdoorBinding?.requestHash !== run.requestHash || packet.frontdoorBinding?.planHash !== run.planHash || packet.frontdoorBinding?.runId !== run.runId) throw new Error(`packet Frontdoor binding mismatch for ${node.node.nodeId}`)
         assertPacketMatchesNode(request, run, node, packet)
       }
-      run = { ...run, state: 'running', ownerGate: 'running', updatedAt: this.clock().toISOString(), approvalIds: run.nodes.map((node) => packets[node.node.nodeId].approval.approvalId) }
-      await writeRun(this.runtimeRoot, run)
-      await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.approval-bound', { approvalIds: run.approvalIds })
-
       const questions = [] as import('../../shared/frontdoorTypes').FrontdoorQuestion[]
       const evidenceRefs: string[] = []
-      while (run.nodes.some((node) => node.state === 'queued')) {
+      let executedNodeId: string | undefined
+      execution: {
+      if (run.nodes.some((node) => node.state === 'queued')) {
         const ready = readyNodeIds(run.nodes)
         if (ready.length === 0) {
           run = { ...run, nodes: run.nodes.map((node) => node.state === 'queued' ? { ...node, state: 'cancelled', error: 'dependency failed or was cancelled' } : node), updatedAt: this.clock().toISOString() }
           await writeRun(this.runtimeRoot, run)
           await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.node-failed', { nodeId: 'dependency-resolution', nodeRecords: run.nodes, runState: run.state, error: 'dependency failed or was cancelled' })
-          break
+          break execution
         }
         const nodeId = ready[0]
+        executedNodeId = nodeId
         const record = run.nodes.find((node) => node.node.nodeId === nodeId)!
         const dependencyResults: AdapterDependencyResult[] = []
         for (const dependencyId of record.node.dependsOn) {
@@ -201,7 +208,29 @@ export class FrontdoorOrchestrator {
           const envelope = await readJson<AdapterResultEnvelope>(path.join(this.runtimeRoot, dependency.resultRef))
           if (!dependency.resultRef.startsWith('threads/') || dependency.resultRef.includes('..') || hashJson(envelope) !== dependency.resultHash) throw new Error(`dependency result provenance mismatch for ${dependencyId}`)
           if (envelope.taskId !== dependency.childTaskId || envelope.jobId !== dependency.childJobId || envelope.inputHash !== dependency.childInputHash || envelope.orchestrationRunId !== runId) throw new Error(`dependency result identity mismatch for ${dependencyId}`)
-          dependencyResults.push({ runId, nodeId: dependencyId, resultRef: dependency.resultRef, resultHash: dependency.resultHash, status: dependency.resultStatus })
+          dependencyResults.push({ runId, nodeId: dependencyId, resultRef: dependency.resultRef, resultHash: dependency.resultHash, status: dependency.resultStatus, ...(envelope.content ? { content: envelope.content.slice(0, 1000) } : {}) })
+        }
+        try {
+          // Readiness is checked immediately before this Node can create a Job/Thread. A
+          // Proposal may succeed while the local provider becomes unavailable before its
+          // dependent Critic. The first-node failure remains fail-closed before Run mutation;
+          // a later-node failure is recorded as a failed Node without opening a send.
+          await this.relay.assertAdapterReadyForDispatch(record.node.adapterId)
+        } catch (error) {
+          const hasCompletedNode = run.nodes.some((candidate) => candidate.state === 'completed' || candidate.state === 'awaiting-question')
+          if (!hasCompletedNode) throw error
+          const message = String((error as Error).message ?? error).slice(0, 200)
+          const executionRun = run.state === 'ready-for-approval' ? { ...run, state: 'running' as const, ownerGate: 'running' as const } : run
+          const beforeFailure = executionRun
+          run = cancelDependents({ ...executionRun, nodes: executionRun.nodes.map((candidate) => candidate.node.nodeId === nodeId ? { ...candidate, state: 'failed' as const, error: message } : candidate), updatedAt: this.clock().toISOString() }, nodeId, 'dependency failed')
+          await writeRun(this.runtimeRoot, run)
+          await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.node-failed', { nodeId, error: message, nodeRecords: changedNodeRecords(beforeFailure, run), runState: run.state })
+          break execution
+        }
+        if (run.state === 'ready-for-approval') {
+          run = { ...run, state: 'running', ownerGate: 'running', updatedAt: this.clock().toISOString(), approvalIds: run.nodes.map((node) => packets[node.node.nodeId].approval.approvalId) }
+          await writeRun(this.runtimeRoot, run)
+          await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.approval-bound', { approvalIds: run.approvalIds })
         }
         run = { ...run, nodes: run.nodes.map((node) => node.node.nodeId === nodeId ? { ...node, state: 'running', attempt: node.attempt + 1 } : node), updatedAt: this.clock().toISOString() }
         await writeRun(this.runtimeRoot, run)
@@ -226,7 +255,6 @@ export class FrontdoorOrchestrator {
           if (nextState === 'awaiting-question') run = { ...run, state: 'blocked-by-question', nodes: run.nodes.map((node) => node.state === 'queued' ? { ...node, state: 'cancelled', error: 'blocked by Owner question' } : node) }
           await writeRun(this.runtimeRoot, run)
           await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.node-completed', { nodeId, threadId: completed.threadId, resultStatus: turn?.status, nodeState: nextState, questionIds: nodeQuestions.map((question) => question.questionId), nodeRecords: changedNodeRecords(beforeCompletion, run), runState: run.state })
-          if (nextState === 'awaiting-question') break
         } catch (error) {
           const message = String((error as Error).message ?? error).slice(0, 200)
           const beforeFailure = run
@@ -235,8 +263,39 @@ export class FrontdoorOrchestrator {
           await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.node-failed', { nodeId, error: message, nodeRecords: changedNodeRecords(beforeFailure, run), runState: run.state })
         }
       }
+      }
 
-      const aggregate = aggregateResults(runId, run.nodes, questions, evidenceRefs, this.clock().toISOString())
+      const completedNode = executedNodeId ? run.nodes.find((node) => node.node.nodeId === executedNodeId) : undefined
+      const nextNodeIds = readyNodeIds(run.nodes)
+      if (run.nodes.some((node) => node.state === 'queued') && nextNodeIds.length > 0 && completedNode) {
+        const nextReview: FrontdoorNodeReview = {
+          nodeId: completedNode.node.nodeId,
+          resultRef: completedNode.resultRef,
+          resultHash: completedNode.resultHash,
+          status: completedNode.resultStatus,
+          verification: completedNode.resultRef ? (await readJson<AdapterResultEnvelope>(path.join(this.runtimeRoot, completedNode.resultRef))).verification : [],
+          risks: completedNode.resultRef ? (await readJson<AdapterResultEnvelope>(path.join(this.runtimeRoot, completedNode.resultRef))).risks : [],
+          nextNodeIds,
+          targetHash: nodeReviewTargetHash(run, completedNode.node.nodeId, completedNode.resultHash, nextNodeIds)
+        }
+        if (completedNode.resultRef) {
+          const envelope = await readJson<AdapterResultEnvelope>(path.join(this.runtimeRoot, completedNode.resultRef))
+          nextReview.summary = envelope.summary
+          nextReview.content = envelope.content?.slice(0, 4000)
+        }
+        run = { ...run, state: 'awaiting-owner', ownerGate: 'awaiting-owner:node-review', nodeReview: nextReview, updatedAt: this.clock().toISOString() }
+        await writeRun(this.runtimeRoot, run)
+        await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.node-review-opened', { nodeId: nextReview.nodeId, nodeReview: nextReview, runState: run.state })
+        const interim = aggregateResults(runId, run.nodes, questions, [...new Set([...evidenceRefs, ...run.nodes.flatMap((node) => node.resultRef ? [node.resultRef] : [])])], this.clock().toISOString())
+        return {
+          ...buildFrontdoorReturn(request, interim),
+          status: 'partial',
+          summary: `${completedNode.node.nodeId}のResultを記録しました。次のNodeへ進むかOwnerが判断してください。`,
+          answer: `${completedNode.node.nodeId}のResultを記録しました。`,
+          nextAction: 'OwnerがNode Resultを確認し、継続または停止を判断する'
+        }
+      }
+      const aggregate = aggregateResults(runId, run.nodes, questions, [...new Set([...evidenceRefs, ...run.nodes.flatMap((node) => node.resultRef ? [node.resultRef] : [])])], this.clock().toISOString())
       const aggregateRef = await writeAggregate(this.runtimeRoot, runId, aggregate)
       run = { ...run, state: 'awaiting-owner', ownerGate: 'awaiting-owner:result-review', openQuestionIds: aggregate.openQuestions.map((question) => question.questionId), aggregateResultRef: aggregateRef, updatedAt: this.clock().toISOString() }
       await writeRun(this.runtimeRoot, run)
@@ -344,7 +403,8 @@ export class FrontdoorOrchestrator {
       openQuestions: aggregate?.openQuestions ?? [],
       nextAction: aggregate?.nextAction ?? (run.ownerGate ?? 'awaiting-owner'),
       eventCount: events.length,
-      nodeTargetHashes: Object.fromEntries(run.nodes.map((record) => [record.node.nodeId, nodeTargetHash(run, record)]))
+      nodeTargetHashes: Object.fromEntries(run.nodes.map((record) => [record.node.nodeId, nodeTargetHash(run, record)])),
+      nodeReview: run.nodeReview
     }
   }
 

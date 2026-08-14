@@ -5,7 +5,7 @@ import type { ConversationThread, ConversationTurn, OwnerAction, RecoveryInfo, R
 import { checkAdapterPlanMembership, getAdapterProfile } from './adapterRegistry'
 import { canTransition, validateApprovedTask } from './contracts'
 import type { AdapterAcceptance, AdapterDependencyResult, ConversationAdapter } from './conversationAdapters'
-import { FakeCriticConversationAdapter, FakeProposalConversationAdapter } from './conversationAdapters'
+import { adapterSupportsRole, FakeCriticConversationAdapter, FakeProposalConversationAdapter } from './conversationAdapters'
 import { hashJson } from './hash'
 import { appendEvent, ensureDir, readEvents, readJson, removeFile, writeJsonAtomic, writeJsonExclusive } from './ledger'
 import type { ExternalPreflight } from '../../shared/externalAdapterTypes'
@@ -101,6 +101,29 @@ export class ConversationRelay {
     return adapter
   }
 
+  /** Frontdoor Prepare uses this to reject a Registry-only Adapter that this Relay cannot execute. */
+  assertAdapterRegistered(adapterId: string, role: AdapterRole): void {
+    const adapter = this.resolveAdapter(adapterId)
+    if (!adapterSupportsRole(adapter, role)) throw new ThreadRejectedError([`adapter ${adapterId} is registered for role(s) ${(adapter.supportedRoles ?? [adapter.role]).join(', ')}, not ${role}`])
+  }
+
+  /**
+   * Re-checks live transport readiness only at an explicit dispatch boundary. A failed check is
+   * thrown before Frontdoor creates a child Job/Thread, and before the direct external-send path
+   * can invoke the transport. Non-local-http transports keep their existing approval contract.
+   */
+  async assertAdapterReadyForDispatch(adapterId: string): Promise<void> {
+    const profile = getAdapterProfile(adapterId)
+    if (profile.connection !== 'local-http') return
+    this.resolveAdapter(adapterId)
+    const transport = this.requireTransport(adapterId)
+    if (transport.connection !== profile.connection) throw new ThreadRejectedError([`profile and transport connection mismatch for ${adapterId}`])
+    if (!transport.isLocalEndpoint?.()) throw new ThreadRejectedError([`local-http adapter target is not confirmed as loopback: ${adapterId}`])
+    if (!transport.checkReadiness) throw new ThreadRejectedError([`local-http adapter has no readiness check: ${adapterId}`])
+    const readiness = await transport.checkReadiness()
+    if (!readiness.ready) throw new ThreadRejectedError([`adapter readiness failed for ${adapterId}: ${readiness.detail}`])
+  }
+
   /**
    * A local-only adapter named explicitly (not auto-routed) must be one of the Thread's own approved
    * `adapterPlan` selections — the Plan the Owner actually approved via `routingPlanHash`. This closes
@@ -127,7 +150,7 @@ export class ConversationRelay {
   /** Automatic role routing never reaches outside this machine: an external Adapter must be named. */
   private adapterForRole(role: AdapterRole): ConversationAdapter {
     for (const adapter of this.adapters.values()) {
-      if (adapter.role !== role) continue
+      if (!adapterSupportsRole(adapter, role)) continue
       const profile = getAdapterProfile(adapter.adapterId)
       if (profile.status !== 'available') continue
       if (profile.dataPolicy !== 'local-only') continue
@@ -289,8 +312,8 @@ export class ConversationRelay {
 
     const expectedRole = this.nextRole(thread)
     const adapter = adapterId ? this.resolveAdapter(adapterId) : this.adapterForRole(expectedRole)
-    if (adapter.role !== expectedRole) throw new ThreadRejectedError([`turn ${thread.turns.length} requires role ${expectedRole}, but ${adapter.adapterId} is ${adapter.role}`])
-    if (adapterId) this.assertExplicitDispatchIsApprovedPlan(thread, adapterId, adapter.role)
+    if (!adapterSupportsRole(adapter, expectedRole)) throw new ThreadRejectedError([`turn ${thread.turns.length} requires role ${expectedRole}, but ${adapter.adapterId} supports ${(adapter.supportedRoles ?? [adapter.role]).join(', ')}`])
+    if (adapterId) this.assertExplicitDispatchIsApprovedPlan(thread, adapterId, expectedRole)
 
     const parent = lastTurn(thread)
     const sequence = thread.turns.length
@@ -308,7 +331,7 @@ export class ConversationRelay {
       taskId: thread.taskId,
       jobId: thread.jobId,
       adapterId: adapter.adapterId,
-      role: adapter.role,
+      role: expectedRole,
       sequence,
       attempt,
       ...(parent ? { respondsToTurnId: parent.turnId, respondsToHash: turnHash(parent) } : {}),
@@ -319,7 +342,7 @@ export class ConversationRelay {
     }
 
     // Recorded before the send so an interruption between send and persistence stays visible.
-    await this.record(threadId, 'relay.dispatch-intent', { dispatchId, adapterId: adapter.adapterId, role: adapter.role, sequence, attempt })
+    await this.record(threadId, 'relay.dispatch-intent', { dispatchId, adapterId: adapter.adapterId, role: expectedRole, sequence, attempt })
 
     let acceptance: AdapterAcceptance
     this.inFlight.set(threadId, { dispatchId, adapterId: adapter.adapterId })
@@ -330,7 +353,7 @@ export class ConversationRelay {
         threadId,
         jobId: thread.jobId,
         title: thread.title,
-        role: adapter.role,
+        role: expectedRole,
         sequence,
         priorTurns: thread.turns,
         attempt,
@@ -437,6 +460,7 @@ export class ConversationRelay {
       scopeHash: thread.scopeHash,
       contextHash: thread.contextHash,
       status: answer.envelopeStatus ?? answer.status,
+      content: answer.content,
       summary: answer.summary ?? answer.content.slice(0, 200),
       artifact: { turnId, threadId: thread.threadId, sequence: stored.sequence, respondsToTurnId: stored.respondsToTurnId ?? null },
       verification: answer.verification ?? [],
@@ -456,14 +480,19 @@ export class ConversationRelay {
    * Builds the Owner gate for one external send. Exposed so the UI can show the report without
    * attempting anything, and reused by the Adapter itself immediately before it would transmit.
    */
-  async preflightExternalSend(threadId: string, adapterId: string, transport?: ExternalTransport): Promise<ExternalPreflight> {
+  async preflightExternalSend(threadId: string, adapterId: string, transport?: ExternalTransport, dependencyResults?: readonly AdapterDependencyResult[]): Promise<ExternalPreflight> {
     const thread = await this.getConversationState(threadId)
     const profile = getAdapterProfile(adapterId)
-    // The role comes from the registered Adapter instance, never from the profile's role list.
-    const adapterRole = this.resolveAdapter(adapterId).role
+    // Preflight must use exactly the role the next dispatch requires. Do not fall back to an
+    // Adapter's primary role: that would show a passing Proposal preflight for a Critic dispatch
+    // that the actual send gate will reject.
+    const adapter = this.resolveAdapter(adapterId)
+    const nextRole = this.nextRole(thread)
+    this.assertAdapterRegistered(adapterId, nextRole)
+    const adapterRole = nextRole
     const events = await this.readThreadEvents(threadId)
     const attempt = this.attemptForSequence(events, thread.turns.length)
-    const packet = buildSyntheticPacket(thread, adapterRole, attempt, this.now())
+    const packet = buildSyntheticPacket(thread, adapterRole, attempt, this.now(), dependencyResults)
     assertPacketBoundary(packet)
     return preflightExternalSend({
       profile,
@@ -505,7 +534,7 @@ export class ConversationRelay {
       authorise: async (request) => {
         const thread = await this.getConversationState(request.threadId)
         const profile = getAdapterProfile(adapterId)
-        const packet = buildSyntheticPacket(thread, request.role, request.attempt ?? 0, this.now())
+        const packet = buildSyntheticPacket(thread, request.role, request.attempt ?? 0, this.now(), request.dependencyResults)
         assertPacketBoundary(packet)
         const preflight = preflightExternalSend({
           profile,
@@ -775,6 +804,9 @@ export class ConversationRelay {
         scopeHash: thread.scopeHash,
         contextHash: thread.contextHash,
         status: 'failed',
+        content: info.reason === 'answer-unavailable'
+          ? 'Adapterは受理したが回答を取得できなかった。'
+          : 'Adapterへ届いたか確認できないまま中断した。',
         summary: info.reason === 'answer-unavailable'
           ? `Adapterは受理したが回答を取得できなかった（sequence ${info.sequence}、attempt ${info.attempt}）`
           : `Adapterへ届いたか確認できないまま中断した（sequence ${info.sequence}、attempt ${info.attempt}）`,

@@ -32,6 +32,19 @@ export interface FrontdoorReviewInput {
   note?: unknown
 }
 
+export interface FrontdoorNodeReviewInput {
+  runId: unknown
+  nodeId: unknown
+  approvedBy: unknown
+  decision: unknown
+  note?: unknown
+}
+
+export interface FrontdoorNodeReviewResult {
+  decision: OwnerDecisionEnvelope
+  execution?: Awaited<ReturnType<FrontdoorOrchestrator['executeApprovedRun']>>
+}
+
 export interface FrontdoorCompletionInput {
   runId: unknown
   approvedBy: unknown
@@ -94,6 +107,11 @@ function nodeIds(value: unknown): string[] {
 function reviewDecision(value: unknown): 'accept' | 'follow-up' | 'reject' {
   if (value === 'accept' || value === 'follow-up' || value === 'reject') return value
   throw new Error('invalid result review decision')
+}
+
+function nodeReviewDecision(value: unknown): 'continue' | 'stop' {
+  if (value === 'continue' || value === 'stop') return value
+  throw new Error('invalid Node review decision')
 }
 
 function packetPath(runtimeRoot: string, taskId: string): string {
@@ -173,10 +191,10 @@ export function approveFrontdoorRun(orchestrator: FrontdoorOrchestrator, input: 
   })
 }
 
-export function dispatchFrontdoorRun(orchestrator: FrontdoorOrchestrator, runId: unknown): Promise<RelayResult<Awaited<ReturnType<FrontdoorOrchestrator['executeApprovedRun']>>>> {
+export function dispatchFrontdoorRun(orchestrator: FrontdoorOrchestrator, runId: unknown, options: { requirePacketBinding?: boolean } = {}): Promise<RelayResult<Awaited<ReturnType<FrontdoorOrchestrator['executeApprovedRun']>>>> {
   return guard(async () => {
     const run = await orchestrator.getRun(identifier(runId, 'runId'))
-    return orchestrator.executeApprovedRun(run.runId, await packetsForRun(orchestrator, run))
+    return orchestrator.executeApprovedRun(run.runId, await packetsForRun(orchestrator, run), options)
   })
 }
 
@@ -193,6 +211,18 @@ export function answerFrontdoorQuestion(orchestrator: FrontdoorOrchestrator, inp
 
 export function reviewFrontdoorResult(orchestrator: FrontdoorOrchestrator, input: FrontdoorReviewInput): Promise<RelayResult<OwnerDecisionEnvelope>> {
   return guard(() => orchestrator.reviewResult(identifier(input.runId, 'runId'), owner(input.approvedBy), reviewDecision(input.decision), note(input.note)))
+}
+
+export function reviewFrontdoorNode(orchestrator: FrontdoorOrchestrator, input: FrontdoorNodeReviewInput): Promise<RelayResult<FrontdoorNodeReviewResult>> {
+  return guard(async () => {
+    const runId = identifier(input.runId, 'runId')
+    const nodeId = identifier(input.nodeId, 'nodeId')
+    const decision = await orchestrator.reviewNode(runId, nodeId, owner(input.approvedBy), nodeReviewDecision(input.decision), note(input.note))
+    if (decision.decision === 'stop') return { decision }
+    const execution = await dispatchFrontdoorRun(orchestrator, runId)
+    if (!execution.ok) throw new Error(`Node review continued, but next Node dispatch failed: ${execution.error}`)
+    return { decision, execution: execution.value }
+  })
 }
 
 export function completeFrontdoorRun(orchestrator: FrontdoorOrchestrator, input: FrontdoorCompletionInput): Promise<RelayResult<OrchestrationRun>> {

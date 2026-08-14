@@ -35,6 +35,7 @@ contextBridge.exposeInMainWorld('adfFrontdoor', {
   inspect: (runId: string): Promise<RelayResult<FrontdoorInspection>> => ipcRenderer.invoke('frontdoor:inspect', runId),
   approve: (input: { runId: string; gate: OwnerGate; approvedBy: string; note?: string; nodeIds?: string[] }): Promise<RelayResult<OwnerDecisionEnvelope>> => ipcRenderer.invoke('frontdoor:approve', input),
   dispatch: (runId: string): Promise<RelayResult<FrontdoorReturn>> => ipcRenderer.invoke('frontdoor:dispatch', runId),
+  reviewNode: (input: { runId: string; nodeId: string; approvedBy: string; decision: 'continue' | 'stop'; note?: string }): Promise<RelayResult<{ decision: OwnerDecisionEnvelope; execution?: FrontdoorReturn }>> => ipcRenderer.invoke('frontdoor:review-node', input),
   answer: (input: { runId: string; questionId: string; approvedBy: string; answerRef?: string; note?: string }): Promise<RelayResult<OwnerDecisionEnvelope>> => ipcRenderer.invoke('frontdoor:answer', input),
   reviewResult: (input: { runId: string; approvedBy: string; decision: 'accept' | 'follow-up' | 'reject'; note?: string }): Promise<RelayResult<OwnerDecisionEnvelope>> => ipcRenderer.invoke('frontdoor:review-result', input),
   complete: (input: { runId: string; approvedBy: string; note?: string }): Promise<RelayResult<OrchestrationRun>> => ipcRenderer.invoke('frontdoor:complete', input),

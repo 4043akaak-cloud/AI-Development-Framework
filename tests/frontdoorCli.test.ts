@@ -120,6 +120,9 @@ describe('Frontdoor Owner Loop CLI', () => {
     const ignoredDecision = await command(['approve', '--runtime-root', '/tmp/adf-no-run', '--run-id', 'run-missing', '--gate', 'intake', '--decision', 'reject', '--approved-by', 'Project Owner'])
     expect(ignoredDecision.code).toBe(1)
     expect(ignoredDecision.stderr.join('')).toContain('requires --decision proceed')
+    const nodeReviewHelp = await command(['review-node', '--help'])
+    expect(nodeReviewHelp.code).toBe(0)
+    expect(nodeReviewHelp.stdout.join('')).toContain('review-node')
   })
 
   it('prepare creates only a proposal and no Owner Decision, dispatch, or thread', async () => {
