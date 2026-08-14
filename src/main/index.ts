@@ -9,7 +9,7 @@ import { AnthropicMessagesTransport } from './jobLoop/anthropicTransport'
 import { OllamaLocalHttpTransport } from './jobLoop/ollamaTransport'
 import { ExternalConversationAdapter } from './jobLoop/externalAdapter'
 import { FakeCriticConversationAdapter, FakeProposalConversationAdapter } from './jobLoop/conversationAdapters'
-import { approveFrontdoorRun, answerFrontdoorQuestion, completeFrontdoorRun, dispatchFrontdoorRun, inspectFrontdoorRun, listFrontdoorRuns, recoverFrontdoorRun, reviewFrontdoorResult, stopFrontdoorRun } from './frontdoor/frontdoorService'
+import { approveFrontdoorRun, answerFrontdoorQuestion, completeFrontdoorRun, dispatchFrontdoorRun, inspectFrontdoorRun, listFrontdoorRuns, prepareFrontdoorRun, recoverFrontdoorRun, reviewFrontdoorResult, stopFrontdoorRun } from './frontdoor/frontdoorService'
 import { FrontdoorOrchestrator } from './frontdoor/orchestrator'
 
 let mainWindow: BrowserWindow | undefined
@@ -93,6 +93,7 @@ app.whenReady().then(async () => {
   // Owner-explicit only: never invoked from startup, Thread selection, or any polling loop.
   ipcMain.handle('relay:ollama-readiness', () => ollamaReadiness())
   ipcMain.handle('frontdoor:list', () => listFrontdoorRuns(frontdoor))
+  ipcMain.handle('frontdoor:prepare', (_event, input: unknown) => prepareFrontdoorRun(frontdoor, input))
   ipcMain.handle('frontdoor:inspect', (_event, runId: unknown) => inspectFrontdoorRun(frontdoor, runId))
   ipcMain.handle('frontdoor:approve', (_event, input: unknown) => approveFrontdoorRun(frontdoor, input as Parameters<typeof approveFrontdoorRun>[1]))
   ipcMain.handle('frontdoor:dispatch', (_event, runId: unknown) => dispatchFrontdoorRun(frontdoor, runId))

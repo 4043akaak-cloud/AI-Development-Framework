@@ -1,10 +1,11 @@
 import { access, readdir } from 'node:fs/promises'
 import path from 'node:path'
 import type { ApprovedTaskPacket } from '../../shared/jobLoopTypes'
-import type { FrontdoorInspection, FrontdoorRunSummary, OwnerDecisionEnvelope, OwnerGate, OrchestrationRun } from '../../shared/frontdoorTypes'
+import type { FrontdoorInspection, FrontdoorPrepareResult, FrontdoorRunSummary, OwnerDecisionEnvelope, OwnerGate, OrchestrationRun } from '../../shared/frontdoorTypes'
 import type { RelayResult } from '../../shared/threadTypes'
 import { readJson } from '../jobLoop/ledger'
 import { FrontdoorOrchestrator } from './orchestrator'
+import { prepareFrontdoorRunOrThrow } from './frontdoorPrepareService'
 
 export interface FrontdoorApprovalInput {
   runId: unknown
@@ -39,6 +40,10 @@ export interface FrontdoorStopInput {
   runId: unknown
   approvedBy: unknown
   note?: unknown
+}
+
+export function prepareFrontdoorRun(orchestrator: FrontdoorOrchestrator, input: unknown): Promise<RelayResult<FrontdoorPrepareResult>> {
+  return guard(() => prepareFrontdoorRunOrThrow(orchestrator, input))
 }
 
 function guard<T>(run: () => Promise<T>): Promise<RelayResult<T>> {

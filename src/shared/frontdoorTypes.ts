@@ -46,6 +46,16 @@ export interface FrontdoorRequestInput {
   scope: JobScope
 }
 
+export interface FrontdoorPrepareInput {
+  request: FrontdoorRequestInput
+  plan: DecompositionPlanInput
+}
+
+export interface FrontdoorPrepareResult {
+  run: OrchestrationRun
+  reused: boolean
+}
+
 export interface FrontdoorRequest extends FrontdoorRequestInput {
   state: FrontdoorRequestState
   receivedAt: string

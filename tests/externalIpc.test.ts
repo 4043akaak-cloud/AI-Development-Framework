@@ -425,6 +425,7 @@ describe('ADF-EXTERNAL-ADAPTER-001 Electron wiring', () => {
     ])
     expect(channels.filter((channel) => channel.startsWith('frontdoor:'))).toEqual([
       'frontdoor:list',
+      'frontdoor:prepare',
       'frontdoor:inspect',
       'frontdoor:approve',
       'frontdoor:dispatch',

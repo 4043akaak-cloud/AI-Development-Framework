@@ -3,7 +3,7 @@ import type { OpenSourceResult } from '../shared/boardTypes'
 import type { ConversationThread, OwnerAction, RecoveryAction, RelayResult, ThreadSummary } from '../shared/threadTypes'
 import type { ExternalPreflight, OllamaReadiness } from '../shared/externalAdapterTypes'
 import type { AdapterProfile } from '../shared/jobLoopTypes'
-import type { FrontdoorInspection, FrontdoorReturn, FrontdoorRunSummary, OwnerDecisionEnvelope, OwnerGate, OrchestrationRun } from '../shared/frontdoorTypes'
+import type { FrontdoorInspection, FrontdoorPrepareInput, FrontdoorPrepareResult, FrontdoorReturn, FrontdoorRunSummary, OwnerDecisionEnvelope, OwnerGate, OrchestrationRun } from '../shared/frontdoorTypes'
 
 contextBridge.exposeInMainWorld('adfBoard', {
   openCanonicalSource: (sourceId: string): Promise<OpenSourceResult> => ipcRenderer.invoke('board:open-canonical-source', sourceId)
@@ -30,6 +30,7 @@ contextBridge.exposeInMainWorld('adfRelay', {
 
 contextBridge.exposeInMainWorld('adfFrontdoor', {
   list: (): Promise<RelayResult<FrontdoorRunSummary[]>> => ipcRenderer.invoke('frontdoor:list'),
+  prepare: (input: FrontdoorPrepareInput): Promise<RelayResult<FrontdoorPrepareResult>> => ipcRenderer.invoke('frontdoor:prepare', input),
   inspect: (runId: string): Promise<RelayResult<FrontdoorInspection>> => ipcRenderer.invoke('frontdoor:inspect', runId),
   approve: (input: { runId: string; gate: OwnerGate; approvedBy: string; note?: string; nodeIds?: string[] }): Promise<RelayResult<OwnerDecisionEnvelope>> => ipcRenderer.invoke('frontdoor:approve', input),
   dispatch: (runId: string): Promise<RelayResult<FrontdoorReturn>> => ipcRenderer.invoke('frontdoor:dispatch', runId),

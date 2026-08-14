@@ -5,6 +5,7 @@ import type { ApprovedTaskPacket } from '../shared/jobLoopTypes'
 import type { DecompositionPlanInput, FrontdoorRequestInput, OwnerGate } from '../shared/frontdoorTypes'
 import { ConversationRelay } from '../main/jobLoop/relay'
 import { FrontdoorOrchestrator } from '../main/frontdoor/orchestrator'
+import { prepareFrontdoorRunOrThrow } from '../main/frontdoor/frontdoorPrepareService'
 
 interface FrontdoorInputFile {
   request: FrontdoorRequestInput
@@ -172,8 +173,8 @@ export async function runFrontdoorCli(argv: string[], io: FrontdoorCliIO = defau
       const inputPath = requiredString(values, 'input')
       if (!inputPath) throw new Error('prepare requires --input <request-plan.json>')
       const input = ensureInput(await io.readJsonFile(path.resolve(inputPath)))
-      const run = await orchestrator.createRun(input.request, input.plan)
-      output(io, { command, runId: run.runId, state: run.state, requestHash: run.requestHash, planHash: run.planHash, nextAction: run.ownerGate }, json)
+      const prepared = await prepareFrontdoorRunOrThrow(orchestrator, input)
+      output(io, { command, runId: prepared.run.runId, state: prepared.run.state, requestHash: prepared.run.requestHash, planHash: prepared.run.planHash, nextAction: prepared.run.ownerGate, reused: prepared.reused }, json)
       return 0
     }
 
