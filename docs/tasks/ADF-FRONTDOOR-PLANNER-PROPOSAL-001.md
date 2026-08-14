@@ -1,7 +1,7 @@
 # Task — ADF-FRONTDOOR-PLANNER-PROPOSAL-001: Planner Proposal
 
 > Type: Design + Implementation
-> Status: Verifying
+> Status: Done
 > Owner: Codex
 > Review: Project Owner + role-separated review
 > Branch: `codex/adf-frontdoor-planner-proposal`
@@ -155,10 +155,11 @@ Plan案生成は既存Owner Gateを短絡しない。Plan案生成だけでRunti
 | 2026-08-14 | Codex | `FrontdoorPlanner`契約、決定的`DeterministicFakePlanner`、`frontdoor:propose-plan` IPC、Preload／RendererのPlanner案表示を実装。既存PrepareとOwner Gateは再利用し、Planner案生成だけではRun／Job／Thread／Dispatchを作成しない。 |
 | 2026-08-14 | Codex | Planner IPC例外時のBusy解除と、成功メッセージを失敗表示しないUI表現を追加。 |
 | 2026-08-14 | Codex | Vitest 310/310、node/web/cli typecheck、Electron build、`git diff --check`を確認。最新`out/main/index.js`を直接起動し、Request入力→Planner案生成を実UIで確認。`fake-planner/v1`、Proposal／Critic 2ノード、Request hash／Plan hash、前提／リスク、未承認表示を確認し、既存Run一覧に新Runが増えないことを確認した。 |
+| 2026-08-14 | Codex | 最終Diff確認後にcommit `e63e7c0`、push、PR #4を実施。PR #4はmerge commit `bcaece2`で`main`へマージ済み。 |
 
 ## 10. Current status
 
-`Verifying`。決定的Fake Planner、共通Service、Electron Plan案表示、契約テストの実装を完了し、最新Electron Main／RendererでPlanner案生成を確認した。外部送信、認証、APIキー、Ollama実行、正本自動書込みは行っていない。最終Diff確認後にcommit／pushを行う。
+`Done`。決定的Fake Planner、共通Service、Electron Plan案表示、契約テストの実装、自動検証、最新Electron Main／RendererでのPlanner案生成確認、最終Diff確認、commit／push、PR #4の`main`マージまで完了した。外部送信、認証、APIキー、Ollama実行、正本自動書込みは行っていない。
 
 ## ADF Execution Summary
 
@@ -192,7 +193,7 @@ Plan案生成は既存Owner Gateを短絡しない。Plan案生成だけでRunti
     "newDependencies": false
   },
   "verification": {
-    "status": "verifying",
+    "status": "done",
     "tests": "310/310 passed",
     "typecheck": ["node", "web", "cli"],
     "electronBuild": "pass",
