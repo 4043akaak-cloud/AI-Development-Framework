@@ -14,6 +14,7 @@
     "src/cli/buildApprovedTaskPacket.ts",
     "src/cli/bin.ts",
     "src/cli/ollamaConnectivityProbe.ts",
+    "src/cli/frontdoorOwnerLoop.ts",
     "src/main/jobLoop/hash.ts",
     "src/main/jobLoop/adapterRegistry.ts",
     "src/main/jobLoop/contracts.ts",
@@ -30,8 +31,17 @@
     "src/main/jobLoop/thread.ts",
     "src/main/jobLoop/runtime.ts",
     "src/main/jobLoop/dispatchAck.ts",
+    "src/main/frontdoor/intake.ts",
+    "src/main/frontdoor/decomposition.ts",
+    "src/main/frontdoor/eventLedger.ts",
+    "src/main/frontdoor/ledger.ts",
+    "src/main/frontdoor/orchestrator.ts",
+    "src/main/frontdoor/ownerGates.ts",
+    "src/main/frontdoor/questionAggregator.ts",
+    "src/main/frontdoor/returnEnvelope.ts",
     "src/shared/jobLoopTypes.ts",
     "src/shared/threadTypes.ts",
-    "src/shared/externalAdapterTypes.ts"
+    "src/shared/externalAdapterTypes.ts",
+    "src/shared/frontdoorTypes.ts"
   ]
 }

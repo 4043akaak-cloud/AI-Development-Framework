@@ -5,9 +5,9 @@ import { readJson } from '../jobLoop/ledger'
 import { claimRun, readPlan, readRequest, readRun, readRunEvents, recordRunEvent, releaseRun, writeRun } from './ledger'
 
 const decisionByGate: Record<OwnerGate, readonly OwnerDecision[]> = {
-  intake: ['clarify', 'edit', 'reject', 'proceed'],
-  'completion-shape': ['edit', 'approve', 'reject'],
-  decomposition: ['edit', 'approve-selected', 'reject'],
+  intake: ['clarify', 'edit', 'reject', 'proceed', 'stop'],
+  'completion-shape': ['edit', 'approve', 'reject', 'stop'],
+  decomposition: ['edit', 'approve-selected', 'reject', 'stop'],
   dispatch: ['dispatch', 'approve-selected', 'defer', 'stop'],
   question: ['answer', 'revise-plan', 'stop'],
   'result-review': ['accept', 'follow-up', 'reject', 'stop'],
@@ -73,7 +73,7 @@ export function canComplete(run: Pick<OrchestrationRun, 'state'>, input: Omit<De
     && canApprove({ ...input, expectedTargetHash })
 }
 
-function decisionEnvelope(run: OrchestrationRun, gate: OwnerGate, decision: OwnerDecision, targetHash: string, approvedBy: string, now: string, options: Pick<OwnerDecisionEnvelope, 'nodeId' | 'note' | 'answerRef'> = {}): OwnerDecisionEnvelope {
+export function buildDecisionEnvelope(run: OrchestrationRun, gate: OwnerGate, decision: OwnerDecision, targetHash: string, approvedBy: string, now: string, options: Pick<OwnerDecisionEnvelope, 'nodeId' | 'note' | 'answerRef'> = {}): OwnerDecisionEnvelope {
   return {
     decisionId: `owner-decision-${hashJson([run.runId, gate, decision, targetHash, approvedBy, now]).slice(0, 20)}`,
     runId: run.runId,
@@ -141,7 +141,7 @@ export class FrontdoorOwnerGateService {
 
   private async recordDecision(runId: string, gate: OwnerGate, decision: OwnerDecision, targetHash: string, approvedBy: string, options: Pick<OwnerDecisionEnvelope, 'nodeId' | 'note' | 'answerRef'> = {}): Promise<OwnerDecisionEnvelope> {
     const run = await readRun(this.runtimeRoot, runId)
-    const envelope = decisionEnvelope(run, gate, decision, targetHash, approvedBy, this.clock().toISOString(), options)
+    const envelope = buildDecisionEnvelope(run, gate, decision, targetHash, approvedBy, this.clock().toISOString(), options)
     if (!canApprove({ gate, decision, targetHash, expectedTargetHash: targetHash, approvedBy })) throw new Error(`Owner Decision is invalid for ${gate}`)
     await assertDecisionBinding(this.runtimeRoot, envelope)
     await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.owner-decision-recorded', { decision: envelope })
@@ -178,7 +178,7 @@ export class FrontdoorOwnerGateService {
       if (!hasDecision(events, 'completion-shape', ['approve'], completionShapeTargetHash(run, request.requestedOutput))) throw new Error('Dispatch requires an approved Completion Shape')
       if (!hasDecision(events, 'decomposition', ['approve-selected'], plan.planHash)) throw new Error('Dispatch requires an approved Decomposition')
       const targetHash = dispatchTargetHash(run, selectedNodeIds)
-      const envelope = decisionEnvelope(run, 'dispatch', 'dispatch', targetHash, approvedBy, this.clock().toISOString(), { note })
+      const envelope = buildDecisionEnvelope(run, 'dispatch', 'dispatch', targetHash, approvedBy, this.clock().toISOString(), { note })
       if (!canDispatch(run, selectedNodeIds, envelope)) throw new Error('Dispatch approval is invalid or stale')
       await assertDecisionBinding(this.runtimeRoot, envelope)
       await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.owner-decision-recorded', { decision: envelope })
@@ -201,11 +201,24 @@ export class FrontdoorOwnerGateService {
     const currentQuestion = aggregate.openQuestions.find((candidate) => candidate.questionId === question.questionId)
     if (!currentQuestion || currentQuestion.status !== 'open') throw new Error('Question answer must reference the current open Question')
     const targetHash = questionTargetHash(currentQuestion)
-    const envelope = decisionEnvelope(run, 'question', 'answer', targetHash, approvedBy, this.clock().toISOString(), { nodeId: currentQuestion.nodeId, answerRef, note })
+    const envelope = buildDecisionEnvelope(run, 'question', 'answer', targetHash, approvedBy, this.clock().toISOString(), { nodeId: currentQuestion.nodeId, answerRef, note })
     if (!canAnswer(currentQuestion, envelope)) throw new Error('Question answer requires an open question and explicit Owner content')
     await assertDecisionBinding(this.runtimeRoot, envelope)
     await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.owner-decision-recorded', { decision: envelope })
-    await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.question-answered', { questionId: question.questionId, targetHash, decisionId: envelope.decisionId, answerRef, note })
+    const resumed = {
+      ...run,
+      state: 'ready-for-approval' as const,
+      ownerGate: 'awaiting-owner:dispatch' as const,
+      approvalIds: [],
+      openQuestionIds: run.openQuestionIds.filter((id) => id !== question.questionId),
+      aggregateResultRef: undefined,
+      nodes: run.nodes.map((record) => record.state === 'awaiting-question' || (record.state === 'cancelled' && record.error === 'blocked by Owner question')
+        ? { ...record, state: 'queued' as const, childJobId: undefined, threadId: undefined, resultStatus: undefined, resultRef: undefined, resultHash: undefined, childInputHash: undefined, questionIds: [], error: undefined }
+        : record),
+      updatedAt: this.clock().toISOString()
+    }
+    await writeRun(this.runtimeRoot, resumed)
+    await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.question-answered', { questionId: question.questionId, targetHash, decisionId: envelope.decisionId, answerRef, note, nodeRecords: resumed.nodes, runState: resumed.state })
     return envelope
   }
 
@@ -218,7 +231,7 @@ export class FrontdoorOwnerGateService {
     const proposed = events.find((event) => event.type === 'frontdoor.completion-proposed' && event.payload.aggregateRef === run.aggregateResultRef)
     if (!proposed || proposed.payload.aggregateHash !== hashJson(aggregate)) throw new Error('Result review aggregate does not match the proposed Evidence')
     const targetHash = resultReviewTargetHash(runId, run.aggregateResultRef, aggregate)
-    const envelope = decisionEnvelope(run, 'result-review', decision, targetHash, approvedBy, this.clock().toISOString(), { note })
+    const envelope = buildDecisionEnvelope(run, 'result-review', decision, targetHash, approvedBy, this.clock().toISOString(), { note })
     if (!canReviewResult({ gate: 'result-review', decision, targetHash, expectedTargetHash: targetHash, approvedBy })) throw new Error('Result review decision is invalid')
     await assertDecisionBinding(this.runtimeRoot, envelope)
     await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.owner-decision-recorded', { decision: envelope })
@@ -239,7 +252,7 @@ export class FrontdoorOwnerGateService {
       const reviewed = events.some((event) => event.type === 'frontdoor.result-reviewed'
         && (event.payload.decision as OwnerDecisionEnvelope | undefined)?.decision === 'accept'
         && (event.payload.decision as OwnerDecisionEnvelope | undefined)?.targetHash === targetHash)
-      const envelope = decisionEnvelope(run, 'completion', 'complete', targetHash, approvedBy, this.clock().toISOString(), { note })
+      const envelope = buildDecisionEnvelope(run, 'completion', 'complete', targetHash, approvedBy, this.clock().toISOString(), { note })
       if (!canComplete(run, envelope, targetHash, reviewed)) throw new Error('Completion requires an accepted Result review bound to the current aggregate')
       await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.owner-decision-recorded', { decision: envelope })
       await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.completion-approved', { decision: envelope })

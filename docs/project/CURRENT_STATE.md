@@ -1,6 +1,6 @@
 # ADF Current State
 
-> Last updated: 2026-08-14（`ADF-FRONTDOOR-OWNER-GATE-001`の設計を追記。過去の個別Task記述には旧時点の記録が残る）
+> Last updated: 2026-08-14（`ADF-FRONTDOOR-CLI-OWNER-LOOP-001`の実装・検証を反映。過去の個別Task記述には旧時点の記録が残る）
 
 ## 現在地
 
@@ -10,11 +10,11 @@ ADFの製品境界は、Project進捗管理とAI間の受け渡しに限定す�
 
 ## 現在のMVP到達点
 
-**ADFのローカルMVPコアループは完成している。** このPC内で、承認済みTaskに紐づいたThread上で複数のFake AIが議論し、Ownerが結果を確認・継続・承認できる。送信後のプロセス終了を起動時に検出し、Ownerが再送・失敗記録・停止を選べるRecoveryも完了している。Runtime LedgerのThread状態を読み取り専用でBoardへ反映するLive Board（`ADF-BOARD-PROJECTION-001`）と、Execution Summary方式でOwner承認済みTask Packetを生成するCLI（`ADF-TASK-PACKET-CLI-001`）も実装済みである。`ADF-CONVERSATION-RELAY-001`、`ADF-RELAY-RECOVERY-001`、`ADF-BOARD-PROJECTION-001`、`ADF-FRONTDOOR-LEDGER-EVENT-SOURCING-001`をDoneとし、直近の実装commit `c78dae8`として`origin/codex/adf-pilot-governance`へpush済みである。今回の`CURRENT_STATE.md`と次Task正本は未commitである。
+**ADFのローカルMVPコアループは完成している。** このPC内で、承認済みTaskに紐づいたThread上で複数のFake AIが議論し、Ownerが結果を確認・継続・承認できる。送信後のプロセス終了を起動時に検出し、Ownerが再送・失敗記録・停止を選べるRecoveryも完了している。Runtime LedgerのThread状態を読み取り専用でBoardへ反映するLive Board（`ADF-BOARD-PROJECTION-001`）と、Execution Summary方式でOwner承認済みTask Packetを生成するCLI（`ADF-TASK-PACKET-CLI-001`）も実装済みである。`ADF-CONVERSATION-RELAY-001`、`ADF-RELAY-RECOVERY-001`、`ADF-BOARD-PROJECTION-001`、`ADF-FRONTDOOR-LEDGER-EVENT-SOURCING-001`をDoneとし、Owner Gate契約を`e38e31c`として`origin/codex/adf-pilot-governance`へpush済みである。次TaskのCLI実装・検証差分は未commitである。
 
 ## 最終目標への現在地
 
-Local Runtime基盤は完成しているが、最終目標である「窓口AI → ADF → 得意分野ごとの複数AI → ADF → 窓口AI」のEnd-to-End協調は未完成である。`ADF-FRONTDOOR-ORCHESTRATION-001`を2026-08-14に開始し、Fake Adapter限定でFrontdoorRequest、分解DAG、Node状態機械、Result / Question集約、FrontdoorReturnを一周させた。続く`ADF-FRONTDOOR-LEDGER-EVENT-SOURCING-001`では`events.jsonl`を正本とするtyped hash-chain Ledger、決定的Replay、atomic Bundle、claim安全性を実装しDoneとなった。現在は、OwnerのIntake、完成形、分解、Dispatch、質問、Result Review、Completionを共通契約として実装する`ADF-FRONTDOOR-OWNER-GATE-001`がWaiting Approvalである。MCP / IPC入口、Work Plane、実装AI、独立Review Job、実Providerの自動選定は後続Taskとする。
+Local Runtime基盤は完成しているが、最終目標である「窓口AI → ADF → 得意分野ごとの複数AI → ADF → 窓口AI」のEnd-to-End協調は未完成である。`ADF-FRONTDOOR-ORCHESTRATION-001`を2026-08-14に開始し、Fake Adapter限定でFrontdoorRequest、分解DAG、Node状態機械、Result / Question集約、FrontdoorReturnを一周させた。続く`ADF-FRONTDOOR-LEDGER-EVENT-SOURCING-001`では`events.jsonl`を正本とするtyped hash-chain Ledger、決定的Replay、atomic Bundle、claim安全性を実装しDoneとなった。`ADF-FRONTDOOR-OWNER-GATE-001`ではOwnerのIntake、完成形、分解、Dispatch、質問、Result Review、Completionを共通契約として実装し、`e38e31c`でDoneとなった。MCP / IPC入口、Work Plane、実装AI、独立Review Job、実Providerの自動選定は後続Taskとする。
 
 本Taskの停止ルール: 同じ原因による検証失敗が2回連続、または別原因でも3回続いた場合、Codexは実装を止めてProject Ownerへ確認する。Scope拡張、新規依存、外部送信、認証、費用、Work Plane書込み、既存安全境界の弱体化が必要になった場合も停止する。
 
@@ -28,7 +28,9 @@ Anthropic APIキーの取得と外部AIへの実送信は引き続き保留で�
 
 ## 次のTask
 
-[`ADF-FRONTDOOR-OWNER-GATE-001`](../tasks/ADF-FRONTDOOR-OWNER-GATE-001.md): `Done`（2026-08-14）。Ownerが依頼から完成形まで各段階で確認・修正・承認・停止できる共通Gate契約をFrontdoor ServiceとEvent Ledgerへ追加した。Intake／Completion Shape／Decomposition／Dispatch／Question／Result Review／CompletionのDecisionをtarget hashへ束縛し、承認なしDispatch、自動回答、Result自動採用、承認なしCompletion、別Run由来AggregateのReviewを拒否する。Vitest 293/293、node/web/cli typecheck、Electron build、diff checkはPass。CLI／Electron／MCP入口、実Provider送信、認証は後続Task。commit／pushは未実施。
+[`ADF-FRONTDOOR-CLI-OWNER-LOOP-001`](../tasks/ADF-FRONTDOOR-CLI-OWNER-LOOP-001.md): `Verifying`。既存Frontdoor Owner GateをCLIから一段ずつ操作する入口Task。`prepare`、`inspect`、前段Gate承認、Node単位Dispatch承認、`dispatch`、`answer`、`review-result`、`complete`、`stop`、`recover`を個別コマンドとして実装した。Vitest 301/301、node/web/cli typecheck、Electron build、compiled CLIのprepare→inspect、Fake Adapter一周を確認済み。実Provider、認証、Electron／MCP接続は後続へ分離し、commit／pushは最終Diffレビュー待ち。
+
+[`ADF-FRONTDOOR-OWNER-GATE-001`](../tasks/ADF-FRONTDOOR-OWNER-GATE-001.md): `Done`（2026-08-14、commit `e38e31c`）。Ownerが依頼から完成形まで各段階で確認・修正・承認・停止できる共通Gate契約をFrontdoor ServiceとEvent Ledgerへ追加した。Intake／Completion Shape／Decomposition／Dispatch／Question／Result Review／CompletionのDecisionをtarget hashへ束縛し、承認なしDispatch、自動回答、Result自動採用、承認なしCompletion、別Run由来AggregateのReviewを拒否する。Vitest 293/293、node/web/cli typecheck、Electron build、diff checkはPass。CLI／Electron／MCP入口、実Provider送信、認証は後続Task。
 
 [`ADF-FRONTDOOR-LEDGER-EVENT-SOURCING-001`](../tasks/ADF-FRONTDOOR-LEDGER-EVENT-SOURCING-001.md): `Done`。Frontdoorの`events.jsonl`をcanonical sourceとし、typed hash chain、deterministic replay、run snapshot整合性、atomic bundle、claim token／Recovery安全性を実装した。新規Skill `adf-event-sourcing-ledger`を作成し、既存Skillにも検証導線を追加。Vitest 288件、node/web/cli typecheck、Electron build、diff checkはPass。Skill公式validatorはPyYAML不足で未実施、frontmatter手動確認はPass。実Provider送信・認証は未実施。
 

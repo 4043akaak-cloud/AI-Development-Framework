@@ -152,6 +152,20 @@ export interface FrontdoorReturn {
   nextAction: string
 }
 
+export interface FrontdoorInspection {
+  run: OrchestrationRun
+  request: FrontdoorRequest
+  plan: DecompositionPlan
+  decisions: OwnerDecisionEnvelope[]
+  aggregate?: AggregateResult
+  aggregateHash?: string
+  evidenceRefs: string[]
+  openQuestions: FrontdoorQuestion[]
+  nextAction: string
+  eventCount: number
+  nodeTargetHashes: Record<string, string>
+}
+
 export type FrontdoorEventType =
   | 'frontdoor.run-created'
   | 'frontdoor.approval-bound'

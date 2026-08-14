@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 import type { ApprovedTaskPacket } from '../src/shared/jobLoopTypes'
 import type { DecompositionNode, FrontdoorRequestInput, OrchestrationRun } from '../src/shared/frontdoorTypes'
 import { ConversationRelay } from '../src/main/jobLoop/relay'
+import { FakeProposalConversationAdapter } from '../src/main/jobLoop/conversationAdapters'
 import { buildExplicitAdapterPlan } from '../src/main/jobLoop/adapterRegistry'
 import { hashJson } from '../src/main/jobLoop/hash'
 import { createFrontdoorRequest } from '../src/main/frontdoor/intake'
@@ -60,11 +61,11 @@ function packet(run: Pick<OrchestrationRun, 'runId' | 'requestHash' | 'planHash'
   }
 }
 
-async function createFixture() {
+async function createFixture(fixture: 'success' | 'partial' = 'success', aggregationPolicy: 'collect-all' | 'stop-on-blocking-question' = 'collect-all') {
   const runtimeRoot = await mkdtemp(path.join(tmpdir(), 'adf-owner-gates-'))
-  const relay = new ConversationRelay({ runtimeRoot })
+  const relay = new ConversationRelay({ runtimeRoot, adapters: fixture === 'partial' ? [new FakeProposalConversationAdapter('partial')] : undefined })
   const orchestrator = new FrontdoorOrchestrator({ relay })
-  const run = await orchestrator.createRun(requestInput, { planId: 'owner-gate-plan-001', requestId: requestInput.requestId, version: 1, nodes: [proposal], aggregationPolicy: 'collect-all' })
+  const run = await orchestrator.createRun(requestInput, { planId: 'owner-gate-plan-001', requestId: requestInput.requestId, version: 1, nodes: [proposal], aggregationPolicy })
   return { runtimeRoot, orchestrator, run }
 }
 
@@ -127,5 +128,21 @@ describe('Frontdoor Owner Gates', () => {
     aggregate.runId = 'run-other'
     await writeFile(aggregatePath, `${JSON.stringify(aggregate)}\n`, 'utf8')
     await expect(orchestrator.reviewResult(run.runId)).rejects.toThrow(/another Run|proposed Evidence/)
+  })
+
+  it('answers a blocking Question only by returning to explicit Dispatch approval', async () => {
+    const { runtimeRoot, orchestrator, run } = await createFixture('partial', 'stop-on-blocking-question')
+    await approveInitialGates(orchestrator, run.runId)
+    await orchestrator.approveDispatch(run.runId, [proposal.nodeId])
+    const result = await orchestrator.executeApprovedRun(run.runId, { proposal: packet(run) })
+    expect(result.status).toBe('blocked-by-question')
+    const question = result.openQuestions[0]
+    await orchestrator.answerQuestion(run.runId, question, 'Project Owner', undefined, 'Owner allows explicit re-dispatch review')
+    const resumed = await orchestrator.getRun(run.runId)
+    expect(resumed.state).toBe('ready-for-approval')
+    expect(resumed.ownerGate).toBe('awaiting-owner:dispatch')
+    expect(resumed.nodes[0].state).toBe('queued')
+    const events = await readFrontdoorEvents(runtimeRoot, run.runId)
+    expect(events.filter((event) => event.type === 'frontdoor.node-started')).toHaveLength(1)
   })
 })

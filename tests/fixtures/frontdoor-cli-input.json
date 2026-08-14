@@ -1,0 +1,45 @@
+{
+  "request": {
+    "requestId": "frontdoor-cli-process-001",
+    "source": "test",
+    "objective": "compiled CLI prepare を検証する",
+    "userInput": "Owner GateのProposalを作る",
+    "projectRef": "fixture://adf-cli-process",
+    "constraints": {
+      "allowedCapabilities": ["read", "propose"],
+      "maxNodes": 1,
+      "maxDepth": 1,
+      "externalSend": false
+    },
+    "requestedOutput": "Proposal",
+    "contextReferences": ["fixture://goal.md"],
+    "scope": {
+      "inScope": ["proposal"],
+      "outOfScope": ["external-send", "write-canonical", "commit", "push"]
+    }
+  },
+  "plan": {
+    "planId": "frontdoor-cli-process-plan-001",
+    "requestId": "frontdoor-cli-process-001",
+    "version": 1,
+    "nodes": [
+      {
+        "nodeId": "proposal",
+        "objective": "compiled CLI prepare を検証する",
+        "role": "proposal",
+        "adapterId": "fake-ai-a",
+        "scope": {
+          "inScope": ["proposal"],
+          "outOfScope": ["external-send", "write-canonical", "commit", "push"]
+        },
+        "contextReferences": ["fixture://goal.md"],
+        "acceptance": ["Proposalを返す"],
+        "stopConditions": ["Scope外要求"],
+        "capabilities": ["read", "propose"],
+        "dependsOn": [],
+        "depth": 1
+      }
+    ],
+    "aggregationPolicy": "collect-all"
+  }
+}

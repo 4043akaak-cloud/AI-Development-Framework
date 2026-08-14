@@ -1,6 +1,6 @@
 import path from 'node:path'
 import type { ApprovedTaskPacket } from '../../shared/jobLoopTypes'
-import type { DecompositionNode, DecompositionPlan, FrontdoorLedgerEvent, FrontdoorRequest, FrontdoorReturn, OrchestrationNodeRecord, OrchestrationRun } from '../../shared/frontdoorTypes'
+import type { AggregateResult, DecompositionNode, DecompositionPlan, FrontdoorInspection, FrontdoorLedgerEvent, FrontdoorQuestion, FrontdoorRequest, FrontdoorReturn, OrchestrationNodeRecord, OrchestrationRun } from '../../shared/frontdoorTypes'
 import { hashJson } from '../jobLoop/hash'
 import { validateApprovedTask } from '../jobLoop/contracts'
 import type { ConversationRelay } from '../jobLoop/relay'
@@ -13,7 +13,7 @@ import { assertBundleReady, claimRun, readPlan, readRequest, readRun, readRunCla
 import { replayFrontdoorRun } from './eventLedger'
 import { readJson } from '../jobLoop/ledger'
 import type { AdapterResultEnvelope } from '../jobLoop/resultEnvelope'
-import { assertDispatchApproved, FrontdoorOwnerGateService } from './ownerGates'
+import { assertDispatchApproved, buildDecisionEnvelope, FrontdoorOwnerGateService, nodeTargetHash } from './ownerGates'
 
 export interface FrontdoorOrchestratorOptions {
   relay: ConversationRelay
@@ -63,7 +63,8 @@ function assertRunEventConsistency(run: OrchestrationRun, events: readonly Front
   if (events.length === 0) throw new Error('Frontdoor run has no ledger events')
   const replayed = replayFrontdoorRun(events)
   if (hashJson(runProjection(replayed)) !== hashJson(runProjection(run))) throw new Error('Frontdoor event replay does not match run.json')
-  const progressed = events.some((event) => ['frontdoor.approval-bound', 'frontdoor.node-started', 'frontdoor.node-completed', 'frontdoor.node-failed', 'frontdoor.run-completed', 'frontdoor.run-stopped'].includes(event.type))
+  const lastQuestionResume = Math.max(-1, ...events.filter((event) => event.type === 'frontdoor.question-answered').map((event) => event.sequence))
+  const progressed = events.some((event) => event.sequence > lastQuestionResume && ['frontdoor.approval-bound', 'frontdoor.node-started', 'frontdoor.node-completed', 'frontdoor.node-failed', 'frontdoor.run-completed', 'frontdoor.run-stopped'].includes(event.type))
   if (run.state === 'ready-for-approval' && progressed) throw new Error('Frontdoor ready state conflicts with persisted execution events')
   if (['complete', 'partial', 'failed', 'blocked-by-question', 'cancelled'].includes(run.state) && !events.some((event) => event.type === 'frontdoor.run-completed' || event.type === 'frontdoor.run-stopped')) throw new Error('Frontdoor terminal state has no terminal ledger event')
 }
@@ -141,7 +142,7 @@ export class FrontdoorOrchestrator {
     const now = this.clock().toISOString()
     const runId = `run-${hashJson([request.requestId, request.inputHash, plan.planHash]).slice(0, 20)}`
     const nodes: OrchestrationNodeRecord[] = plan.nodes.map((node) => ({ node, state: 'queued', childTaskId: childTaskId(request.requestId, node.nodeId), questionIds: [], attempt: 0 }))
-    const run: OrchestrationRun = { runId, requestId: request.requestId, requestHash: request.inputHash, planHash: plan.planHash, state: 'ready-for-approval', nodes, approvalIds: [], openQuestionIds: [], createdAt: now, updatedAt: now, ownerGate: 'awaiting-owner:dispatch' }
+    const run: OrchestrationRun = { runId, requestId: request.requestId, requestHash: request.inputHash, planHash: plan.planHash, state: 'ready-for-approval', nodes, approvalIds: [], openQuestionIds: [], createdAt: now, updatedAt: now, ownerGate: 'awaiting-owner:intake' }
     try {
       await writeRunBundleExclusive(this.runtimeRoot, request, plan, run)
     } catch (error) {
@@ -155,7 +156,7 @@ export class FrontdoorOrchestrator {
       return existing
     }
     await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.run-created', { requestId: request.requestId, planHash: plan.planHash, nodeIds: plan.nodes.map((node) => node.nodeId), snapshot: run })
-    await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.owner-gate-opened', { gate: 'dispatch', targetHash: hashJson({ runId, requestId: request.requestId, planHash: plan.planHash, nodeIds: plan.nodes.map((node) => node.nodeId).sort() }) })
+    await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.owner-gate-opened', { gate: 'intake', targetHash: request.inputHash })
     return run
   }
 
@@ -251,40 +252,43 @@ export class FrontdoorOrchestrator {
   }
 
   async recoverRun(runId: string): Promise<OrchestrationRun> {
-    const request = await readRequest(this.runtimeRoot, runId)
-    const plan = await readPlan(this.runtimeRoot, runId)
-    const events = await readRunEvents(this.runtimeRoot, runId)
-    const run = await replayRunFromEvents(this.runtimeRoot, runId)
-    await assertRunIntegrity(this.runtimeRoot, run, request, plan, false)
-    assertRunEventConsistency(run, events)
-    if (events.length === 0) throw new Error('Frontdoor run has no ledger events; refusing recovery')
-    const started = new Set(events.filter((event) => event.type === 'frontdoor.node-started').map((event) => String(event.payload.nodeId)))
-    const completed = new Set(events.filter((event) => ['frontdoor.node-completed', 'frontdoor.node-failed'].includes(event.type)).map((event) => String(event.payload.nodeId)))
-    const interrupted = new Set([...started].filter((nodeId) => !completed.has(nodeId)))
-    const recovered = run.state === 'running' || interrupted.size > 0
-      ? { ...run, state: 'awaiting-owner' as const, ownerGate: 'awaiting-owner:dispatch' as const, nodes: run.nodes.map((node) => node.state === 'running' || interrupted.has(node.node.nodeId) ? { ...node, state: 'recovery-needed' as const, error: 'process interrupted before node completion' } : node), updatedAt: this.clock().toISOString() }
-      : run
-    if (recovered !== run) {
-      const claim = await readRunClaim(this.runtimeRoot, runId)
-      if (claim) {
-        if (claim.hostname !== (process.env.HOSTNAME ?? 'unknown') || !Number.isInteger(claim.pid) || claim.pid <= 0 || !claim.token) throw new Error('Frontdoor run claim cannot be verified safely')
-        let alive = true
-        try {
-          process.kill(claim.pid, 0)
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === 'ESRCH') alive = false
-          else throw new Error('Frontdoor run claim cannot be verified safely')
-        }
-        if (alive) throw new Error('Frontdoor run is still claimed by a live process')
-        await releaseRun(this.runtimeRoot, runId, claim.token)
+    const existingClaim = await readRunClaim(this.runtimeRoot, runId)
+    if (existingClaim) {
+      if (existingClaim.hostname !== (process.env.HOSTNAME ?? 'unknown') || !Number.isInteger(existingClaim.pid) || existingClaim.pid <= 0 || !existingClaim.token) throw new Error('Frontdoor run claim cannot be verified safely')
+      try {
+        process.kill(existingClaim.pid, 0)
+        throw new Error('Frontdoor run is still claimed by a live process')
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
+        await releaseRun(this.runtimeRoot, runId, existingClaim.token)
       }
-      await writeRun(this.runtimeRoot, recovered)
-      await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.run-recovery-needed', { nodeIds: recovered.nodes.filter((node) => node.state === 'recovery-needed').map((node) => node.node.nodeId), nodeRecords: recovered.nodes.filter((node) => node.state === 'recovery-needed'), runState: recovered.state })
     }
-    return recovered
+    const claim = await claimRun(this.runtimeRoot, runId, `recovery-${process.pid}`)
+    try {
+      const request = await readRequest(this.runtimeRoot, runId)
+      const plan = await readPlan(this.runtimeRoot, runId)
+      const events = await readRunEvents(this.runtimeRoot, runId)
+      const run = await replayRunFromEvents(this.runtimeRoot, runId)
+      await assertRunIntegrity(this.runtimeRoot, run, request, plan, false)
+      assertRunEventConsistency(run, events)
+      if (events.length === 0) throw new Error('Frontdoor run has no ledger events; refusing recovery')
+      const started = new Set(events.filter((event) => event.type === 'frontdoor.node-started').map((event) => String(event.payload.nodeId)))
+      const completed = new Set(events.filter((event) => ['frontdoor.node-completed', 'frontdoor.node-failed'].includes(event.type)).map((event) => String(event.payload.nodeId)))
+      const interrupted = new Set([...started].filter((nodeId) => !completed.has(nodeId)))
+      const recovered = run.state === 'running' || interrupted.size > 0
+        ? { ...run, state: 'awaiting-owner' as const, ownerGate: 'awaiting-owner:dispatch' as const, nodes: run.nodes.map((node) => node.state === 'running' || interrupted.has(node.node.nodeId) ? { ...node, state: 'recovery-needed' as const, error: 'process interrupted before node completion' } : node), updatedAt: this.clock().toISOString() }
+        : run
+      if (recovered !== run) {
+        await writeRun(this.runtimeRoot, recovered)
+        await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.run-recovery-needed', { nodeIds: recovered.nodes.filter((node) => node.state === 'recovery-needed').map((node) => node.node.nodeId), nodeRecords: recovered.nodes.filter((node) => node.state === 'recovery-needed'), runState: recovered.state })
+      }
+      return recovered
+    } finally {
+      await releaseRun(this.runtimeRoot, runId, claim.token)
+    }
   }
 
-  async stopRun(runId: string, note = 'Owner stopped Frontdoor run'): Promise<OrchestrationRun> {
+  async stopRun(runId: string, note = 'Owner stopped Frontdoor run', approvedBy = 'Project Owner'): Promise<OrchestrationRun> {
     const claim = await claimRun(this.runtimeRoot, runId, `stop-${process.pid}`)
     try {
       const run = await readRun(this.runtimeRoot, runId)
@@ -293,6 +297,10 @@ export class FrontdoorOrchestrator {
       await assertRunIntegrity(this.runtimeRoot, run, request, plan)
       assertRunEventConsistency(run, await readRunEvents(this.runtimeRoot, runId))
       if (['complete', 'partial', 'failed', 'cancelled'].includes(run.state)) return run
+      const gate = run.ownerGate?.startsWith('awaiting-owner:') ? run.ownerGate.slice('awaiting-owner:'.length) as import('../../shared/frontdoorTypes').OwnerGate : 'dispatch'
+      const stopTargetHash = hashJson({ runId, requestId: run.requestId, planHash: run.planHash, gate })
+      const decision = buildDecisionEnvelope(run, gate, 'stop', stopTargetHash, approvedBy, this.clock().toISOString(), { note })
+      await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.owner-decision-recorded', { decision })
       const stopped = { ...run, state: 'cancelled' as const, ownerGate: 'stopped' as const, nodes: run.nodes.map((node) => ['queued', 'ready', 'running', 'recovery-needed', 'awaiting-question'].includes(node.state) ? { ...node, state: 'cancelled' as const, error: note } : node), updatedAt: this.clock().toISOString() }
       await writeRun(this.runtimeRoot, stopped)
       await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.run-stopped', { note, nodeRecords: stopped.nodes, runState: stopped.state })
@@ -309,6 +317,42 @@ export class FrontdoorOrchestrator {
     await assertRunIntegrity(this.runtimeRoot, run, request, plan)
     assertRunEventConsistency(run, await readRunEvents(this.runtimeRoot, runId))
     return run
+  }
+
+  async inspectRun(runId: string): Promise<FrontdoorInspection> {
+    const run = await this.getRun(runId)
+    const [request, plan, events] = await Promise.all([readRequest(this.runtimeRoot, runId), readPlan(this.runtimeRoot, runId), readRunEvents(this.runtimeRoot, runId)])
+    let aggregate: AggregateResult | undefined
+    if (run.aggregateResultRef) {
+      if (!run.aggregateResultRef.startsWith('frontdoor-runs/') || run.aggregateResultRef.includes('..') || path.isAbsolute(run.aggregateResultRef)) throw new Error('Frontdoor Aggregate reference is outside the Runtime boundary')
+      aggregate = await readJson<AggregateResult>(path.join(this.runtimeRoot, run.aggregateResultRef))
+      if (aggregate.runId !== runId) throw new Error('Frontdoor Aggregate belongs to another Run')
+      const proposed = events.find((event) => event.type === 'frontdoor.completion-proposed' && event.payload.aggregateRef === run.aggregateResultRef)
+      if (!proposed || proposed.payload.aggregateHash !== hashJson(aggregate)) throw new Error('Frontdoor Aggregate does not match its proposed Evidence')
+    }
+    const decisions = events
+      .filter((event) => event.type === 'frontdoor.owner-decision-recorded')
+      .map((event) => event.payload.decision as import('../../shared/frontdoorTypes').OwnerDecisionEnvelope)
+    return {
+      run,
+      request,
+      plan,
+      decisions,
+      aggregate,
+      aggregateHash: aggregate ? hashJson(aggregate) : undefined,
+      evidenceRefs: aggregate?.evidenceRefs ?? [],
+      openQuestions: aggregate?.openQuestions ?? [],
+      nextAction: aggregate?.nextAction ?? (run.ownerGate ?? 'awaiting-owner'),
+      eventCount: events.length,
+      nodeTargetHashes: Object.fromEntries(run.nodes.map((record) => [record.node.nodeId, nodeTargetHash(run, record)]))
+    }
+  }
+
+  async getOpenQuestion(runId: string, questionId: string): Promise<FrontdoorQuestion> {
+    const inspection = await this.inspectRun(runId)
+    const question = inspection.openQuestions.find((candidate) => candidate.questionId === questionId && candidate.status === 'open')
+    if (!question) throw new Error(`current open Question not found: ${questionId}`)
+    return question
   }
 }
 
