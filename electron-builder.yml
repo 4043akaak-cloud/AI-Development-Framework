@@ -1,0 +1,13 @@
+appId: com.adf.taskboard
+productName: ADF Task Board
+directories:
+  output: release
+mac:
+  target:
+    - target: dir
+      arch:
+        - arm64
+  category: public.app-category.productivity
+files:
+  - out/**
+  - package.json

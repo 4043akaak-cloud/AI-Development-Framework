@@ -1,6 +1,6 @@
-# Codex 作業ガイド
+# AI 作業ガイド
 
-このファイルは、Codex がこのリポジトリで作業する際の入口です。
+このファイルは、Codex、Claude Code、Z.ai、将来追加されるAIが、このリポジトリで作業する際の共通入口です。
 
 ## 最初に読むファイル
 
@@ -8,8 +8,10 @@
 
 1. `README.md` — プロジェクトの目的と全体像
 2. `guidelines/AI_COLLABORATION.md` — 全参加者共通の協働ルール
-3. 作業に関連する `docs/` 内の要件、設計、開発フロー
-4. 作業に関連する `docs/decisions/` 内の決定記録
+3. `docs/workflow/AI_DELEGATION_CHARTER.md` — Context、Plan、Approval、委任規則
+4. `docs/workflow/TASK_LIFECYCLE.md` — Taskの状態遷移と停止条件
+5. `docs/project/CURRENT_STATE.md`、関連するTask、設計、決定記録
+6. Taskに列挙されたRequired Obsidian Context
 
 関連ドキュメントがまだ存在しない場合は、その事実と前提を明示して作業します。
 
@@ -25,6 +27,12 @@
 
 詳細は必ず `guidelines/AI_COLLABORATION.md` を参照します。
 
+## 現在の最小運用
+
+現段階では、[Codex単独パイロット](docs/workflow/CODEX_SOLO_PILOT.md) を正本とする。外部API・AI間自動連携・自動commit・自動pushは導入しない。
+
+依頼時は [AI Task Packet](templates/AI_TASK_PACKET.md) を使う。Codexに渡す最小の固定依頼文は [Codex Solo Request](templates/CODEX_SOLO_REQUEST.md) にある。
+
 ## 作業完了時の報告
 
 作業を完了したら、以下を簡潔に報告します。
@@ -33,4 +41,3 @@
 - 変更したファイル
 - 実施した検証と結果
 - 未検証事項、残る懸念、または次に必要な作業
-

@@ -1,12 +1,26 @@
 # GitHub 運用ガイド
 
-このドキュメントは、このフレームワークを実装するプロジェクトにおけるGitHub（Projects、Issues、Pull Requests）の具体的な運用方法を定めます。
+このドキュメントは、このフレームワークを実装するプロジェクトにおけるGitHub（Projects、Issues、Pull Requests）の運用候補を定めます。
 
-基本ルールは `guidelines/AI_COLLABORATION.md` を参照します。
+基本ルールは `guidelines/AI_COLLABORATION.md`、承認・停止条件は `docs/workflow/AI_DELEGATION_CHARTER.md`、状態遷移は `docs/workflow/TASK_LIFECYCLE.md` を参照します。
+
+> 現在のCodex単独パイロットでは、GitHub Project、Feature Branch、PRを必須にしません。まず [Codex単独パイロット](CODEX_SOLO_PILOT.md) のTask記録と人間レビューを検証します。
 
 ---
 
+## 適用段階
+
+### Phase 0（現在）
+
+必須なのは、GitHub内のTask記録、Required Obsidian Context、Plan、Project Ownerの承認・レビュー、Current Stateの更新である。GitHub Project、Feature Branch、PR、日次pushは必須ではない。Taskの状態と停止条件は [Task Lifecycle](TASK_LIFECYCLE.md) を正本とする。
+
+### Phase 1以降（将来）
+
+以下のProjects、Branch、Pull Requestの節は、複数AIまたは複数人での実装運用を導入する段階の候補である。導入は別Taskで承認し、Project Ownerが権限境界を決める。
+
 ## 概要
+
+### Phase 1以降の例
 
 ```
 GitHub Projects（進捗可視化）
@@ -23,6 +37,8 @@ Merge to main（完了）
 ---
 
 ## 1. Projects（プロジェクト進捗管理）
+
+> 適用: Phase 1以降。Phase 0ではTaskとCurrent Stateで現在地を管理する。
 
 ### 目的
 
@@ -53,30 +69,31 @@ Status:
 ### 運用ルール
 
 1. **新しいタスク作成時**
-   - 対応する Issue を作成
-   - Project ボードに自動追加（Backlog）
+   - Phase 1以降で必要なら対応する Issue を作成する
+   - Project Boardを導入済みの場合だけBacklogへ追加する
 
 2. **作業開始時**
-   - Issue を「In Progress」に移動
-   - Assignee を設定
-   - Feature branch を作成
+   - ContextとPlanを確認し、Approval Statusを記録する
+   - 承認済みで、かつ実装にbranchが必要な場合だけIssueを「In Progress」に移動し、AssigneeとFeature branchを設定する
 
 3. **進捗更新**
    - Issue のコメントで進捗を記録
    - 問題や判断待ちがあれば明記
 
 4. **レビュー段階**
-   - PR を作成
-   - Issue を「In Review」に移動
-   - Codex に通知
+   - PR運用を導入済みの場合だけPRを作成する
+   - Project Boardを導入済みの場合だけIssueを「In Review」に移動する
+   - 実装者以外のレビュー担当またはProject Ownerに確認を依頼
 
 5. **完了時**
-   - PR がマージされたら Issue を「Done」に移動
+   - PR運用を導入済みの場合、マージ後にIssueを「Done」に移動する
    - 決定記録や知見を記録してからクローズ
 
 ---
 
 ## 2. Issues（タスク管理）
+
+> 適用: Phase 0ではリポジトリ内の`TASK.md`または`docs/tasks/`を使ってよい。GitHub Issueを使う場合も、Task LifecycleとAI Task Packetの必須項目を省略しない。
 
 ### 命名規則
 
@@ -121,7 +138,7 @@ Status:
 ## 【関連資料】
 - 関連 Issue: #123
 - 決定記録: docs/decisions/...
-- Obsidian: ~/Desktop/second Brain/obsidian/...
+- Required Obsidian Context: [[ノート名]]（今回採用する制約も記載）
 
 ## 【変更してはいけない部分】
 保護すべき機能、削除してはいけないファイル
@@ -137,8 +154,8 @@ Assignee（複数可）
    - 関連する Obsidian ファイルを参照
 
 2. **Issue 割り当て**
-   - 人間が Assignee を設定
-   - または、AI が作業開始時に Assignee に自分を設定
+   - 人間が担当と権限境界を設定する
+   - AIは、TaskのApproval Statusを確認できない場合、実装を開始しない
 
 3. **コメント運用**
    - 進捗、判断、懸念を記録
@@ -151,6 +168,8 @@ Assignee（複数可）
 ---
 
 ## 3. ブランチ戦略
+
+> 適用: Phase 1以降、またはProject Ownerがbranch運用を明示承認したTask。Phase 0ではbranchは必須ではない。
 
 ### ブランチ命名規則
 
@@ -177,8 +196,8 @@ Assignee（複数可）
    - コミットメッセージは明確に（例：`Add prediction engine core`）
 
 3. **プッシュ**
-   - 定期的（目安：1日1回以上）にプッシュ
-   - リモートに進捗を残す
+   - Project Ownerが承認したTask単位でpushする
+   - リモートに反映する前に、差分、検証、push対象branchを確認する
 
 4. **PR 作成前**
    - リモートブランチが最新か確認
@@ -187,6 +206,8 @@ Assignee（複数可）
 ---
 
 ## 4. Pull Requests（コード・ドキュメント変更）
+
+> 適用: Phase 1以降、またはProject OwnerがPR運用を明示承認したTask。Phase 0の文書TaskではPRを必須にしない。
 
 ### PR の目的
 

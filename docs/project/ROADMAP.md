@@ -1,0 +1,112 @@
+# ADF Roadmap
+
+## 二つの進行軸
+
+- **運用成熟度**: AIをどこまで安全に委任・連携できるかを検証する軸。
+- **製品成熟度**: AIRFLOW型司令塔とループコーディングを、どこまでアプリとして可視化・連携できるかを作る軸。
+
+運用成熟度が製品成熟度の安全上限を決める。たとえば外部AIレビューが未検証なら、画面に外部AIの自動実行ボタンを追加しない。
+
+## Phase 0 — Codex単独パイロット（完了）
+
+CodexとProject Ownerで、まず`ADF-PILOT-001`のPreflightを行い、その後、文書Taskまたは可逆な小Taskを3件完走する。自動化・外部API・他AIは導入しない。
+
+**製品の対応地点:** アプリを作る前に、司令塔・Card・ループの設計契約を確定する。
+
+**判断ゲート:** 3件すべてで必須成果物が揃い、無承認変更が0件で、Task記録だけから再開できること。
+
+**記録済み:** `ADF-PILOT-002`、`ADF-PILOT-003`、`ADF-PILOT-004`を完走し、`ADF-RETRO-001`でProduct MVP 1を先行する判断を記録した。次段階は自動で開始しない。
+
+## Phase 0.5 — 役割分離Codexプローブ
+
+同一CodexのサブエージェントをPlanner、Critic、Observerとして使い、読み取り専用でPlan・批判・観測の分離を測る。これは独立AIレビューではなく、Phase 1準備の実験であり、Phase 0の3件完走を置き換えない。
+
+**判断ゲート:** Context不足、承認境界、状態遷移、手戻り、非承認Blockerを測定し、テンプレート改善を記録できること。
+
+## Architecture Gate — 複数AI管制の設計契約（完了）
+
+`ADF-ORCH-001`で、Control / Work / Evidenceの三面、Adapterの手動登録、Artifact、承認、統合、サブエージェント上限を設計する。これは接続や自動化ではなく、Boardが将来の複数AI協働へ安全に接続できるための境界である。
+
+**判断ゲート:** Project Ownerが、正本境界、外部送信・費用・書込みの禁止、統合前のEvidenceと明示承認をレビューすること。
+
+## Phase 1 — Product MVP 1: 手動・読み取り専用Board（完了）
+
+`ADF-ORCH-001`の設計契約に沿い、GitHub・Obsidianを正本のまま、ローカルのBoardでTask、承認待ち、リスク、必要Context、Evidenceリンクを手動表示する。
+
+**製品の対応地点:** 読み取り・可視化だけで、GitHub・Obsidianへ書き込まない。Adapter、Ledger、外部AI、自動実行は追加しない。
+
+**判断ゲート:** Project Ownerが、Taskの正本、必要文脈、止まっている理由、次の安全な一手をBoardから確認できること。
+
+**記録済み:** `ADF-MVP1-001`でローカル読み取り専用Boardを実装し、Project Ownerの差分・実機レビューを完了した。Dock起動、Broken/Stale、3代表ケースの60秒探索、署名は後続検証として残す。
+
+## Phase 1.5 — Local Job Loop MVP
+
+`ADF-JOB-LOOP-001`で、外部AIなしのFake Adapter A/Bによる1ラウンド討論、ファイルLedger、構造化Result、Owner Review待ちProjectionを実装する。これは複数AI共演の搬送路を検証するための最小Runtimeであり、Fakeの成功を実AIの接続性・品質・独立性とは扱わない。
+
+このPhaseが現在のMVPゴールである。完成条件は、このPC内で複数の役割を持つAI Adapterがプロジェクト完遂に向けて議論し、ResultをOwnerレビュー待ちへ返せることである。Fake AdapterはMVPの検証手段であり、ADFの将来を単一のFake AIやClaude Codeだけに固定するものではない。
+
+**対象外:** Claude Code等の実Adapter、MCP、外部送信、認証、課金、DB、worktree、並列Job、複数ラウンド、自動統合、正本自動書込み。
+
+**判断ゲート:** A/Bの入力・出力hash、失敗・不正Result、重複dispatch、Owner Review待ち表示、正本非変更を確認し、Project OwnerがDiff・Verificationをレビューすること。
+
+## Phase 1.6 — ADF上の会話ThreadとRelay
+
+`ADF-CONVERSATION-RELAY-001`で、Jobの最終Result一件ではなく、Task配下のThread（順序付きTurn列）をADF内の会話一次データにする。Fake Adapter A/Bが同じThreadへ複数ターン発言し、Ownerが途中で継続・停止・承認・次Task化を選べる状態を作る。Ownerがプロンプトと結果を手作業でコピーし続けないことが目的である。
+
+Adapter Interfaceは`send_to_adapter` / `receive_from_adapter` / `continue_job` / `get_conversation_state`とし、送信と受信を分離して外部AIの非同期回答へ差し替えられる形にする。外部AI候補はRegistryへ`planned`として登録するだけで、dispatch対象にしない。
+
+**対象外:** 認証、APIキー、実HTTP送信、Claude／Codex CLI起動、外部送信、課金、MCP、worktree、並列Job、自律的な無限会話、正本自動書込み。
+
+**判断ゲート:** Project OwnerがNode.jsのある環境でtypecheck・test・buildを実行し、アプリ上でThread表示とOwner操作を確認すること。
+
+**記録済み（完了）:** typecheck、Vitest 60件、build / package、Electron起動、Thread開始→Proposal→継続→Critic→Result承認→次Task化の実機操作をProject Ownerが確認し、`ADF-CONVERSATION-RELAY-001`をDoneとした。commit `f8fb1c7`。
+
+## Phase 1.7 — Relay復旧（Owner判断による再開）
+
+`ADF-RELAY-RECOVERY-001`で、Turn送信後・受信前にプロセスが終了したThreadが恒久停止する問題を解消する。起動時にpendingを検出して`recovery-needed`として提示し、Ownerが「再送」「失敗として記録」「Thread停止」から選ぶ。
+
+MVPを軽く保つため、自動再送・常駐Worker・DB・バックグラウンド再開は作らない。timeoutは自動処理の引き金にせず、期限表示とOwner判断の材料に限定する。再送は同一`sequence`・新規`dispatchId`とし、Adapter契約（`send` / `getState` / `receive`）とFake Adapter会話は変更しない。
+
+これは現在の不具合の解消であると同時に、外部AI接続の構造的な前提でもある。外部AIは受理と回答の間隔が長く、その間にアプリが閉じられ得るため、pendingがプロセスを跨いで復旧できない限り実接続は成立しない。
+
+**対象外:** 自動再送、常駐Worker、DB、並列Job、外部AI接続、認証、APIキー、外部送信、課金、MCP。
+
+**判断ゲート:** Project Ownerが設計を承認したうえで、プロセス終了・再起動を含む実機検証でThreadが恒久停止しないことを確認すること。
+
+**記録済み（完了）:** `ADF-RELAY-RECOVERY-001`で、Case A / Case Bの起動時検出、Ownerによる再送・失敗記録・停止、Job同期、77 tests、build、別プロセス検証、Recovery UI表示を確認した。commit `932357c`。
+
+## Phase 1.8 — 最初の実AI Adapter接続（実装完了・実行直前承認待ち）
+
+`ADF-EXTERNAL-ADAPTER-001`で、既存のADF Thread / Relayへ実AI Adapterを一つ接続し、Synthetic Packetの送信からResult Envelope取込、Ownerレビュー待ちまでをこのPC上で実証する。Claudeは最初の技術試験対象とするが、ADF製品をClaude専用にはしない。同じAdapter契約で第二Adapter以降を追加できることを保つ。
+
+**対象:** 接続方式のpreflight、最小Packet、実行直前の外部送信・課金承認、foreground送受信、timeout / cancel / recovery、Result / Ledger / Board反映。
+
+**対象外:** repo添付、worktree、外部AIによるコード実行、正本変更、動的Routing、並列Job、無限討論、自動統合、commit、push、merge。
+
+**判断ゲート:** Project Ownerが送信データ、Provider、予算上限、保持・telemetry、停止条件、実行直前承認を確認し、実AIの回答が既存Threadへ安全に戻ることを実機検証する。
+
+## Phase 2 — 外部AIまたは人間による独立レビューの追加
+
+パイロット結果をもとに、別AIまたは人間によるレビューを1段だけ追加する。実装者と最終レビュー担当を分け、役割別テンプレートを必要最小限で作る。
+
+**製品の対応地点:** Product MVP 1の実際のBoard差分を対象に、手動受け渡しのArtifact比較と独立レビューを1件測る。接続はまだ自動化しない。
+
+**設計済み:** `ADF-REVIEW-001`で、固定Review Packet、二段階承認、構造化Artifact、比較指標、停止条件を定めた。実際の送信・Provider選定・費用発生は、Project Ownerの実行直前承認まで行わない。
+
+**判断ゲート:** 3件以上でレビューが有効に機能し、手戻りと記録負担が許容範囲であること。
+
+## Phase 3 — 読み取り専用の補助自動化
+
+Task作成補助、リンク検査、Issue草案、Current State下書きなど、書き込みの影響が小さい補助を導入する。自動修正・push・公開は行わない。
+
+**製品の対応地点:** 承認済みの読み取り専用連携を追加する。Task・証跡・文脈を表示するが、正本の更新は人間操作を保つ。
+
+**判断ゲート:** ログ、費用、秘密情報、停止条件を設計・承認できること。
+
+## Phase 4 — モデル選定と複数Adapter管制（将来）
+
+OpenRouter等を候補に、承認済みのモデル・予算・データ方針の範囲だけで担当AIを選ぶ。AI同士の討論は、固定回数・構造化出力・人間承認を前提にする。
+
+**製品の対応地点:** 上司AIがTaskを分解・提示し、実装AIとレビューAIを候補選定できるようにする。ただし、費用、外部送信、push、merge、公開は常に人間承認を残す。
+
+**判断ゲート:** Phase 0〜3の記録を評価し、導入価値が手動運用の複雑さ・費用・リスクを上回ること。

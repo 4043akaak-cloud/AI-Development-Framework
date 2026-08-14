@@ -81,6 +81,14 @@
 - 次の安全な一手:
 - Handover文書:
 
+## 9. Project Owner Review
+
+| 対象 | 決定 | 根拠・確認内容 | 日時 | 記録リンク |
+| --- | --- | --- | --- | --- |
+| Plan / Scope | Approved / Changes requested / Not applicable | | | |
+| Diff / Verification | Approved / Changes requested / Not applicable | | | |
+| 残存リスク | Accepted / Follow-up required / Not applicable | | | |
+
 ### Done checklist
 
 - [ ] Required Contextを確認し、採用した制約を記録した。
@@ -88,4 +96,5 @@
 - [ ] 承認済みScopeだけを変更した。
 - [ ] Verificationの結果と未検証事項を記録した。
 - [ ] 独立レビュー、または該当しない理由を記録した。
+- [ ] Project Owner Reviewの対象・決定・根拠を記録した。
 - [ ] GitHubと必要なObsidianの記録を更新した。

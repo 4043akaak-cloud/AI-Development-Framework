@@ -1,5 +1,7 @@
 # Week 1 - GitHub Issues Template
 
+> **Status: Historical planning artifact (superseded 2026-07-30).** これは初期の改善案を保存した資料であり、現在の実行用Taskではない。`REQUEST_TO_AI.md`と`PROJECT_STARTUP_CHECKLIST.md`への参照は、[AI Task Packet](../../templates/AI_TASK_PACKET.md)、[Codex単独パイロット](../workflow/CODEX_SOLO_PILOT.md)、[Task Lifecycle](../workflow/TASK_LIFECYCLE.md)に置き換えられた。
+
 ## Issue #1
 
 **Title:** [Loop] AI Development Framework [Documentation] - Initialize Decision Record Directory
@@ -69,7 +71,9 @@ Critical
 
 ## Issue #2
 
-**Title:** [Loop] AI Development Framework [Documentation] - Add Template Examples to REQUEST_TO_AI and DECISION_RECORD
+**Title:** [Loop] AI Development Framework [Documentation] - Add Template Examples to AI Task Packet and DECISION_RECORD
+
+**Status:** Superseded. 実例追加の必要性は、Codex単独パイロットを3件完走した後に評価する。
 
 **Body:**
 
@@ -85,7 +89,7 @@ Critical
 **Purpose**: Current templates are abstract; they lack concrete, real-world examples that show how to apply them in actual work.
 
 **Scope**:
-1. Enhance REQUEST_TO_AI.md with 4-5 detailed examples (refactoring, testing, architecture decision)
+1. Enhance AI_TASK_PACKET.md with必要な実例（refactoring, testing, architecture decision）
 2. Create DECISION_RECORD_EXAMPLES.md with 3 filled-in records
 3. Create TEMPLATE_USAGE_GUIDE.md (300-400 words)
 4. Add "Common Mistakes" section
@@ -102,7 +106,7 @@ High
 2-3 hours
 
 ### Implementation Approach
-- Add 3+ examples to REQUEST_TO_AI.md
+- Add 3+ examples to AI_TASK_PACKET.md
 - Create DECISION_RECORD_EXAMPLES.md with filled records
 - Document template usage patterns
 - Add anti-patterns and corrections
@@ -110,7 +114,7 @@ High
 ---
 
 ## Acceptance Criteria
-- [ ] REQUEST_TO_AI.md has 4-5 detailed examples
+- [ ] AI_TASK_PACKET.md has 4-5 detailed examples
 - [ ] DECISION_RECORD_EXAMPLES.md shows 3 complete records
 - [ ] TEMPLATE_USAGE_GUIDE.md is comprehensive
 - [ ] Common pitfalls are documented
@@ -242,7 +246,9 @@ Critical
 
 ## Issue #5
 
-**Title:** [Loop] AI Development Framework [Process] - Modularize PROJECT_STARTUP_CHECKLIST into Phase-Based Checklists
+**Title:** [Loop] AI Development Framework [Process] - Validate the Codex Solo Pilot before adding phase checklists
+
+**Status:** Superseded. 15-step checklistは削除し、現在はCodex単独パイロットの最小手順を使う。
 
 **Body:**
 
@@ -253,7 +259,7 @@ Critical
 
 ## 改善案
 
-### Modularize PROJECT_STARTUP_CHECKLIST
+### Validate the Codex Solo Pilot
 
 **Purpose**: Current 15-step checklist is overwhelming for first projects. Developers stall because they don't understand why later steps matter now.
 
