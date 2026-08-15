@@ -2,7 +2,7 @@ import type { OpenSourceResult } from '../../shared/boardTypes'
 import type { ConversationThread, OwnerAction, RecoveryAction, RelayResult, ThreadSummary } from '../../shared/threadTypes'
 import type { ExternalPreflight, OllamaReadiness } from '../../shared/externalAdapterTypes'
 import type { AdapterProfile } from '../../shared/jobLoopTypes'
-import type { FrontdoorInspection, FrontdoorPlanProposal, FrontdoorPrepareInput, FrontdoorPrepareResult, FrontdoorRequestInput, FrontdoorReturn, FrontdoorRunSummary, OwnerDecisionEnvelope, OwnerGate, OrchestrationRun } from '../../shared/frontdoorTypes'
+import type { FrontdoorInspection, FrontdoorPlanProposal, FrontdoorPrepareInput, FrontdoorPrepareResult, FrontdoorRequestInput, FrontdoorReturn, FrontdoorRunSummary, OwnerDecisionEnvelope, OwnerGate, OrchestrationRun, WorkPlaneArtifactManifest } from '../../shared/frontdoorTypes'
 
 declare global {
   interface Window {
@@ -37,6 +37,7 @@ declare global {
       answer: (input: { runId: string; questionId: string; approvedBy: string; answerRef?: string; note?: string }) => Promise<RelayResult<OwnerDecisionEnvelope>>
       reviewResult: (input: { runId: string; approvedBy: string; decision: 'accept' | 'follow-up' | 'reject'; note?: string }) => Promise<RelayResult<OwnerDecisionEnvelope>>
       complete: (input: { runId: string; approvedBy: string; note?: string }) => Promise<RelayResult<OrchestrationRun>>
+      exportArtifact: (input: { runId: string; approvedBy: string; note?: string }) => Promise<RelayResult<WorkPlaneArtifactManifest>>
       stop: (input: { runId: string; approvedBy: string; note?: string }) => Promise<RelayResult<OrchestrationRun>>
       recover: (runId: string) => Promise<RelayResult<OrchestrationRun>>
     }

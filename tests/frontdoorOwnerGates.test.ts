@@ -76,6 +76,38 @@ async function approveInitialGates(orchestrator: FrontdoorOrchestrator, runId: s
 }
 
 describe('Frontdoor Owner Gates', () => {
+  it('exports only an accepted Result into a run-isolated Work Plane artifact', async () => {
+    const { runtimeRoot, orchestrator, run } = await createFixture()
+    await approveInitialGates(orchestrator, run.runId)
+    await orchestrator.approveDispatch(run.runId, [proposal.nodeId])
+    await orchestrator.executeApprovedRun(run.runId, { proposal: packet(run) })
+    await expect(orchestrator.exportWorkPlaneArtifact(run.runId, 'Project Owner')).rejects.toThrow(/accepted Result Review/)
+    await orchestrator.reviewResult(run.runId, 'Project Owner', 'accept')
+    const manifest = await orchestrator.exportWorkPlaneArtifact(run.runId, 'Project Owner')
+    expect(manifest.relativePath).toMatch(new RegExp(`^frontdoor-runs/${run.runId}/work-plane/artifact-`))
+    expect(manifest.requestHash).toBe(run.requestHash)
+    expect(manifest.planHash).toBe(run.planHash)
+    const stored = JSON.parse(await readFile(path.join(runtimeRoot, manifest.relativePath), 'utf8')) as { manifest: typeof manifest; content: { nodes: Array<{ resultHash: string }> } }
+    expect(stored.manifest).toMatchObject({ artifactId: manifest.artifactId, contentHash: manifest.contentHash, status: 'exported' })
+    expect(stored.content.nodes[0].resultHash).toMatch(/^[a-f0-9]{64}$/)
+    await expect(orchestrator.exportWorkPlaneArtifact(run.runId, 'Project Owner')).rejects.toThrow()
+  })
+
+  it('rejects Work Plane export when a persisted Result is tampered', async () => {
+    const { runtimeRoot, orchestrator, run } = await createFixture()
+    await approveInitialGates(orchestrator, run.runId)
+    await orchestrator.approveDispatch(run.runId, [proposal.nodeId])
+    const executed = await orchestrator.executeApprovedRun(run.runId, { proposal: packet(run) })
+    await orchestrator.reviewResult(run.runId, 'Project Owner', 'accept')
+    const resultRef = executed.childResultRefs[0]
+    if (!resultRef) throw new Error('test Result reference missing')
+    const resultPath = path.join(runtimeRoot, resultRef)
+    const result = JSON.parse(await readFile(resultPath, 'utf8')) as Record<string, unknown>
+    result.content = 'tampered'
+    await writeFile(resultPath, `${JSON.stringify(result)}\n`, 'utf8')
+    await expect(orchestrator.exportWorkPlaneArtifact(run.runId, 'Project Owner')).rejects.toThrow(/Result hash mismatch/)
+  })
+
   it('rejects dispatch when no matching Owner Decision exists', async () => {
     const { runtimeRoot, orchestrator, run } = await createFixture()
     await expect(orchestrator.executeApprovedRun(run.runId, { proposal: packet(run) })).rejects.toThrow(/matching Owner Decision/)

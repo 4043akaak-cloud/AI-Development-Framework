@@ -9,7 +9,8 @@ const gateLabels: Record<OwnerGate, string> = {
   'node-review': 'Node Review',
   question: 'Question',
   'result-review': 'Result Review',
-  completion: 'Completion'
+  completion: 'Completion',
+  'artifact-export': 'Artifact Export'
 }
 
 type Result<T> = { ok: true; value: T } | { ok: false; error: string }
@@ -199,6 +200,7 @@ export default function FrontdoorPanel(): JSX.Element {
   const currentGate = gateFromState(run?.ownerGate)
   const dispatchApproved = Boolean(inspection?.decisions.some((decision) => decision.gate === 'dispatch' && decision.decision === 'dispatch'))
   const completionAccepted = Boolean(inspection?.decisions.some((decision) => decision.gate === 'result-review' && decision.decision === 'accept'))
+  const artifactExported = Boolean(inspection?.decisions.some((decision) => decision.gate === 'artifact-export' && decision.decision === 'export'))
   const canOwnerAct = approvedBy.trim().length > 0 && !busy
   const packetsReady = runs.find((entry) => entry.runId === selectedRunId)?.packetsReady ?? false
   const openQuestions = inspection?.openQuestions.filter((question) => question.status === 'open') ?? []
@@ -386,7 +388,10 @@ export default function FrontdoorPanel(): JSX.Element {
                   </>
                 )}
                 {currentGate === 'completion' && completionAccepted && (
-                  <button type="button" className="text-button" disabled={!canOwnerAct} onClick={() => void runAction(() => window.adfFrontdoor.complete({ runId: run.runId, approvedBy: approvedBy.trim(), note: note || undefined }))}>Completionを承認</button>
+                  <>
+                    {!artifactExported && <button type="button" className="text-button" disabled={!canOwnerAct} onClick={() => void runAction(() => window.adfFrontdoor.exportArtifact({ runId: run.runId, approvedBy: approvedBy.trim(), note: note || undefined }))}>Work PlaneへExport</button>}
+                    <button type="button" className="text-button" disabled={!canOwnerAct} onClick={() => void runAction(() => window.adfFrontdoor.complete({ runId: run.runId, approvedBy: approvedBy.trim(), note: note || undefined }))}>Completionを承認</button>
+                  </>
                 )}
                 {!terminal && <button type="button" className="text-button" disabled={!canOwnerAct} onClick={() => void runAction(() => window.adfFrontdoor.stop({ runId: run.runId, approvedBy: approvedBy.trim(), note: note || undefined }))}>Runを停止</button>}
                 {run.state === 'running' && <button type="button" className="text-button" disabled={busy} onClick={() => void runAction(() => window.adfFrontdoor.recover(run.runId))}>Recovery状態を確認</button>}

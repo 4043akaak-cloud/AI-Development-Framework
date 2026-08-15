@@ -40,9 +40,9 @@ const frontdoorOptions = {
   help: { type: 'boolean' }
 } as const
 
-type FrontdoorCommand = 'prepare' | 'inspect' | 'approve' | 'dispatch' | 'review-node' | 'answer' | 'review-result' | 'complete' | 'stop' | 'recover'
+type FrontdoorCommand = 'prepare' | 'inspect' | 'approve' | 'dispatch' | 'review-node' | 'answer' | 'review-result' | 'complete' | 'export-artifact' | 'stop' | 'recover'
 
-const commands: readonly FrontdoorCommand[] = ['prepare', 'inspect', 'approve', 'dispatch', 'review-node', 'answer', 'review-result', 'complete', 'stop', 'recover']
+const commands: readonly FrontdoorCommand[] = ['prepare', 'inspect', 'approve', 'dispatch', 'review-node', 'answer', 'review-result', 'complete', 'export-artifact', 'stop', 'recover']
 
 function usage(command?: string): string {
   if (command === 'approve') {
@@ -64,6 +64,7 @@ function usage(command?: string): string {
     '  answer          record an explicit answer to the current Question',
     '  review-result   record the Owner review of the current Aggregate/Evidence',
     '  complete        approve completion after accepted Result review',
+    '  export-artifact explicitly materialize an accepted Result into the isolated Work Plane',
     '  stop            stop the Run without retry or integration',
     '  recover         mark interrupted work for Owner review; never retries',
     '',
@@ -191,7 +192,7 @@ export async function runFrontdoorCli(argv: string[], io: FrontdoorCliIO = defau
       return 0
     }
 
-    const requiresOwnerIdentity = command === 'approve' || command === 'review-node' || command === 'answer' || command === 'review-result' || command === 'complete' || command === 'stop'
+    const requiresOwnerIdentity = command === 'approve' || command === 'review-node' || command === 'answer' || command === 'review-result' || command === 'complete' || command === 'export-artifact' || command === 'stop'
     const approvedBy = requiredString(values, 'approved-by')
     if (requiresOwnerIdentity && !approvedBy) throw new Error(`${command} requires --approved-by <name>`)
     const note = requiredString(values, 'note') ?? undefined
@@ -263,6 +264,12 @@ export async function runFrontdoorCli(argv: string[], io: FrontdoorCliIO = defau
     if (command === 'complete') {
       const run = await orchestrator.completeRun(runId, approvedBy!, note)
       output(io, { command, run }, json)
+      return 0
+    }
+
+    if (command === 'export-artifact') {
+      const manifest = await orchestrator.exportWorkPlaneArtifact(runId, approvedBy!, note)
+      output(io, { command, manifest, nextAction: 'inspect the manifest; repository and Obsidian integration remain separate' }, json)
       return 0
     }
 

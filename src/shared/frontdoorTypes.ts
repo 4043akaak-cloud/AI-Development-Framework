@@ -6,8 +6,8 @@ export type OrchestrationNodeState = 'queued' | 'ready' | 'running' | 'completed
 export type FrontdoorQuestionKind = 'clarification' | 'missing-context' | 'scope-change' | 'approval-required' | 'execution-blocked' | 'conflict'
 export type FrontdoorQuestionStatus = 'open' | 'answered' | 'dismissed'
 
-export type OwnerGate = 'intake' | 'completion-shape' | 'decomposition' | 'dispatch' | 'node-review' | 'question' | 'result-review' | 'completion'
-export type OwnerDecision = 'clarify' | 'edit' | 'reject' | 'proceed' | 'approve' | 'approve-selected' | 'dispatch' | 'defer' | 'stop' | 'answer' | 'revise-plan' | 'accept' | 'follow-up' | 'continue' | 'complete'
+export type OwnerGate = 'intake' | 'completion-shape' | 'decomposition' | 'dispatch' | 'node-review' | 'question' | 'result-review' | 'completion' | 'artifact-export'
+export type OwnerDecision = 'clarify' | 'edit' | 'reject' | 'proceed' | 'approve' | 'approve-selected' | 'dispatch' | 'defer' | 'stop' | 'answer' | 'revise-plan' | 'accept' | 'follow-up' | 'continue' | 'complete' | 'export'
 export type OwnerGateState = 'received' | `awaiting-owner:${OwnerGate}` | 'running' | 'completed' | 'stopped' | 'rejected' | 'blocked'
 
 export interface OwnerDecisionEnvelope {
@@ -204,6 +204,27 @@ export interface FrontdoorInspection {
   nodeTargetHashes: Record<string, string>
   nodeReview?: FrontdoorNodeReview
   activities: FrontdoorActivity[]
+}
+
+export interface WorkPlaneArtifactManifest {
+  artifactId: string
+  runId: string
+  requestId: string
+  taskId: string
+  nodeId: string
+  jobId: string
+  threadId: string
+  requestHash: string
+  planHash: string
+  resultHash: string
+  aggregateHash: string
+  contentHash: string
+  resultRef: string
+  relativePath: string
+  contentType: 'application/json'
+  ownerDecisionIds: string[]
+  createdAt: string
+  status: 'exported'
 }
 
 export type FrontdoorActivityKind = 'system' | 'owner' | 'agent' | 'verification'

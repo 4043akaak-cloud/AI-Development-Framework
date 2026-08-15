@@ -73,7 +73,7 @@ describe('ADF-MCP-001 local Frontdoor MCP server', () => {
     expect(initialized?.result).toMatchObject({ protocolVersion: '2025-06-18', capabilities: { tools: { listChanged: false } } })
     const listed = await server.handle({ jsonrpc: '2.0', id: 2, method: 'tools/list' })
     expect((listed?.result as { tools: Array<{ name: string }> }).tools.map((tool) => tool.name)).toEqual([
-      'adf_frontdoor_prepare', 'adf_frontdoor_inspect', 'adf_frontdoor_dispatch_approved', 'adf_frontdoor_get_result', 'adf_frontdoor_list_runs'
+      'adf_frontdoor_prepare', 'adf_frontdoor_inspect', 'adf_frontdoor_dispatch_approved', 'adf_frontdoor_get_result', 'adf_frontdoor_get_workplane_artifact', 'adf_frontdoor_list_runs'
     ])
   })
 
@@ -119,11 +119,17 @@ describe('ADF-MCP-001 local Frontdoor MCP server', () => {
 
     const dispatched = await call(server, 2, 'adf_frontdoor_dispatch_approved', { runId })
     const result = JSON.parse((dispatched?.result as { content: Array<{ text: string }> }).content[0].text) as { status: string; runId: string }
-    expect(result).toMatchObject({ status: 'complete', runId })
+    expect(result).toMatchObject({ status: 'awaiting-owner', ownerGate: 'awaiting-owner:result-review', aggregateStatus: 'complete', runId })
 
     const persisted = await call(server, 3, 'adf_frontdoor_get_result', { runId })
     expect(persisted?.result).toMatchObject({ content: [{ type: 'text' }] })
     expect(JSON.parse((persisted?.result as { content: Array<{ text: string }> }).content[0].text).results[0].adapterId).toBe('fake-ai-a')
+    await server.frontdoor.reviewResult(runId, 'Project Owner', 'accept')
+    const manifest = await server.frontdoor.exportWorkPlaneArtifact(runId, 'Project Owner')
+    const exported = await call(server, 4, 'adf_frontdoor_get_workplane_artifact', { runId })
+    const exportedBody = JSON.parse((exported?.result as { content: Array<{ text: string }> }).content[0].text) as { manifest: { artifactId: string }; artifact: unknown }
+    expect(exportedBody).toMatchObject({ manifest: { artifactId: manifest.artifactId } })
+    expect(exportedBody.artifact).toBeDefined()
   })
 
   it('rejects a legacy non-Packet-bound Dispatch Decision before any child send', async () => {

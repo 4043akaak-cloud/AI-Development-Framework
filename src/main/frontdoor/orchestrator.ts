@@ -143,6 +143,10 @@ export class FrontdoorOrchestrator {
     return this.ownerGates.completeRun(runId, approvedBy, note)
   }
 
+  async exportWorkPlaneArtifact(runId: string, approvedBy = 'Project Owner', note?: string) {
+    return this.ownerGates.exportWorkPlaneArtifact(runId, approvedBy, note)
+  }
+
   async createRun(requestInput: Parameters<typeof createFrontdoorRequest>[0], planInput: Parameters<typeof createDecompositionPlan>[1]): Promise<OrchestrationRun> {
     const request = createFrontdoorRequest(requestInput, this.clock().toISOString())
     const plan = createDecompositionPlan(request, planInput)

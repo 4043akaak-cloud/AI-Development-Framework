@@ -2,6 +2,7 @@ import { createInterface, type Interface } from 'node:readline'
 import { realpath } from 'node:fs/promises'
 import path from 'node:path'
 import { readJson } from '../main/jobLoop/ledger'
+import { readRunEvents } from '../main/frontdoor/ledger'
 import { hashJson } from '../main/jobLoop/hash'
 import type { AdapterResultEnvelope } from '../main/jobLoop/resultEnvelope'
 import { createLiveRelay } from '../main/liveRelay'
@@ -73,6 +74,16 @@ const tools = [
   {
     name: 'adf_frontdoor_get_result',
     description: 'Read a persisted Aggregate and bounded child Result Envelopes for a Frontdoor Run.',
+    inputSchema: {
+      type: 'object',
+      properties: { runId: { type: 'string' } },
+      required: ['runId'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'adf_frontdoor_get_workplane_artifact',
+    description: 'Read a bounded, Owner-exported Work Plane artifact. This tool never creates approvals or artifacts.',
     inputSchema: {
       type: 'object',
       properties: { runId: { type: 'string' } },
@@ -170,6 +181,7 @@ function projectInspection(inspection: Awaited<ReturnType<FrontdoorOrchestrator[
     evidenceRefs: inspection.evidenceRefs,
     openQuestions: inspection.openQuestions.map((question) => ({ questionId: question.questionId, nodeId: question.nodeId, kind: question.kind, text: boundedText(question.text, 2000), required: question.required, blocking: question.blocking, status: question.status })),
     nextAction: boundedText(inspection.nextAction, 1000),
+    nodeReview: inspection.nodeReview,
     eventCount: inspection.eventCount,
     nodeTargetHashes: inspection.nodeTargetHashes,
     activities: inspection.activities
@@ -251,7 +263,8 @@ export class FrontdoorMcpServer {
         onlyKeys(args, ['runId'])
         const runId = safeIdentifier(args.runId, 'runId')
         const result = requireSuccess(await dispatchFrontdoorRun(this.frontdoor, runId, { requirePacketBinding: true }))
-        return toolResult({ requestId: result.requestId, runId: result.runId, status: result.status, summary: boundedText(result.summary, 2000), childResultRefs: result.childResultRefs, evidenceRefs: result.evidenceRefs, openQuestions: result.openQuestions.map((question) => ({ questionId: question.questionId, nodeId: question.nodeId, kind: question.kind, text: boundedText(question.text, 2000), blocking: question.blocking, status: question.status })), unresolvedRisks: result.unresolvedRisks.map((risk) => boundedText(risk, 2000)), ownerDecisionRequired: result.ownerDecisionRequired, nextAction: boundedText(result.nextAction, 1000) })
+        const inspection = requireSuccess(await inspectFrontdoorRun(this.frontdoor, runId))
+        return toolResult({ requestId: result.requestId, runId: result.runId, status: inspection.run.state, ownerGate: inspection.run.ownerGate, aggregateStatus: result.status, summary: boundedText(result.summary, 2000), childResultRefs: result.childResultRefs, evidenceRefs: result.evidenceRefs, openQuestions: result.openQuestions.map((question) => ({ questionId: question.questionId, nodeId: question.nodeId, kind: question.kind, text: boundedText(question.text, 2000), blocking: question.blocking, status: question.status })), unresolvedRisks: result.unresolvedRisks.map((risk) => boundedText(risk, 2000)), ownerDecisionRequired: result.ownerDecisionRequired, nextAction: boundedText(result.nextAction, 1000) })
       }
       case 'adf_frontdoor_list_runs': {
         onlyKeys(args, [])
@@ -265,10 +278,28 @@ export class FrontdoorMcpServer {
         const results = []
         for (const child of inspection.aggregate.childResults) {
           if (!child.resultRef) continue
-          const result = await readJson<AdapterResultEnvelope>(await safeRuntimePath(this.runtimeRoot, child.resultRef))
+          const resultPath = await safeRuntimePath(this.runtimeRoot, child.resultRef)
+          const result = await readJson<AdapterResultEnvelope>(resultPath)
+          const record = inspection.run.nodes.find((candidate) => candidate.node.nodeId === child.nodeId)
+          if (!record || record.resultRef !== child.resultRef || record.resultHash !== hashJson(result) || !record.childJobId || result.jobId !== record.childJobId || result.taskId !== record.childTaskId) throw new Error(`Frontdoor Result binding mismatch: ${child.nodeId}`)
           results.push({ nodeId: child.nodeId, status: child.status, resultRef: child.resultRef, resultHash: hashJson(result), jobId: result.jobId, taskId: result.taskId, adapterId: result.adapterId, role: result.role, summary: boundedText(result.summary, 2000), content: boundedText(result.content), verification: result.verification, risks: result.risks.map((risk) => boundedText(risk, 2000)), dependencyResults: result.dependencyResults?.map((dependency) => ({ nodeId: dependency.nodeId, resultHash: dependency.resultHash, status: dependency.status, content: boundedText(dependency.content, 2000) })), ownerDecisionRequired: result.ownerDecisionRequired, nextOwnerDecision: boundedText(result.nextOwnerDecision, 1000) })
         }
         return toolResult({ runId, state: inspection.run.state, ownerGate: inspection.run.ownerGate, aggregate: inspection.aggregate, results })
+      }
+      case 'adf_frontdoor_get_workplane_artifact': {
+        onlyKeys(args, ['runId'])
+        const runId = safeIdentifier(args.runId, 'runId')
+        const inspection = requireSuccess(await inspectFrontdoorRun(this.frontdoor, runId))
+        const events = await readRunEvents(this.runtimeRoot, runId)
+        const artifact = events.find((event) => event.type === 'frontdoor.owner-decision-recorded' && event.payload?.artifact)
+        if (!artifact?.payload?.artifact || !isRecord(artifact.payload.artifact)) throw new Error('Frontdoor Run has no exported Work Plane artifact')
+        const manifest = artifact.payload.artifact as Record<string, unknown>
+        const relativePath = manifest.relativePath
+        if (typeof relativePath !== 'string') throw new Error('Work Plane artifact manifest path is invalid')
+        const artifactFile = await safeRuntimePath(this.runtimeRoot, relativePath)
+        const stored = await readJson<Record<string, unknown>>(artifactFile)
+        if (!isRecord(stored.manifest) || hashJson(stored.manifest) !== hashJson(manifest)) throw new Error('Work Plane artifact manifest mismatch')
+        return toolResult({ runId, state: inspection.run.state, ownerGate: inspection.run.ownerGate, manifest, artifact: stored.content })
       }
       default:
         throw new Error(`unknown tool: ${name}`)

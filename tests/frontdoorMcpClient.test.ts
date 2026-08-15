@@ -123,7 +123,7 @@ describe('ADF-MCP-CLIENT-E2E-001 stdio MCP client', () => {
 
       const listed = await client.request('tools/list') as { tools: Array<{ name: string }> }
       expect(listed.tools.map((tool) => tool.name)).toEqual([
-        'adf_frontdoor_prepare', 'adf_frontdoor_inspect', 'adf_frontdoor_dispatch_approved', 'adf_frontdoor_get_result', 'adf_frontdoor_list_runs'
+        'adf_frontdoor_prepare', 'adf_frontdoor_inspect', 'adf_frontdoor_dispatch_approved', 'adf_frontdoor_get_result', 'adf_frontdoor_get_workplane_artifact', 'adf_frontdoor_list_runs'
       ])
 
       const prepared = textResult(await client.request('tools/call', { name: 'adf_frontdoor_prepare', arguments: input(requestId) })) as { runId: string; ownerGate: string }
@@ -142,7 +142,7 @@ describe('ADF-MCP-CLIENT-E2E-001 stdio MCP client', () => {
       await owner.approveDispatch(prepared.runId, ['proposal'], 'Project Owner')
 
       const dispatched = textResult(await client.request('tools/call', { name: 'adf_frontdoor_dispatch_approved', arguments: { runId: prepared.runId } }))
-      expect(dispatched).toMatchObject({ runId: prepared.runId, status: 'complete' })
+      expect(dispatched).toMatchObject({ runId: prepared.runId, status: 'awaiting-owner', ownerGate: 'awaiting-owner:result-review', aggregateStatus: 'complete' })
 
       const persisted = textResult(await client.request('tools/call', { name: 'adf_frontdoor_get_result', arguments: { runId: prepared.runId } }))
       expect(persisted).toMatchObject({ runId: prepared.runId })

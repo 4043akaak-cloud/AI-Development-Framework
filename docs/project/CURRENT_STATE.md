@@ -1,6 +1,6 @@
 # ADF Current State
 
-> Last updated: 2026-08-14（`ADF-FRONTDOOR-PLANNER-PROPOSAL-001`の実装・実UI確認を反映。過去の個別Task記述には旧時点の記録が残る）
+> Last updated: 2026-08-15（`ADF-FRONTDOOR-OLLAMA-WORKPLANE-E2E-001`のMCP経由実Ollama E2E・Work Plane Exportまで反映。過去の個別Task記述には旧時点の記録が残る）
 
 ## 現在地
 
@@ -14,7 +14,9 @@ ADFの製品境界は、Project進捗管理とAI間の受け渡しに限定す�
 
 ## 最終目標への現在地
 
-Local Runtime基盤は完成しているが、最終目標である「窓口AI → ADF → 得意分野ごとの複数AI → ADF → 窓口AI」のEnd-to-End協調は未完成である。`ADF-FRONTDOOR-ORCHESTRATION-001`を2026-08-14に開始し、Fake Adapter限定でFrontdoorRequest、分解DAG、Node状態機械、Result / Question集約、FrontdoorReturnを一周させた。続く`ADF-FRONTDOOR-LEDGER-EVENT-SOURCING-001`では`events.jsonl`を正本とするtyped hash-chain Ledger、決定的Replay、atomic Bundle、claim安全性を実装しDoneとなった。`ADF-FRONTDOOR-OWNER-GATE-001`ではOwnerのIntake、完成形、分解、Dispatch、質問、Result Review、Completionを共通契約として実装し、`e38e31c`でDoneとなった。`ADF-FRONTDOOR-OLLAMA-TWO-NODE-E2E-001`では、Project Owner承認の4 Gateを通して実OllamaのProposal→Critic依存2 Nodeを一回実行し、Runtime再読込・Replay・Evidence／Ledger整合を確認済みである。`ADF-MCP-001`では窓口AIからlocal stdio MCPを経由してFrontdoor Request／Planを投入し、Owner承認済みRunの状態・Resultを取得する5 Toolの薄い入口を実装し、Verifyingへ進んだ。続く`ADF-MCP-CLIENT-E2E-001`では、コンパイル済みMCP Server子プロセスへ実MCP Clientで接続し、Owner Gate後のFake dispatch／Result取得を確認した。窓口AI設定登録、Work Plane、実装AI、独立Review Job、実Providerの自動選定は後続Taskとする。
+`ADF-FRONTDOOR-OLLAMA-WORKPLANE-E2E-001`では、MCPのResult binding検証、Result Review後の明示Work Plane Export、隔離artifact読取を実装した。Run `run-30c7a84186862404fe38`でMCP経由のProposal／Critic実Ollama送信、Result／Evidence／Job／Thread／Event Ledger、Work Plane artifactを確認し、Electron Live BoardのRefresh後に両Node表示も確認済みである。
+
+Local Runtime基盤は完成しているが、最終目標である「窓口AI → ADF → 得意分野ごとの複数AI → ADF → 窓口AI」のEnd-to-End協調は発展途上である。`ADF-FRONTDOOR-ORCHESTRATION-001`を2026-08-14に開始し、Fake Adapter限定でFrontdoorRequest、分解DAG、Node状態機械、Result / Question集約、FrontdoorReturnを一周させた。続く`ADF-FRONTDOOR-LEDGER-EVENT-SOURCING-001`では`events.jsonl`を正本とするtyped hash-chain Ledger、決定的Replay、atomic Bundle、claim安全性を実装しDoneとなった。`ADF-FRONTDOOR-OWNER-GATE-001`ではOwnerのIntake、完成形、分解、Dispatch、質問、Result Review、Completionを共通契約として実装し、`e38e31c`でDoneとなった。`ADF-FRONTDOOR-OLLAMA-TWO-NODE-E2E-001`では、Project Owner承認の4 Gateを通して実OllamaのProposal→Critic依存2 Nodeを一回実行し、Runtime再読込・Replay・Evidence／Ledger整合を確認済みである。`ADF-MCP-001`では窓口AIからlocal stdio MCPを経由してFrontdoor Request／Planを投入し、Owner承認済みRunの状態・Resultを取得する入口を実装し、`ADF-FRONTDOOR-OLLAMA-WORKPLANE-E2E-001`でWork Plane artifactまで接続した。AI任意編集Work Plane、実装AI、独立Review Job、実Providerの自動選定は後続Taskとする。
 
 本Taskの停止ルール: 同じ原因による検証失敗が2回連続、または別原因でも3回続いた場合、Codexは実装を止めてProject Ownerへ確認する。Scope拡張、新規依存、外部送信、認証、費用、Work Plane書込み、既存安全境界の弱体化が必要になった場合も停止する。
 
@@ -27,6 +29,8 @@ Local Runtime基盤は完成しているが、最終目標である「窓口AI �
 Anthropic APIキーの取得と外部AIへの実送信は引き続き保留である。External Adapterは接続経路（Electron main／IPC／preload／UI、認証状態preflight）まで実装済みだが、実送信は未実施である。`ADF-BOARD-PROJECTION-001`は、`open + turnCount > 0`の実機表示と`recovery-needed`のLive Board実機表示の2項目を、単体テストで検証済みかつDoneを妨げない残存リスクとして記録している。`ADF-TASK-PACKET-CLI-001`は、Task本文とExecution Summaryの将来的な乖離を検出できないことを残存リスクとして記録している。受信途中の中断と外部Adapter固有の冪等性は引き続き後続Taskで扱う。
 
 ## 次のTask
+
+[`ADF-FRONTDOOR-OLLAMA-WORKPLANE-E2E-001`](../tasks/ADF-FRONTDOOR-OLLAMA-WORKPLANE-E2E-001.md): `Done`。Result Review後の明示Export Gate、Run隔離Work Plane artifact、MCP read-only artifact取得、Result hash／Job／Task binding検証、CLI／Electron入口を実装。Run `run-30c7a84186862404fe38`でProposal／CriticをMCP経由で実Ollamaへ送信し、Result／Evidence／Job／Thread／Event Ledger／Work Plane artifactを確認、Electron Live Board表示も確認した。自動Routing、API key、外部送信、Canonical repo／Obsidian書込み、commit／pushは行っていない。新artifact toolをWindow AIの既存MCP接続へ表示するには接続再起動が必要。
 
 [`ADF-OLLAMA-ROLE-COMPLETE-ADAPTER-001`](../tasks/ADF-OLLAMA-ROLE-COMPLETE-ADAPTER-001.md): `Done`。Registryが宣言する`ollama-local`のProposal／Critic両対応と、実際のConversationRelay／Electron Main登録の差分を解消した。Provider-neutralな複数role契約を追加し、FrontdoorのProposal → Critic依存2 Nodeを注入Transportで検証済み。Architecture／Safety／VerificationレビューのP2指摘（preflight role誤表示、Ledger／Job／Thread／Evidence／Event Ledger証跡不足）も修正し、Vitest 319/319、Node/Web/CLI typecheck、Electron build、diff checkはPass。Owner identity認証は既存Owner Gate契約のScope外として別Task候補に分類。実Ollama送信、外部送信、認証、費用、新規依存、Work Plane書込みは行っていない。Project Ownerの最終Diffレビュー・完了承認済み。
 

@@ -3,7 +3,7 @@ import type { OpenSourceResult } from '../shared/boardTypes'
 import type { ConversationThread, OwnerAction, RecoveryAction, RelayResult, ThreadSummary } from '../shared/threadTypes'
 import type { ExternalPreflight, OllamaReadiness } from '../shared/externalAdapterTypes'
 import type { AdapterProfile } from '../shared/jobLoopTypes'
-import type { FrontdoorInspection, FrontdoorPlanProposal, FrontdoorPrepareInput, FrontdoorPrepareResult, FrontdoorRequestInput, FrontdoorReturn, FrontdoorRunSummary, OwnerDecisionEnvelope, OwnerGate, OrchestrationRun } from '../shared/frontdoorTypes'
+import type { FrontdoorInspection, FrontdoorPlanProposal, FrontdoorPrepareInput, FrontdoorPrepareResult, FrontdoorRequestInput, FrontdoorReturn, FrontdoorRunSummary, OwnerDecisionEnvelope, OwnerGate, OrchestrationRun, WorkPlaneArtifactManifest } from '../shared/frontdoorTypes'
 
 contextBridge.exposeInMainWorld('adfBoard', {
   openCanonicalSource: (sourceId: string): Promise<OpenSourceResult> => ipcRenderer.invoke('board:open-canonical-source', sourceId)
@@ -39,6 +39,7 @@ contextBridge.exposeInMainWorld('adfFrontdoor', {
   answer: (input: { runId: string; questionId: string; approvedBy: string; answerRef?: string; note?: string }): Promise<RelayResult<OwnerDecisionEnvelope>> => ipcRenderer.invoke('frontdoor:answer', input),
   reviewResult: (input: { runId: string; approvedBy: string; decision: 'accept' | 'follow-up' | 'reject'; note?: string }): Promise<RelayResult<OwnerDecisionEnvelope>> => ipcRenderer.invoke('frontdoor:review-result', input),
   complete: (input: { runId: string; approvedBy: string; note?: string }): Promise<RelayResult<OrchestrationRun>> => ipcRenderer.invoke('frontdoor:complete', input),
+  exportArtifact: (input: { runId: string; approvedBy: string; note?: string }): Promise<RelayResult<WorkPlaneArtifactManifest>> => ipcRenderer.invoke('frontdoor:export-artifact', input),
   stop: (input: { runId: string; approvedBy: string; note?: string }): Promise<RelayResult<OrchestrationRun>> => ipcRenderer.invoke('frontdoor:stop', input),
   recover: (runId: string): Promise<RelayResult<OrchestrationRun>> => ipcRenderer.invoke('frontdoor:recover', runId)
 })

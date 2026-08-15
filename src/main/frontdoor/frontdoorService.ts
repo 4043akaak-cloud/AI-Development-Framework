@@ -1,7 +1,7 @@
 import { access, readdir } from 'node:fs/promises'
 import path from 'node:path'
 import type { ApprovedTaskPacket } from '../../shared/jobLoopTypes'
-import type { FrontdoorInspection, FrontdoorPlanProposal, FrontdoorPrepareResult, FrontdoorRequestInput, FrontdoorRunSummary, OwnerDecisionEnvelope, OwnerGate, OrchestrationRun } from '../../shared/frontdoorTypes'
+import type { FrontdoorInspection, FrontdoorPlanProposal, FrontdoorPrepareResult, FrontdoorRequestInput, FrontdoorRunSummary, OwnerDecisionEnvelope, OwnerGate, OrchestrationRun, WorkPlaneArtifactManifest } from '../../shared/frontdoorTypes'
 import type { RelayResult } from '../../shared/threadTypes'
 import { readJson } from '../jobLoop/ledger'
 import { FrontdoorOrchestrator } from './orchestrator'
@@ -46,6 +46,12 @@ export interface FrontdoorNodeReviewResult {
 }
 
 export interface FrontdoorCompletionInput {
+  runId: unknown
+  approvedBy: unknown
+  note?: unknown
+}
+
+export interface FrontdoorArtifactExportInput {
   runId: unknown
   approvedBy: unknown
   note?: unknown
@@ -227,6 +233,10 @@ export function reviewFrontdoorNode(orchestrator: FrontdoorOrchestrator, input: 
 
 export function completeFrontdoorRun(orchestrator: FrontdoorOrchestrator, input: FrontdoorCompletionInput): Promise<RelayResult<OrchestrationRun>> {
   return guard(() => orchestrator.completeRun(identifier(input.runId, 'runId'), owner(input.approvedBy), note(input.note)))
+}
+
+export function exportFrontdoorArtifact(orchestrator: FrontdoorOrchestrator, input: FrontdoorArtifactExportInput): Promise<RelayResult<WorkPlaneArtifactManifest>> {
+  return guard(() => orchestrator.exportWorkPlaneArtifact(identifier(input.runId, 'runId'), owner(input.approvedBy), note(input.note)))
 }
 
 export function stopFrontdoorRun(orchestrator: FrontdoorOrchestrator, input: FrontdoorStopInput): Promise<RelayResult<OrchestrationRun>> {

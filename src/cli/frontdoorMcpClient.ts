@@ -46,7 +46,9 @@ interface PendingRequest {
   timer: ReturnType<typeof setTimeout>
 }
 
-const defaultTimeoutMs = 5_000
+// A Frontdoor dispatch may wait for a local model inference. Five seconds is
+// sufficient for read-only MCP calls but can terminate a valid Ollama run.
+const defaultTimeoutMs = 120_000
 const maxStderrChars = 4_000
 const childEnvironmentKeys = ['PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL', 'LC_CTYPE', 'ELECTRON_RUN_AS_NODE'] as const
 

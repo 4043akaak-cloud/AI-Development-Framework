@@ -1,6 +1,7 @@
+import { mkdir, realpath, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import type { ApprovedTaskPacket } from '../../shared/jobLoopTypes'
-import type { AggregateResult, FrontdoorQuestion, OwnerDecision, OwnerDecisionEnvelope, OwnerGate, OrchestrationNodeRecord, OrchestrationRun } from '../../shared/frontdoorTypes'
+import type { AggregateResult, FrontdoorQuestion, OwnerDecision, OwnerDecisionEnvelope, OwnerGate, OrchestrationNodeRecord, OrchestrationRun, WorkPlaneArtifactManifest } from '../../shared/frontdoorTypes'
 import { hashJson } from '../jobLoop/hash'
 import { readJson } from '../jobLoop/ledger'
 import { claimRun, readPlan, readRequest, readRun, readRunEvents, recordRunEvent, releaseRun, writeRun } from './ledger'
@@ -13,7 +14,8 @@ const decisionByGate: Record<OwnerGate, readonly OwnerDecision[]> = {
   'node-review': ['continue', 'stop'],
   question: ['answer', 'revise-plan', 'stop'],
   'result-review': ['accept', 'follow-up', 'reject', 'stop'],
-  completion: ['approve', 'continue', 'stop', 'complete']
+  completion: ['approve', 'continue', 'stop', 'complete'],
+  'artifact-export': ['export', 'stop']
 }
 
 export interface DecisionCheckInput {
@@ -37,6 +39,20 @@ function sortedPacketHashes(packetHashes: DispatchPacketHashes): Record<string, 
   return Object.fromEntries(Object.entries(packetHashes).sort(([left], [right]) => left.localeCompare(right)))
 }
 
+async function safeRuntimeFile(runtimeRoot: string, reference: string): Promise<string> {
+  if (!reference || path.isAbsolute(reference) || reference.includes('..')) throw new Error('Work Plane source reference is outside the Runtime boundary')
+  const root = await realpath(path.resolve(runtimeRoot))
+  const candidate = await realpath(path.resolve(root, reference))
+  if (candidate !== root && !candidate.startsWith(`${root}${path.sep}`)) throw new Error('Work Plane source reference is outside the Runtime boundary')
+  return candidate
+}
+
+function boundedArtifactText(value: unknown, limit: number): string | undefined {
+  return typeof value === 'string'
+    ? value.slice(0, limit).replace(/(sk-|api[_-]?key|token|secret|password)\s*[:=]\s*[^\s,}]+/gi, '$1=<redacted>')
+    : undefined
+}
+
 export function dispatchTargetHash(run: Pick<OrchestrationRun, 'runId' | 'requestId' | 'planHash'>, nodeIds: readonly string[], packetHashes?: DispatchPacketHashes): string {
   return hashJson({
     runId: run.runId,
@@ -57,6 +73,10 @@ export function completionShapeTargetHash(run: Pick<OrchestrationRun, 'runId' | 
 
 export function resultReviewTargetHash(runId: string, aggregateRef: string, aggregate: AggregateResult): string {
   return hashJson({ runId, aggregateRef, aggregateHash: hashJson(aggregate) })
+}
+
+export function artifactExportTargetHash(runId: string, aggregateRef: string, aggregateHash: string, nodes: readonly OrchestrationNodeRecord[]): string {
+  return hashJson({ runId, aggregateRef, aggregateHash, nodes: nodes.map((record) => ({ nodeId: record.node.nodeId, childTaskId: record.childTaskId, childJobId: record.childJobId, threadId: record.threadId, resultRef: record.resultRef, resultHash: record.resultHash, childInputHash: record.childInputHash })).sort((left, right) => left.nodeId.localeCompare(right.nodeId)) })
 }
 
 export function nodeReviewTargetHash(run: Pick<OrchestrationRun, 'runId' | 'requestId' | 'planHash'>, nodeId: string, resultHash: string | undefined, nextNodeIds: readonly string[]): string {
@@ -294,6 +314,7 @@ export class FrontdoorOwnerGateService {
     await assertDecisionBinding(this.runtimeRoot, envelope)
     await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.owner-decision-recorded', { decision: envelope })
     await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.result-reviewed', { decision: envelope, aggregateRef: run.aggregateResultRef, aggregateHash: hashJson(aggregate) })
+    if (decision === 'accept') await writeRun(this.runtimeRoot, { ...run, ownerGate: 'awaiting-owner:completion', updatedAt: this.clock().toISOString() })
     return envelope
   }
 
@@ -346,6 +367,59 @@ export class FrontdoorOwnerGateService {
       await writeRun(this.runtimeRoot, completed)
       await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.run-completed', { status: 'complete', aggregateRef: run.aggregateResultRef, openQuestionIds: [], runState: 'complete' })
       return completed
+    } finally {
+      await releaseRun(this.runtimeRoot, runId, claim.token)
+    }
+  }
+
+  async exportWorkPlaneArtifact(runId: string, approvedBy: string, note?: string): Promise<WorkPlaneArtifactManifest> {
+    const claim = await claimRun(this.runtimeRoot, runId, `owner-artifact-export-${process.pid}`)
+    try {
+      const run = await readRun(this.runtimeRoot, runId)
+      if (run.state !== 'awaiting-owner' || !run.aggregateResultRef) throw new Error('Work Plane export requires an accepted Result Review before completion')
+      const aggregate = await readJson<AggregateResult>(path.join(this.runtimeRoot, run.aggregateResultRef))
+      assertAggregateBelongsToRun(runId, aggregate)
+      const events = await readRunEvents(this.runtimeRoot, runId)
+      const proposed = events.find((event) => event.type === 'frontdoor.completion-proposed' && event.payload.aggregateRef === run.aggregateResultRef)
+      if (!proposed || proposed.payload.aggregateHash !== hashJson(aggregate)) throw new Error('Work Plane export aggregate does not match proposed Evidence')
+      const reviewTargetHash = resultReviewTargetHash(runId, run.aggregateResultRef, aggregate)
+      const reviewed = events.some((event) => event.type === 'frontdoor.result-reviewed'
+        && (event.payload.decision as OwnerDecisionEnvelope | undefined)?.decision === 'accept'
+        && (event.payload.decision as OwnerDecisionEnvelope | undefined)?.targetHash === reviewTargetHash)
+      if (!reviewed) throw new Error('Work Plane export requires an accepted Result Review')
+      const targetHash = artifactExportTargetHash(runId, run.aggregateResultRef, hashJson(aggregate), run.nodes)
+      const envelope = buildDecisionEnvelope(run, 'artifact-export', 'export', targetHash, approvedBy, this.clock().toISOString(), { note })
+      if (!canApprove({ gate: 'artifact-export', decision: 'export', targetHash, expectedTargetHash: targetHash, approvedBy })) throw new Error('Work Plane export decision is invalid')
+      const records = run.nodes.map((record) => {
+        if (!record.childTaskId || !record.childJobId || !record.threadId || !record.resultRef || !record.resultHash || !record.childInputHash) throw new Error(`Work Plane export evidence is incomplete: ${record.node.nodeId}`)
+        return record
+      })
+      const results = await Promise.all(records.map(async (record) => {
+        const result = await readJson<Record<string, unknown>>(await safeRuntimeFile(this.runtimeRoot, record.resultRef!))
+        if (hashJson(result) !== record.resultHash) throw new Error(`Work Plane export Result hash mismatch: ${record.node.nodeId}`)
+        return { nodeId: record.node.nodeId, taskId: record.childTaskId, jobId: record.childJobId, threadId: record.threadId, resultRef: record.resultRef, resultHash: record.resultHash, inputHash: record.childInputHash, adapterId: record.node.adapterId, role: record.node.role, result: { status: result.status, summary: boundedArtifactText(result.summary, 2_000), content: boundedArtifactText(result.content, 12_000), verification: result.verification, risks: result.risks } }
+      }))
+      const reviewDecisionIds = events.filter((event) => event.type === 'frontdoor.result-reviewed').map((event) => (event.payload.decision as OwnerDecisionEnvelope | undefined)?.decisionId).filter((id): id is string => Boolean(id))
+      const artifactId = `artifact-${hashJson([runId, targetHash]).slice(0, 20)}`
+      const relativePath = `frontdoor-runs/${runId}/work-plane/${artifactId}.json`
+      const createdAt = this.clock().toISOString()
+      const content = { artifactId, runId, requestId: run.requestId, requestHash: run.requestHash, planHash: run.planHash, aggregateRef: run.aggregateResultRef, aggregateHash: hashJson(aggregate), nodes: results, exportedAt: createdAt }
+      const manifest: WorkPlaneArtifactManifest = { artifactId, runId, requestId: run.requestId, taskId: records[0].childTaskId, nodeId: records.length === 1 ? records[0].node.nodeId : 'aggregate', jobId: records.length === 1 ? records[0].childJobId! : 'multiple', threadId: records.length === 1 ? records[0].threadId! : 'multiple', requestHash: run.requestHash, planHash: run.planHash, resultHash: hashJson(results.map((result) => ({ nodeId: result.nodeId, resultHash: result.resultHash }))), aggregateHash: hashJson(aggregate), contentHash: hashJson(content), resultRef: records[0].resultRef!, relativePath, contentType: 'application/json', ownerDecisionIds: [...reviewDecisionIds, envelope.decisionId], createdAt, status: 'exported' }
+      const runDirectory = await safeRuntimeFile(this.runtimeRoot, `frontdoor-runs/${runId}`)
+      const workPlaneDirectory = path.join(runDirectory, 'work-plane')
+      await assertDecisionBinding(this.runtimeRoot, envelope)
+      await mkdir(workPlaneDirectory)
+      const artifactPath = path.join(workPlaneDirectory, `${artifactId}.json`)
+      const temporaryArtifactPath = path.join(workPlaneDirectory, `${artifactId}.${process.pid}.${Date.now()}.tmp`)
+      try {
+        await writeFile(temporaryArtifactPath, `${JSON.stringify({ manifest, content }, null, 2)}\n`, { encoding: 'utf8', flag: 'wx' })
+        await rename(temporaryArtifactPath, artifactPath)
+        await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.owner-decision-recorded', { decision: envelope, artifact: manifest })
+      } catch (error) {
+        await rm(workPlaneDirectory, { recursive: true, force: true })
+        throw error
+      }
+      return manifest
     } finally {
       await releaseRun(this.runtimeRoot, runId, claim.token)
     }
