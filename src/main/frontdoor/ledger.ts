@@ -5,12 +5,14 @@ import type { FrontdoorEventType, FrontdoorLedgerEvent } from '../../shared/fron
 import { ensureDir, readJson, removeFile, writeJsonAtomic, writeJsonExclusive } from '../jobLoop/ledger'
 import { hashJson } from '../jobLoop/hash'
 import { appendFrontdoorEvent, readFrontdoorEvents, replayFrontdoorRun, validateFrontdoorEventChain } from './eventLedger'
+import { assertRuntimeRootSafe } from './pathIntegrity'
 
 export function runDirectory(runtimeRoot: string, runId: string): string {
   return path.join(runtimeRoot, 'frontdoor-runs', runId)
 }
 
 export async function writeRunBundle(runtimeRoot: string, request: FrontdoorRequest, plan: DecompositionPlan, run: OrchestrationRun): Promise<void> {
+  await assertRuntimeRootSafe(runtimeRoot)
   const directory = runDirectory(runtimeRoot, run.runId)
   await ensureDir(directory)
   await writeJsonAtomic(path.join(directory, 'request.json'), request)
@@ -19,6 +21,7 @@ export async function writeRunBundle(runtimeRoot: string, request: FrontdoorRequ
 }
 
 export async function writeRunBundleExclusive(runtimeRoot: string, request: FrontdoorRequest, plan: DecompositionPlan, run: OrchestrationRun): Promise<void> {
+  await assertRuntimeRootSafe(runtimeRoot)
   const directory = runDirectory(runtimeRoot, run.runId)
   const parent = path.dirname(directory)
   await ensureDir(parent)
@@ -38,6 +41,7 @@ export async function writeRunBundleExclusive(runtimeRoot: string, request: Fron
 }
 
 export async function writeRun(runtimeRoot: string, run: OrchestrationRun): Promise<void> {
+  await assertRuntimeRootSafe(runtimeRoot)
   const directory = runDirectory(runtimeRoot, run.runId)
   const request = await readJson<FrontdoorRequest>(path.join(directory, 'request.json'))
   const plan = await readJson<DecompositionPlan>(path.join(directory, 'plan.json'))
@@ -47,6 +51,7 @@ export async function writeRun(runtimeRoot: string, run: OrchestrationRun): Prom
 }
 
 export async function writeAggregate(runtimeRoot: string, runId: string, aggregate: unknown): Promise<string> {
+  await assertRuntimeRootSafe(runtimeRoot)
   const ref = `frontdoor-runs/${runId}/aggregate.json`
   await writeJsonAtomic(path.join(runtimeRoot, ref), aggregate)
   return ref
@@ -104,6 +109,7 @@ export async function readRunClaim(runtimeRoot: string, runId: string): Promise<
 }
 
 export async function claimRun(runtimeRoot: string, runId: string, owner: string): Promise<FrontdoorRunClaim> {
+  await assertRuntimeRootSafe(runtimeRoot)
   const claim: FrontdoorRunClaim = { runId, owner, token: `claim-${hashJson([runId, owner, process.pid, Date.now()])}`, pid: process.pid, hostname: process.env.HOSTNAME ?? 'unknown', claimedAt: new Date().toISOString() }
   await writeJsonExclusive(path.join(runDirectory(runtimeRoot, runId), 'run.claim.json'), claim)
   return claim
@@ -116,5 +122,6 @@ export async function releaseRun(runtimeRoot: string, runId: string, token?: str
 }
 
 export async function recordRunEvent(runtimeRoot: string, runId: string, type: FrontdoorEventType, details: Record<string, unknown>, occurredAt?: string): Promise<FrontdoorLedgerEvent> {
+  await assertRuntimeRootSafe(runtimeRoot)
   return appendFrontdoorEvent(runtimeRoot, runId, type, details, occurredAt)
 }

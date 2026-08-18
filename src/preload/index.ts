@@ -41,5 +41,9 @@ contextBridge.exposeInMainWorld('adfFrontdoor', {
   complete: (input: { runId: string; approvedBy: string; note?: string }): Promise<RelayResult<OrchestrationRun>> => ipcRenderer.invoke('frontdoor:complete', input),
   exportArtifact: (input: { runId: string; approvedBy: string; note?: string }): Promise<RelayResult<WorkPlaneArtifactManifest>> => ipcRenderer.invoke('frontdoor:export-artifact', input),
   stop: (input: { runId: string; approvedBy: string; note?: string }): Promise<RelayResult<OrchestrationRun>> => ipcRenderer.invoke('frontdoor:stop', input),
-  recover: (runId: string): Promise<RelayResult<OrchestrationRun>> => ipcRenderer.invoke('frontdoor:recover', runId)
+  recover: (runId: string): Promise<RelayResult<OrchestrationRun>> => ipcRenderer.invoke('frontdoor:recover', runId),
+  listCandidates: (): Promise<RelayResult<import('../shared/implementationTypes').CandidateSummary[]>> => ipcRenderer.invoke('frontdoor:list-candidates'),
+  inspectCandidate: (candidateId: string): Promise<RelayResult<import('../shared/implementationTypes').CandidateInspectionResult>> => ipcRenderer.invoke('frontdoor:inspect-candidate', candidateId),
+  startCandidateReview: (candidateId: string): Promise<RelayResult<import('../shared/implementationTypes').CandidateReviewStartedResult>> => ipcRenderer.invoke('frontdoor:start-candidate-review', candidateId),
+  reviewCandidate: (input: import('../shared/implementationTypes').CandidateReviewDecisionInput): Promise<RelayResult<import('../shared/implementationTypes').CandidateReviewOwnerDecisionEnvelope>> => ipcRenderer.invoke('frontdoor:review-candidate', input)
 })

@@ -1,14 +1,16 @@
 import { createInterface, type Interface } from 'node:readline'
-import { realpath } from 'node:fs/promises'
 import path from 'node:path'
 import { readJson } from '../main/jobLoop/ledger'
 import { readRunEvents } from '../main/frontdoor/ledger'
 import { hashJson } from '../main/jobLoop/hash'
 import type { AdapterResultEnvelope } from '../main/jobLoop/resultEnvelope'
 import { createLiveRelay } from '../main/liveRelay'
-import { dispatchFrontdoorRun, inspectFrontdoorRun, listFrontdoorRuns, prepareFrontdoorRun } from '../main/frontdoor/frontdoorService'
+import { dispatchFrontdoorRun, inspectFrontdoorRun, listFrontdoorRuns, prepareFrontdoorRun, proposeFrontdoorObsidianUpdate } from '../main/frontdoor/frontdoorService'
 import { FrontdoorOrchestrator } from '../main/frontdoor/orchestrator'
-import type { FrontdoorPrepareInput } from '../shared/frontdoorTypes'
+import type { FrontdoorPrepareInput, WorkPlaneArtifactManifest } from '../shared/frontdoorTypes'
+import { safeRuntimePath } from '../main/frontdoor/pathIntegrity'
+import { readVerifiedWorkPlaneArtifact } from '../main/frontdoor/workPlaneArtifact'
+import { buildFrontdoorContextCapsule } from '../main/frontdoor/contextCapsule'
 
 const supportedProtocolVersions = ['2025-03-26', '2025-06-18', '2025-11-25'] as const
 const serverProtocolVersion = '2025-06-18'
@@ -57,6 +59,26 @@ const tools = [
     inputSchema: {
       type: 'object',
       properties: { runId: { type: 'string' } },
+      required: ['runId'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'adf_frontdoor_get_context_capsule',
+    description: 'Read a deterministic, bounded Context Capsule for a Frontdoor Run. Preserves IDs, hashes, and Evidence references without changing the Runtime Ledger.',
+    inputSchema: {
+      type: 'object',
+      properties: { runId: { type: 'string' }, maxChars: { type: 'integer', minimum: 1000, maximum: 32000 } },
+      required: ['runId'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'adf_frontdoor_propose_obsidian_update',
+    description: 'Create a pending Obsidian write proposal from a Frontdoor Run. Returns the proposed Markdown and never writes to Obsidian or creates an Owner Decision.',
+    inputSchema: {
+      type: 'object',
+      properties: { runId: { type: 'string' }, relativePath: { type: 'string' } },
       required: ['runId'],
       additionalProperties: false
     }
@@ -147,14 +169,6 @@ function safeToolError(error: unknown, runtimeRoot: string): string {
     .slice(0, 500)
 }
 
-async function safeRuntimePath(runtimeRoot: string, reference: string): Promise<string> {
-  if (typeof reference !== 'string' || reference.startsWith('/') || reference.includes('..')) throw new Error('result reference is outside the fixed runtime root')
-  const root = await realpath(path.resolve(runtimeRoot))
-  const candidate = await realpath(path.resolve(root, reference))
-  if (candidate !== root && !candidate.startsWith(`${root}${path.sep}`)) throw new Error('result reference is outside the fixed runtime root')
-  return candidate
-}
-
 function boundedText(value: unknown, limit = maxResultChars): string | undefined {
   return typeof value === 'string' ? value.slice(0, limit).replace(/(sk-|api[_-]?key|token|secret|password)\s*[:=]\s*[^\s,}]+/gi, '$1=<redacted>') : undefined
 }
@@ -174,7 +188,7 @@ function projectInspection(inspection: Awaited<ReturnType<FrontdoorOrchestrator[
       nodes: inspection.run.nodes.map((record) => ({ nodeId: record.node.nodeId, role: record.node.role, adapterId: record.node.adapterId, state: record.state, attempt: record.attempt, childTaskId: record.childTaskId, childJobId: record.childJobId, threadId: record.threadId, resultStatus: record.resultStatus, resultRef: record.resultRef, resultHash: record.resultHash, childInputHash: record.childInputHash, questionIds: record.questionIds, error: boundedText(record.error, 500) }))
     },
     request: { requestId: inspection.request.requestId, source: inspection.request.source, objective: boundedText(inspection.request.objective), projectRef: boundedText(inspection.request.projectRef, 500), requestedOutput: boundedText(inspection.request.requestedOutput), inputHash: inspection.request.inputHash, state: inspection.request.state },
-    plan: { planId: inspection.plan.planId, requestId: inspection.plan.requestId, version: inspection.plan.version, aggregationPolicy: inspection.plan.aggregationPolicy, planHash: inspection.plan.planHash, nodes: inspection.plan.nodes.map((node) => ({ nodeId: node.nodeId, objective: boundedText(node.objective, 1000), role: node.role, adapterId: node.adapterId, dependsOn: node.dependsOn, depth: node.depth })) },
+    plan: { planId: inspection.plan.planId, requestId: inspection.plan.requestId, version: inspection.plan.version, aggregationPolicy: inspection.plan.aggregationPolicy, nodeReviewPolicy: inspection.plan.nodeReviewPolicy, planHash: inspection.plan.planHash, nodes: inspection.plan.nodes.map((node) => ({ nodeId: node.nodeId, objective: boundedText(node.objective, 1000), role: node.role, adapterId: node.adapterId, dependsOn: node.dependsOn, depth: node.depth })) },
     decisions: inspection.decisions.map((decision) => ({ decisionId: decision.decisionId, gate: decision.gate, decision: decision.decision, targetHash: decision.targetHash, approvedBy: boundedText(decision.approvedBy, 120), decidedAt: decision.decidedAt })),
     aggregate: inspection.aggregate ? { aggregateId: inspection.aggregate.aggregateId, runId: inspection.aggregate.runId, status: inspection.aggregate.status, completedNodes: inspection.aggregate.completedNodes, failedNodes: inspection.aggregate.failedNodes, partialNodes: inspection.aggregate.partialNodes, childResults: inspection.aggregate.childResults, openQuestions: inspection.aggregate.openQuestions.map((question) => ({ questionId: question.questionId, nodeId: question.nodeId, kind: question.kind, text: boundedText(question.text, 2000), required: question.required, blocking: question.blocking, status: question.status })), conflicts: inspection.aggregate.conflicts.map((conflict) => boundedText(conflict, 2000)), evidenceRefs: inspection.aggregate.evidenceRefs, ownerDecisionRequired: inspection.aggregate.ownerDecisionRequired, nextAction: boundedText(inspection.aggregate.nextAction, 1000), createdAt: inspection.aggregate.createdAt } : undefined,
     aggregateHash: inspection.aggregateHash,
@@ -259,6 +273,20 @@ export class FrontdoorMcpServer {
         const inspection = requireSuccess(await inspectFrontdoorRun(this.frontdoor, safeIdentifier(args.runId, 'runId')))
         return toolResult(projectInspection(inspection))
       }
+      case 'adf_frontdoor_get_context_capsule': {
+        onlyKeys(args, ['runId', 'maxChars'])
+        const runId = safeIdentifier(args.runId, 'runId')
+        const maxCharsValue = args.maxChars
+        if (maxCharsValue !== undefined && (typeof maxCharsValue !== 'number' || !Number.isInteger(maxCharsValue) || maxCharsValue < 1_000 || maxCharsValue > 32_000)) throw new Error('maxChars must be an integer between 1000 and 32000')
+        const maxChars = typeof maxCharsValue === 'number' ? maxCharsValue : undefined
+        const inspection = requireSuccess(await inspectFrontdoorRun(this.frontdoor, runId))
+        return toolResult(buildFrontdoorContextCapsule(inspection, { maxChars }))
+      }
+      case 'adf_frontdoor_propose_obsidian_update': {
+        onlyKeys(args, ['runId', 'relativePath'])
+        const proposal = requireSuccess(await proposeFrontdoorObsidianUpdate(this.frontdoor, { runId: safeIdentifier(args.runId, 'runId'), relativePath: args.relativePath }))
+        return toolResult(proposal)
+      }
       case 'adf_frontdoor_dispatch_approved': {
         onlyKeys(args, ['runId'])
         const runId = safeIdentifier(args.runId, 'runId')
@@ -296,10 +324,8 @@ export class FrontdoorMcpServer {
         const manifest = artifact.payload.artifact as Record<string, unknown>
         const relativePath = manifest.relativePath
         if (typeof relativePath !== 'string') throw new Error('Work Plane artifact manifest path is invalid')
-        const artifactFile = await safeRuntimePath(this.runtimeRoot, relativePath)
-        const stored = await readJson<Record<string, unknown>>(artifactFile)
-        if (!isRecord(stored.manifest) || hashJson(stored.manifest) !== hashJson(manifest)) throw new Error('Work Plane artifact manifest mismatch')
-        return toolResult({ runId, state: inspection.run.state, ownerGate: inspection.run.ownerGate, manifest, artifact: stored.content })
+        const verified = await readVerifiedWorkPlaneArtifact(this.runtimeRoot, runId, manifest as unknown as WorkPlaneArtifactManifest)
+        return toolResult({ runId, state: inspection.run.state, ownerGate: inspection.run.ownerGate, manifest: verified.manifest, artifact: verified.content })
       }
       default:
         throw new Error(`unknown tool: ${name}`)

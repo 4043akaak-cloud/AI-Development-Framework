@@ -90,7 +90,17 @@ describe('Frontdoor Owner Gates', () => {
     const stored = JSON.parse(await readFile(path.join(runtimeRoot, manifest.relativePath), 'utf8')) as { manifest: typeof manifest; content: { nodes: Array<{ resultHash: string }> } }
     expect(stored.manifest).toMatchObject({ artifactId: manifest.artifactId, contentHash: manifest.contentHash, status: 'exported' })
     expect(stored.content.nodes[0].resultHash).toMatch(/^[a-f0-9]{64}$/)
-    await expect(orchestrator.exportWorkPlaneArtifact(run.runId, 'Project Owner')).rejects.toThrow()
+    await expect(orchestrator.exportWorkPlaneArtifact(run.runId, 'Project Owner')).rejects.toThrow(/recovery-needed/)
+  })
+
+  it('rejects export when a later Result Review is follow-up after an earlier accept', async () => {
+    const { orchestrator, run } = await createFixture()
+    await approveInitialGates(orchestrator, run.runId)
+    await orchestrator.approveDispatch(run.runId, [proposal.nodeId])
+    await orchestrator.executeApprovedRun(run.runId, { proposal: packet(run) })
+    await orchestrator.reviewResult(run.runId, 'Project Owner', 'accept')
+    await orchestrator.reviewResult(run.runId, 'Project Owner', 'follow-up')
+    await expect(orchestrator.exportWorkPlaneArtifact(run.runId, 'Project Owner')).rejects.toThrow(/latest Result Review is not accepted/)
   })
 
   it('rejects Work Plane export when a persisted Result is tampered', async () => {
@@ -106,6 +116,22 @@ describe('Frontdoor Owner Gates', () => {
     result.content = 'tampered'
     await writeFile(resultPath, `${JSON.stringify(result)}\n`, 'utf8')
     await expect(orchestrator.exportWorkPlaneArtifact(run.runId, 'Project Owner')).rejects.toThrow(/Result hash mismatch/)
+  })
+
+  it('rejects Work Plane export when the Job request binding is tampered', async () => {
+    const { runtimeRoot, orchestrator, run } = await createFixture()
+    await approveInitialGates(orchestrator, run.runId)
+    await orchestrator.approveDispatch(run.runId, [proposal.nodeId])
+    await orchestrator.executeApprovedRun(run.runId, { proposal: packet(run) })
+    await orchestrator.reviewResult(run.runId, 'Project Owner', 'accept')
+    const current = await orchestrator.getRun(run.runId)
+    const jobId = current.nodes[0].childJobId
+    if (!jobId) throw new Error('test Job reference missing')
+    const requestPath = path.join(runtimeRoot, 'jobs', jobId, 'request.json')
+    const request = JSON.parse(await readFile(requestPath, 'utf8')) as { task: { objective: string } }
+    request.task.objective = 'tampered Job objective'
+    await writeFile(requestPath, `${JSON.stringify(request)}\n`, 'utf8')
+    await expect(orchestrator.exportWorkPlaneArtifact(run.runId, 'Project Owner')).rejects.toThrow(/Job binding mismatch/)
   })
 
   it('rejects dispatch when no matching Owner Decision exists', async () => {

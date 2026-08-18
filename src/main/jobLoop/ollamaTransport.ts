@@ -1,5 +1,5 @@
 import type { AdapterConnection } from '../../shared/jobLoopTypes'
-import type { ExternalSendOutcome, OllamaReadiness, SyntheticPacket } from '../../shared/externalAdapterTypes'
+import type { ExternalPerformanceMetrics, ExternalSendOutcome, OllamaReadiness, SyntheticPacket } from '../../shared/externalAdapterTypes'
 import type { CredentialStatus, ExternalTransport, TransportOptions, TransportReadiness } from './externalTransport'
 import { truncateAnswer } from './externalTransport'
 
@@ -16,12 +16,31 @@ import { truncateAnswer } from './externalTransport'
 export const defaultOllamaBaseUrl = 'http://127.0.0.1:11434'
 export const defaultOllamaModel = 'llama3'
 
+/** Conservative settings for the synthetic connectivity probe on a memory-constrained local Mac. */
+export interface OllamaGenerationOptions {
+  num_ctx: number
+  num_predict: number
+  temperature: number
+}
+
+export const defaultOllamaGenerationOptions: Readonly<OllamaGenerationOptions> = {
+  num_ctx: 2048,
+  num_predict: 128,
+  temperature: 0
+}
+
 export type FetchLike = (input: string, init: RequestInit) => Promise<Response>
 
 interface OllamaGenerateResponse {
   response?: string
   done?: boolean
   error?: string
+  total_duration?: unknown
+  load_duration?: unknown
+  prompt_eval_count?: unknown
+  prompt_eval_duration?: unknown
+  eval_count?: unknown
+  eval_duration?: unknown
 }
 
 interface OllamaTagsResponse {
@@ -39,6 +58,28 @@ function safeDiagnostic(value: unknown): string {
     .replace(/(authorization|bearer|api[-_]?key|token|password|secret)=?[^\s,;]*/gi, '$1=[redacted]')
     .replace(/https?:\/\/[^\s]+/gi, '[url-redacted]')
     .slice(0, 200)
+}
+
+function nonNegativeMetric(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined
+}
+
+/** Maps Ollama's numeric response diagnostics without allowing arbitrary response fields through. */
+function performanceMetrics(body: OllamaGenerateResponse): ExternalPerformanceMetrics | undefined {
+  const metrics: ExternalPerformanceMetrics = {}
+  const fields: Array<[keyof ExternalPerformanceMetrics, unknown]> = [
+    ['totalDurationNs', body.total_duration],
+    ['loadDurationNs', body.load_duration],
+    ['promptEvalCount', body.prompt_eval_count],
+    ['promptEvalDurationNs', body.prompt_eval_duration],
+    ['evalCount', body.eval_count],
+    ['evalDurationNs', body.eval_duration]
+  ]
+  for (const [name, raw] of fields) {
+    const value = nonNegativeMetric(raw)
+    if (value !== undefined) metrics[name] = value
+  }
+  return Object.keys(metrics).length > 0 ? metrics : undefined
 }
 
 function isLoopbackBaseUrl(baseUrl: string): boolean {
@@ -92,6 +133,7 @@ export interface OllamaTransportOptions {
   providerId?: string
   baseUrl?: string
   model?: string
+  generationOptions?: Partial<OllamaGenerationOptions>
   readinessTimeoutMs?: number
   /** Injected for verification so tests never touch a real Ollama server. */
   fetchImpl?: FetchLike
@@ -102,14 +144,16 @@ export class OllamaLocalHttpTransport implements ExternalTransport {
   readonly connection: AdapterConnection = 'local-http'
   private readonly baseUrl: string
   private readonly model: string
+  private readonly generationOptions: OllamaGenerationOptions
   private readonly fetchImpl: FetchLike
 
   private readonly readinessTimeoutMs: number
 
-  constructor({ providerId = 'ollama-local-http', baseUrl = defaultOllamaBaseUrl, model = defaultOllamaModel, fetchImpl, readinessTimeoutMs = 5_000 }: OllamaTransportOptions = {}) {
+  constructor({ providerId = 'ollama-local-http', baseUrl = defaultOllamaBaseUrl, model = defaultOllamaModel, generationOptions, fetchImpl, readinessTimeoutMs = 5_000 }: OllamaTransportOptions = {}) {
     this.providerId = providerId
     this.baseUrl = baseUrl
     this.model = model
+    this.generationOptions = { ...defaultOllamaGenerationOptions, ...generationOptions }
     this.fetchImpl = fetchImpl ?? ((input, init) => fetch(input, init))
     this.readinessTimeoutMs = readinessTimeoutMs
   }
@@ -166,6 +210,7 @@ export class OllamaLocalHttpTransport implements ExternalTransport {
         body: JSON.stringify({
           model: this.model,
           stream: false,
+          options: this.generationOptions,
           prompt: `${packet.instruction}\n\n役割: ${packet.role}\n形式: ${packet.resultFormat}${dependencyPrompt(packet)}`
         }),
         signal: controller.signal
@@ -177,12 +222,13 @@ export class OllamaLocalHttpTransport implements ExternalTransport {
       }
 
       const body = (await response.json()) as OllamaGenerateResponse
-      if (body.error) return { status: 'failed', terminationReason: `ollama-error:${safeDiagnostic(body.error)}`, durationMs }
+      const metrics = performanceMetrics(body)
+      if (body.error) return { status: 'failed', terminationReason: `ollama-error:${safeDiagnostic(body.error)}`, durationMs, ...(metrics ? { metrics } : {}) }
 
       const text = (body.response ?? '').trim()
-      if (!text) return { status: 'invalid', terminationReason: 'no-response-text', durationMs }
+      if (!text) return { status: 'invalid', terminationReason: 'no-response-text', durationMs, ...(metrics ? { metrics } : {}) }
 
-      return { status: 'success', content: truncateAnswer(text), terminationReason: 'completed', durationMs }
+      return { status: 'success', content: truncateAnswer(text), terminationReason: 'completed', durationMs, ...(metrics ? { metrics } : {}) }
     } catch (error) {
       const durationMs = Date.now() - startedAt
       if (controller.signal.aborted) {

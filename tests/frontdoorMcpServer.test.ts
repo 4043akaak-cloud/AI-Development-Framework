@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -73,7 +73,7 @@ describe('ADF-MCP-001 local Frontdoor MCP server', () => {
     expect(initialized?.result).toMatchObject({ protocolVersion: '2025-06-18', capabilities: { tools: { listChanged: false } } })
     const listed = await server.handle({ jsonrpc: '2.0', id: 2, method: 'tools/list' })
     expect((listed?.result as { tools: Array<{ name: string }> }).tools.map((tool) => tool.name)).toEqual([
-      'adf_frontdoor_prepare', 'adf_frontdoor_inspect', 'adf_frontdoor_dispatch_approved', 'adf_frontdoor_get_result', 'adf_frontdoor_get_workplane_artifact', 'adf_frontdoor_list_runs'
+      'adf_frontdoor_prepare', 'adf_frontdoor_inspect', 'adf_frontdoor_get_context_capsule', 'adf_frontdoor_propose_obsidian_update', 'adf_frontdoor_dispatch_approved', 'adf_frontdoor_get_result', 'adf_frontdoor_get_workplane_artifact', 'adf_frontdoor_list_runs'
     ])
   })
 
@@ -88,6 +88,37 @@ describe('ADF-MCP-001 local Frontdoor MCP server', () => {
     const inspection = JSON.parse((inspected?.result as { content: Array<{ text: string }> }).content[0].text) as { decisions: unknown[]; run: { state: string } }
     expect(inspection.run.state).toBe('ready-for-approval')
     expect(inspection.decisions).toHaveLength(0)
+  })
+
+  it('returns a bounded Context Capsule without changing the Run or Ledger', async () => {
+    const server = new FrontdoorMcpServer({ runtimeRoot: await mkdtemp(path.join(os.tmpdir(), 'adf-mcp-capsule-')) })
+    const prepared = await call(server, 1, 'adf_frontdoor_prepare', input('mcp-capsule-001'))
+    const preparedBody = JSON.parse((prepared?.result as { content: Array<{ text: string }> }).content[0].text) as { runId: string }
+    const before = await server.frontdoor.inspectRun(preparedBody.runId)
+    const capsuleResult = await call(server, 2, 'adf_frontdoor_get_context_capsule', { runId: preparedBody.runId, maxChars: 2_000 })
+    const capsule = JSON.parse((capsuleResult?.result as { content: Array<{ text: string }> }).content[0].text) as { runId: string; compression: { actualChars: number; maxChars: number }; source: { requestHash: string; planHash: string }; assignments: Array<{ nodeId: string }> }
+    const after = await server.frontdoor.inspectRun(preparedBody.runId)
+    expect(capsule.runId).toBe(preparedBody.runId)
+    expect(capsule.compression.actualChars).toBeLessThanOrEqual(2_000)
+    expect(capsule.compression.maxChars).toBe(2_000)
+    expect(capsule.source).toMatchObject({ requestHash: before.run.requestHash, planHash: before.run.planHash })
+    expect(capsule.assignments[0]).toMatchObject({ nodeId: 'proposal' })
+    expect(after.run).toEqual(before.run)
+    expect(after.eventCount).toBe(before.eventCount)
+  })
+
+  it('creates a pending Obsidian proposal without writing the Obsidian vault or Owner Decision', async () => {
+    const server = new FrontdoorMcpServer({ runtimeRoot: await mkdtemp(path.join(os.tmpdir(), 'adf-mcp-obsidian-proposal-')) })
+    const prepared = await call(server, 1, 'adf_frontdoor_prepare', input('mcp-obsidian-proposal-001'))
+    const runId = JSON.parse((prepared?.result as { content: Array<{ text: string }> }).content[0].text).runId as string
+    const before = await server.frontdoor.inspectRun(runId)
+    const proposalResult = await call(server, 2, 'adf_frontdoor_propose_obsidian_update', { runId, relativePath: 'Projects/AI-Development-Framework/phase-update.md' })
+    const proposal = JSON.parse((proposalResult?.result as { content: Array<{ text: string }> }).content[0].text) as { status: string; target: { relativePath: string; requiresOwnerPathConfirmation: boolean }; markdown: string; source: { requestHash: string } }
+    const after = await server.frontdoor.inspectRun(runId)
+    expect(proposal).toMatchObject({ status: 'pending-owner', target: { relativePath: 'Projects/AI-Development-Framework/phase-update.md', requiresOwnerPathConfirmation: false }, source: { requestHash: before.run.requestHash } })
+    expect(proposal.markdown).toContain('ADF Phase Update')
+    expect(after.run).toEqual(before.run)
+    expect(after.eventCount).toBe(before.eventCount)
   })
 
   it('returns tool errors for unknown tools, malformed arguments, missing Results, and dispatch without approved Packets', async () => {
@@ -130,6 +161,14 @@ describe('ADF-MCP-001 local Frontdoor MCP server', () => {
     const exportedBody = JSON.parse((exported?.result as { content: Array<{ text: string }> }).content[0].text) as { manifest: { artifactId: string }; artifact: unknown }
     expect(exportedBody).toMatchObject({ manifest: { artifactId: manifest.artifactId } })
     expect(exportedBody.artifact).toBeDefined()
+
+    const artifactPath = path.join(server.runtimeRoot, manifest.relativePath)
+    const stored = JSON.parse(await readFile(artifactPath, 'utf8')) as { manifest: Record<string, unknown>; content: Record<string, unknown> }
+    stored.content.tampered = true
+    await writeFile(artifactPath, `${JSON.stringify(stored)}\n`, 'utf8')
+    const tampered = await call(server, 5, 'adf_frontdoor_get_workplane_artifact', { runId })
+    expect(tampered?.result).toMatchObject({ isError: true })
+    expect(JSON.parse((tampered?.result as { content: Array<{ text: string }> }).content[0].text).error).toContain('content hash mismatch')
   })
 
   it('rejects a legacy non-Packet-bound Dispatch Decision before any child send', async () => {

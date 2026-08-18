@@ -32,12 +32,24 @@ export interface SyntheticPacket {
 
 export type ExternalOutcomeStatus = 'success' | 'failed' | 'timeout' | 'cancelled' | 'invalid'
 
+/** Provider-reported performance measurements. Values are numeric only; no prompt or answer text. */
+export interface ExternalPerformanceMetrics {
+  totalDurationNs?: number
+  loadDurationNs?: number
+  promptEvalCount?: number
+  promptEvalDurationNs?: number
+  evalCount?: number
+  evalDurationNs?: number
+}
+
 export interface ExternalSendOutcome {
   status: ExternalOutcomeStatus
   /** Adapter answer text, already truncated by the transport. Absent when nothing was returned. */
   content?: string
   terminationReason: string
   durationMs: number
+  /** Optional provider measurements, retained only as bounded numeric diagnostics. */
+  metrics?: ExternalPerformanceMetrics
   /** Short, safe error text. Never a stack trace, credential, or request body. */
   errorText?: string
 }
@@ -86,6 +98,8 @@ export interface ExternalCallRecord {
   costTier: AdapterCostTier
   durationMs: number
   terminationReason: string
+  /** Optional provider measurements, retained only as bounded numeric diagnostics. */
+  metrics?: ExternalPerformanceMetrics
   startedAt: string
   finishedAt: string
   errorText?: string

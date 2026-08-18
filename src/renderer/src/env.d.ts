@@ -40,8 +40,13 @@ declare global {
       exportArtifact: (input: { runId: string; approvedBy: string; note?: string }) => Promise<RelayResult<WorkPlaneArtifactManifest>>
       stop: (input: { runId: string; approvedBy: string; note?: string }) => Promise<RelayResult<OrchestrationRun>>
       recover: (runId: string) => Promise<RelayResult<OrchestrationRun>>
+      listCandidates: () => Promise<RelayResult<import('../../shared/implementationTypes').CandidateSummary[]>>
+      inspectCandidate: (candidateId: string) => Promise<RelayResult<import('../../shared/implementationTypes').CandidateInspectionResult>>
+      startCandidateReview: (candidateId: string) => Promise<RelayResult<import('../../shared/implementationTypes').CandidateReviewStartedResult>>
+      reviewCandidate: (input: import('../../shared/implementationTypes').CandidateReviewDecisionInput) => Promise<RelayResult<import('../../shared/implementationTypes').CandidateReviewOwnerDecisionEnvelope>>
     }
   }
 }
+
 
 export {}

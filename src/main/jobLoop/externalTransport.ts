@@ -1,5 +1,5 @@
 import type { AdapterConnection, AuthMode } from '../../shared/jobLoopTypes'
-import type { ExternalSendOutcome, SyntheticPacket } from '../../shared/externalAdapterTypes'
+import type { ExternalPerformanceMetrics, ExternalSendOutcome, SyntheticPacket } from '../../shared/externalAdapterTypes'
 
 export interface TransportOptions {
   timeoutMs: number
@@ -55,6 +55,7 @@ export interface MockTransportScript {
   content?: string
   terminationReason?: string
   errorText?: string
+  metrics?: ExternalPerformanceMetrics
   /** Throws instead of resolving, standing in for a transport-level failure. */
   throws?: string
 }
@@ -88,6 +89,7 @@ export class MockExternalTransport implements ExternalTransport {
       ...(this.script.content !== undefined ? { content: truncateAnswer(this.script.content) } : {}),
       terminationReason: this.script.terminationReason ?? `mock-${this.script.status}`,
       durationMs: 1,
+      ...(this.script.metrics ? { metrics: this.script.metrics } : {}),
       ...(this.script.errorText ? { errorText: this.script.errorText } : {})
     }
   }

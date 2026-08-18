@@ -27,9 +27,19 @@
 
 詳細は必ず `guidelines/AI_COLLABORATION.md` を参照します。
 
+## 完成形から逆算する標準
+
+ADFの全作業は [ADF Product Completion Blueprint](docs/project/ADF_PRODUCT_COMPLETION_BLUEPRINT.md) を最上位の製品運用標準として扱います。
+
+- Task開始時に、最終フローのどの段階を進めるかを明示する
+- まずOwnerが体験できる縦切りの流れを完成させ、細部の改善は後段に回す
+- Taskには `Final Flow Contribution`、`Vertical Slice Outcome`、`Next Flow Unlocked`、`Deferred Details` を記録する
+- データ損失、権限逸脱、未承認送信、正本破壊、または現在の縦切りを止める問題以外は、記録して進行を止めない
+- 進捗はテスト件数だけでなく、完成形の利用者フローがどこまで繋がったかで報告する
+
 ## 現在の最小運用
 
-現段階では、[Codex単独パイロット](docs/workflow/CODEX_SOLO_PILOT.md) を正本とする。外部API・AI間自動連携・自動commit・自動pushは導入しない。
+[Codex単独パイロット](docs/workflow/CODEX_SOLO_PILOT.md) は、承認・検証・引き継ぎを行うための運用基準として維持する。製品骨格は、上記Blueprintに従い、既存のFrontdoor／MCP／Fake／local Ollama資産を統合して完成形の一周を先に実証する。外部API、未承認のAI間自動連携、自動commit、自動push、Canonical自動書込みは導入しない。
 
 依頼時は [AI Task Packet](templates/AI_TASK_PACKET.md) を使う。Codexに渡す最小の固定依頼文は [Codex Solo Request](templates/CODEX_SOLO_REQUEST.md) にある。
 

@@ -1,5 +1,5 @@
 import type { AdapterRole } from '../../shared/jobLoopTypes'
-import type { ExternalCallRecord, ExternalOutcomeStatus, ExternalPreflight, SyntheticPacket } from '../../shared/externalAdapterTypes'
+import type { ExternalCallRecord, ExternalOutcomeStatus, ExternalPerformanceMetrics, ExternalPreflight, SyntheticPacket } from '../../shared/externalAdapterTypes'
 import type { AdapterRunState, RelayTurnPayload } from '../../shared/threadTypes'
 import type { AdapterAcceptance, AdapterRequest, ConversationAdapter } from './conversationAdapters'
 import { AdapterProtocolError, adapterSupportsRole } from './conversationAdapters'
@@ -130,7 +130,7 @@ export class ExternalConversationAdapter implements ConversationAdapter {
     request: AdapterRequest,
     packet: SyntheticPacket,
     preflight: ExternalPreflight,
-    outcome: { status: ExternalOutcomeStatus; terminationReason: string; durationMs: number; errorText?: string },
+    outcome: { status: ExternalOutcomeStatus; terminationReason: string; durationMs: number; errorText?: string; metrics?: ExternalPerformanceMetrics },
     startedAt: Date,
     finishedAt: Date
   ): ExternalCallRecord {
@@ -153,6 +153,7 @@ export class ExternalConversationAdapter implements ConversationAdapter {
       costTier: preflight.costTier,
       durationMs: outcome.durationMs,
       terminationReason: outcome.terminationReason,
+      ...(outcome.metrics ? { metrics: outcome.metrics } : {}),
       startedAt: startedAt.toISOString(),
       finishedAt: finishedAt.toISOString(),
       ...(outcome.errorText ? { errorText: outcome.errorText } : {})

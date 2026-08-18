@@ -59,7 +59,8 @@ export function buildFrontdoorOllamaE2eInput(requestId: string): FrontdoorPrepar
     requestId,
     version: 1,
     nodes: [proposal, critic],
-    aggregationPolicy: 'collect-all'
+    aggregationPolicy: 'collect-all',
+    nodeReviewPolicy: 'auto-continue-safe'
   }
   return { request, plan }
 }

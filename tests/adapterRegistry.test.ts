@@ -15,6 +15,13 @@ describe('multi-AI adapter foundation', () => {
     expect(() => routeAdapters('ADF-CLAUDE-ADAPTER-001', ['implementation'], ['read', 'propose'])).toThrow(/no local available adapter/i)
   })
 
+  it('keeps the explicit fake implementation Adapter out of automatic routing', () => {
+    expect(() => routeAdapters('ADF-WORKPLANE-IMPLEMENTATION-AGENT-001', ['implementation'], ['read', 'propose'])).toThrow(/no local available adapter/i)
+    expect(buildExplicitAdapterPlan('ADF-WORKPLANE-IMPLEMENTATION-AGENT-001::implementation', 'fake-implementation', 'implementation', ['read', 'propose']).selections).toEqual([
+      expect.objectContaining({ adapterId: 'fake-implementation', role: 'implementation' })
+    ])
+  })
+
   it('never auto-routes a local-http adapter, even if it were available (Ollama-style misconfiguration guard)', () => {
     // Independent of `status`: a hypothetical *available* local-http profile must still be excluded.
     const hypotheticalAvailableOllama: AdapterProfile = {

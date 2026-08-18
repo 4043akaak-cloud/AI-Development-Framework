@@ -8,6 +8,7 @@ export type AdapterStatus = 'available' | 'planned'
 export type AdapterRole = 'proposal' | 'critic' | 'implementation' | 'review' | 'research'
 export type AdapterCostTier = 'free' | 'low' | 'medium' | 'high' | 'unknown'
 export type AdapterDataPolicy = 'local-only' | 'external-send' | 'unknown'
+import type { ImplementationSourceBinding } from './implementationTypes'
 /** How the Owner's credential (if any) reaches the transport. ADF never reads or stores the value itself. */
 export type AuthMode = 'none' | 'environment-secret' | 'cli-session' | 'oauth' | 'cloud-credential' | 'unknown'
 export type AdapterRunStatus = ResultStatus | 'timeout' | 'cancelled'
@@ -43,6 +44,7 @@ export interface AdapterProfile {
   capabilities: Capability[]
   costTier: AdapterCostTier
   dataPolicy: AdapterDataPolicy
+  autoSelectable?: boolean
 }
 
 export interface AdapterSelection {
@@ -91,6 +93,7 @@ export interface ApprovedTaskPacket {
     planHash: string
     nodeId: string
   }
+  implementationBinding?: ImplementationSourceBinding
 }
 
 export interface DispatchPacket {
@@ -184,7 +187,7 @@ export interface JobRequest {
   dispatchKey: string
   inputHash: string
   createdAt: string
-  task: Pick<ApprovedTaskPacket, 'taskId' | 'objective' | 'scope' | 'scopeHash' | 'context' | 'contextHash' | 'acceptance' | 'stopConditions' | 'adapter' | 'fixtureMode' | 'target' | 'adapterPlan'>
+  task: Pick<ApprovedTaskPacket, 'taskId' | 'objective' | 'scope' | 'scopeHash' | 'context' | 'contextHash' | 'acceptance' | 'stopConditions' | 'adapter' | 'fixtureMode' | 'target' | 'adapterPlan' | 'frontdoorBinding' | 'implementationBinding'>
 }
 
 export interface JobEvent {

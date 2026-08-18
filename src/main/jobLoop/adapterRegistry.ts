@@ -116,6 +116,19 @@ export const adapterProfiles: readonly AdapterProfile[] = [
     capabilities: ['read', 'propose'],
     costTier: 'unknown',
     dataPolicy: 'external-send'
+  },
+  {
+    adapterId: 'fake-implementation',
+    displayName: 'Fake Implementation / Candidate Probe',
+    provider: 'fake',
+    connection: 'fake',
+    authMode: 'none',
+    status: 'available',
+    roles: ['implementation'],
+    capabilities: ['read', 'propose'],
+    costTier: 'free',
+    dataPolicy: 'local-only',
+    autoSelectable: false
   }
 ]
 
@@ -136,6 +149,7 @@ export function getAdapterProfile(adapterId: string): AdapterProfile {
 
 export function supports(profile: AdapterProfile, role: AdapterRole, capabilities: Capability[], maxCostTier: AdapterCostTier): boolean {
   return profile.status === 'available'
+    && profile.autoSelectable !== false
     && profile.roles.includes(role)
     && capabilities.every((capability) => profile.capabilities.includes(capability))
     && costRank[profile.costTier] <= costRank[maxCostTier]

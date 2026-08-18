@@ -1,10 +1,17 @@
-import { mkdir, realpath, rename, rm, writeFile } from 'node:fs/promises'
+import { link, mkdir, readdir, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import type { ApprovedTaskPacket } from '../../shared/jobLoopTypes'
+import type { ApprovedTaskPacket, JobRequest } from '../../shared/jobLoopTypes'
 import type { AggregateResult, FrontdoorQuestion, OwnerDecision, OwnerDecisionEnvelope, OwnerGate, OrchestrationNodeRecord, OrchestrationRun, WorkPlaneArtifactManifest } from '../../shared/frontdoorTypes'
+import type { ImplementationSourceBinding, CandidateSummary, CandidateInspectionResult, CandidateReviewStartedResult, CandidateReviewDecisionInput, CandidateReviewOwnerDecisionEnvelope, CandidateReviewState } from '../../shared/implementationTypes'
 import { hashJson } from '../jobLoop/hash'
 import { readJson } from '../jobLoop/ledger'
 import { claimRun, readPlan, readRequest, readRun, readRunEvents, recordRunEvent, releaseRun, writeRun } from './ledger'
+import { getAdapterProfile } from '../jobLoop/adapterRegistry'
+import { assertRunEventConsistency, assertRunIntegrity } from './runIntegrity'
+import { validateImplementationCandidate } from './candidateArtifact'
+import { assertImplementationSourceArtifacts } from './implementationBinding'
+import { assertNoSymlinkComponents, safeRuntimePath } from './pathIntegrity'
+import { readVerifiedWorkPlaneArtifact } from './workPlaneArtifact'
 
 const decisionByGate: Record<OwnerGate, readonly OwnerDecision[]> = {
   intake: ['clarify', 'edit', 'reject', 'proceed', 'stop'],
@@ -15,8 +22,10 @@ const decisionByGate: Record<OwnerGate, readonly OwnerDecision[]> = {
   question: ['answer', 'revise-plan', 'stop'],
   'result-review': ['accept', 'follow-up', 'reject', 'stop'],
   completion: ['approve', 'continue', 'stop', 'complete'],
-  'artifact-export': ['export', 'stop']
+  'artifact-export': ['export', 'stop'],
+  'candidate-review': ['accept', 'reject', 'follow-up', 'stop']
 }
+
 
 export interface DecisionCheckInput {
   gate: OwnerGate
@@ -37,14 +46,6 @@ export type DispatchPacketHashes = Readonly<Record<string, string>>
 
 function sortedPacketHashes(packetHashes: DispatchPacketHashes): Record<string, string> {
   return Object.fromEntries(Object.entries(packetHashes).sort(([left], [right]) => left.localeCompare(right)))
-}
-
-async function safeRuntimeFile(runtimeRoot: string, reference: string): Promise<string> {
-  if (!reference || path.isAbsolute(reference) || reference.includes('..')) throw new Error('Work Plane source reference is outside the Runtime boundary')
-  const root = await realpath(path.resolve(runtimeRoot))
-  const candidate = await realpath(path.resolve(root, reference))
-  if (candidate !== root && !candidate.startsWith(`${root}${path.sep}`)) throw new Error('Work Plane source reference is outside the Runtime boundary')
-  return candidate
 }
 
 function boundedArtifactText(value: unknown, limit: number): string | undefined {
@@ -87,6 +88,11 @@ export function questionTargetHash(question: Pick<FrontdoorQuestion, 'questionId
   return hashJson({ questionId: question.questionId, runId: question.runId, nodeId: question.nodeId, text: question.text })
 }
 
+export function candidateReviewTargetHash(runId: string, candidateId: string, candidateHash: string, sourceResultHash: string, parentReviewDecisionId: string): string {
+  return hashJson({ runId, candidateId, candidateHash, sourceResultHash, parentReviewDecisionId })
+}
+
+
 export function canDispatch(run: Pick<OrchestrationRun, 'runId' | 'requestId' | 'planHash' | 'state'>, nodeIds: readonly string[], input: Omit<DecisionCheckInput, 'expectedTargetHash'>, packetHashes?: DispatchPacketHashes): boolean {
   return run.state === 'ready-for-approval'
     && input.gate === 'dispatch'
@@ -115,7 +121,7 @@ export function canComplete(run: Pick<OrchestrationRun, 'state'>, input: Omit<De
     && canApprove({ ...input, expectedTargetHash })
 }
 
-export function buildDecisionEnvelope(run: OrchestrationRun, gate: OwnerGate, decision: OwnerDecision, targetHash: string, approvedBy: string, now: string, options: Pick<OwnerDecisionEnvelope, 'nodeId' | 'note' | 'answerRef'> = {}): OwnerDecisionEnvelope {
+export function buildDecisionEnvelope(run: OrchestrationRun, gate: OwnerGate, decision: OwnerDecision, targetHash: string, approvedBy: string, now: string, options: Pick<OwnerDecisionEnvelope, 'nodeId' | 'note' | 'answerRef' | 'allowedCapability' | 'dataPolicy' | 'expiresAt'> = {}): OwnerDecisionEnvelope {
   return {
     decisionId: `owner-decision-${hashJson([run.runId, gate, decision, targetHash, approvedBy, now]).slice(0, 20)}`,
     runId: run.runId,
@@ -148,6 +154,37 @@ function hasDecision(events: Awaited<ReturnType<typeof readRunEvents>>, gate: Ow
     const decision = event.payload.decision as OwnerDecisionEnvelope | undefined
     return decision?.gate === gate && decisions.includes(decision.decision) && decision.targetHash === targetHash
   })
+}
+
+function latestResultReviewDecision(events: Awaited<ReturnType<typeof readRunEvents>>, targetHash: string): OwnerDecisionEnvelope | undefined {
+  for (const event of [...events].reverse()) {
+    if (event.type !== 'frontdoor.result-reviewed') continue
+    const decision = event.payload.decision as OwnerDecisionEnvelope | undefined
+    if (!decision || decision.gate !== 'result-review' || decision.targetHash !== targetHash) continue
+    const recorded = events.some((candidate) => {
+      if (candidate.type !== 'frontdoor.owner-decision-recorded') return false
+      const stored = candidate.payload.decision as OwnerDecisionEnvelope | undefined
+      return stored?.decisionId === decision.decisionId && hashJson(stored) === hashJson(decision)
+    })
+    return recorded ? decision : undefined
+  }
+  return undefined
+}
+
+function assertDecisionNotExpired(decision: OwnerDecisionEnvelope, now: string): void {
+  if (!decision.expiresAt || !Number.isFinite(Date.parse(decision.expiresAt)) || Date.parse(decision.expiresAt) <= Date.parse(now)) throw new Error('Owner Decision is missing or past its expiry')
+}
+
+async function assertImplementationParentBindingCurrent(runtimeRoot: string, binding: ImplementationSourceBinding, now: string): Promise<void> {
+  const parent = await readRun(runtimeRoot, binding.parentRunId)
+  if (parent.aggregateResultRef !== binding.sourceAggregateRef) throw new Error('Implementation parent Aggregate binding changed')
+  const aggregate = await readJson<AggregateResult>(await safeRuntimePath(runtimeRoot, binding.sourceAggregateRef))
+  assertAggregateBelongsToRun(binding.parentRunId, aggregate)
+  if (hashJson(aggregate) !== binding.sourceAggregateHash) throw new Error('Implementation parent Aggregate hash changed')
+  const events = await readRunEvents(runtimeRoot, binding.parentRunId)
+  const decision = latestResultReviewDecision(events, binding.parentReviewTargetHash)
+  if (!decision || decision.decision !== 'accept' || decision.decisionId !== binding.parentReviewDecisionId || decision.targetHash !== binding.parentReviewTargetHash || decision.expiresAt !== binding.parentReviewExpiresAt) throw new Error('Implementation parent Result Review binding changed')
+  assertDecisionNotExpired(decision, now)
 }
 
 async function readApprovedPacketHashes(runtimeRoot: string, run: OrchestrationRun, nodeIds: readonly string[]): Promise<DispatchPacketHashes | undefined> {
@@ -308,8 +345,17 @@ export class FrontdoorOwnerGateService {
     const events = await readRunEvents(this.runtimeRoot, runId)
     const proposed = events.find((event) => event.type === 'frontdoor.completion-proposed' && event.payload.aggregateRef === run.aggregateResultRef)
     if (!proposed || proposed.payload.aggregateHash !== hashJson(aggregate)) throw new Error('Result review aggregate does not match the proposed Evidence')
+    if (run.runKind === 'implementation' && run.implementationBinding) {
+      await assertImplementationParentBindingCurrent(this.runtimeRoot, run.implementationBinding, this.clock().toISOString())
+      for (const record of run.nodes) {
+        if (!record.resultRef) throw new Error(`Implementation Result Review requires a Result: ${record.node.nodeId}`)
+        const result = await readJson<Record<string, unknown>>(await safeRuntimePath(this.runtimeRoot, record.resultRef))
+        validateImplementationCandidate(result.artifact, record.node.scope.inScope)
+      }
+    }
     const targetHash = resultReviewTargetHash(runId, run.aggregateResultRef, aggregate)
-    const envelope = buildDecisionEnvelope(run, 'result-review', decision, targetHash, approvedBy, this.clock().toISOString(), { note })
+    const decidedAt = this.clock().toISOString()
+    const envelope = buildDecisionEnvelope(run, 'result-review', decision, targetHash, approvedBy, decidedAt, { note, expiresAt: new Date(this.clock().getTime() + 60 * 60 * 1000).toISOString() })
     if (!canReviewResult({ gate: 'result-review', decision, targetHash, expectedTargetHash: targetHash, approvedBy })) throw new Error('Result review decision is invalid')
     await assertDecisionBinding(this.runtimeRoot, envelope)
     await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.owner-decision-recorded', { decision: envelope })
@@ -356,9 +402,9 @@ export class FrontdoorOwnerGateService {
       const targetHash = resultReviewTargetHash(runId, run.aggregateResultRef, aggregate)
       assertAggregateBelongsToRun(runId, aggregate)
       const events = await readRunEvents(this.runtimeRoot, runId)
-      const reviewed = events.some((event) => event.type === 'frontdoor.result-reviewed'
-        && (event.payload.decision as OwnerDecisionEnvelope | undefined)?.decision === 'accept'
-        && (event.payload.decision as OwnerDecisionEnvelope | undefined)?.targetHash === targetHash)
+      const reviewDecision = latestResultReviewDecision(events, targetHash)
+      const reviewed = reviewDecision?.decision === 'accept'
+      if (reviewDecision?.decision === 'accept') assertDecisionNotExpired(reviewDecision, this.clock().toISOString())
       const envelope = buildDecisionEnvelope(run, 'completion', 'complete', targetHash, approvedBy, this.clock().toISOString(), { note })
       if (!canComplete(run, envelope, targetHash, reviewed)) throw new Error('Completion requires an accepted Result review bound to the current aggregate')
       await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.owner-decision-recorded', { decision: envelope })
@@ -376,52 +422,308 @@ export class FrontdoorOwnerGateService {
     const claim = await claimRun(this.runtimeRoot, runId, `owner-artifact-export-${process.pid}`)
     try {
       const run = await readRun(this.runtimeRoot, runId)
+      const request = await readRequest(this.runtimeRoot, runId)
+      const plan = await readPlan(this.runtimeRoot, runId)
+      await assertRunIntegrity(this.runtimeRoot, run, request, plan)
+      const events = await readRunEvents(this.runtimeRoot, runId)
+      assertRunEventConsistency(run, events)
       if (run.state !== 'awaiting-owner' || !run.aggregateResultRef) throw new Error('Work Plane export requires an accepted Result Review before completion')
       const aggregate = await readJson<AggregateResult>(path.join(this.runtimeRoot, run.aggregateResultRef))
       assertAggregateBelongsToRun(runId, aggregate)
-      const events = await readRunEvents(this.runtimeRoot, runId)
       const proposed = events.find((event) => event.type === 'frontdoor.completion-proposed' && event.payload.aggregateRef === run.aggregateResultRef)
       if (!proposed || proposed.payload.aggregateHash !== hashJson(aggregate)) throw new Error('Work Plane export aggregate does not match proposed Evidence')
       const reviewTargetHash = resultReviewTargetHash(runId, run.aggregateResultRef, aggregate)
-      const reviewed = events.some((event) => event.type === 'frontdoor.result-reviewed'
-        && (event.payload.decision as OwnerDecisionEnvelope | undefined)?.decision === 'accept'
-        && (event.payload.decision as OwnerDecisionEnvelope | undefined)?.targetHash === reviewTargetHash)
-      if (!reviewed) throw new Error('Work Plane export requires an accepted Result Review')
-      const targetHash = artifactExportTargetHash(runId, run.aggregateResultRef, hashJson(aggregate), run.nodes)
-      const envelope = buildDecisionEnvelope(run, 'artifact-export', 'export', targetHash, approvedBy, this.clock().toISOString(), { note })
-      if (!canApprove({ gate: 'artifact-export', decision: 'export', targetHash, expectedTargetHash: targetHash, approvedBy })) throw new Error('Work Plane export decision is invalid')
+      const reviewDecision = latestResultReviewDecision(events, reviewTargetHash)
+      if (!reviewDecision || reviewDecision.decision !== 'accept') throw new Error('Work Plane export requires an accepted Result Review; the latest Result Review is not accepted')
+      assertDecisionNotExpired(reviewDecision, this.clock().toISOString())
+      if (run.runKind === 'implementation' && run.implementationBinding) {
+        await assertImplementationParentBindingCurrent(this.runtimeRoot, run.implementationBinding, this.clock().toISOString())
+        await assertImplementationSourceArtifacts(this.runtimeRoot, run.implementationBinding)
+      }
       const records = run.nodes.map((record) => {
-        if (!record.childTaskId || !record.childJobId || !record.threadId || !record.resultRef || !record.resultHash || !record.childInputHash) throw new Error(`Work Plane export evidence is incomplete: ${record.node.nodeId}`)
+        if (!record.childTaskId || !record.childJobId || !record.threadId || !record.resultRef || !record.resultHash || !record.evidenceHash || !record.childInputHash) throw new Error(`Work Plane export evidence is incomplete: ${record.node.nodeId}`)
+        if (!record.node.capabilities.includes('propose')) throw new Error(`Work Plane export requires the propose capability: ${record.node.nodeId}`)
+        if (getAdapterProfile(record.node.adapterId).dataPolicy !== 'local-only') throw new Error(`Work Plane export requires a local-only Adapter: ${record.node.adapterId}`)
         return record
       })
+      const targetHash = artifactExportTargetHash(runId, run.aggregateResultRef, hashJson(aggregate), run.nodes)
+      const createdAt = this.clock().toISOString()
+      const envelope = buildDecisionEnvelope(run, 'artifact-export', 'export', targetHash, approvedBy, createdAt, { note, allowedCapability: 'propose', dataPolicy: 'local-only', expiresAt: new Date(this.clock().getTime() + 5 * 60 * 1000).toISOString() })
+      if (!canApprove({ gate: 'artifact-export', decision: 'export', targetHash, expectedTargetHash: targetHash, approvedBy })) throw new Error('Work Plane export decision is invalid')
+      assertDecisionNotExpired(envelope, createdAt)
       const results = await Promise.all(records.map(async (record) => {
-        const result = await readJson<Record<string, unknown>>(await safeRuntimeFile(this.runtimeRoot, record.resultRef!))
+        const result = await readJson<Record<string, unknown>>(await safeRuntimePath(this.runtimeRoot, record.resultRef!))
         if (hashJson(result) !== record.resultHash) throw new Error(`Work Plane export Result hash mismatch: ${record.node.nodeId}`)
-        return { nodeId: record.node.nodeId, taskId: record.childTaskId, jobId: record.childJobId, threadId: record.threadId, resultRef: record.resultRef, resultHash: record.resultHash, inputHash: record.childInputHash, adapterId: record.node.adapterId, role: record.node.role, result: { status: result.status, summary: boundedArtifactText(result.summary, 2_000), content: boundedArtifactText(result.content, 12_000), verification: result.verification, risks: result.risks } }
+        if (result.taskId !== record.childTaskId || result.jobId !== record.childJobId || result.adapterId !== record.node.adapterId || result.role !== record.node.role || result.inputHash !== record.childInputHash || result.orchestrationRunId !== runId) throw new Error(`Work Plane export Result binding mismatch: ${record.node.nodeId}`)
+        const jobRequest = await readJson<JobRequest>(await safeRuntimePath(this.runtimeRoot, `jobs/${record.childJobId}/request.json`))
+        const jobSelection = jobRequest.task.adapterPlan.selections.length === 1 ? jobRequest.task.adapterPlan.selections[0] : undefined
+        if (jobRequest.jobId !== record.childJobId || jobRequest.inputHash !== record.childInputHash || jobRequest.inputHash !== hashJson(jobRequest.task) || jobRequest.task.taskId !== record.childTaskId || jobRequest.task.objective !== record.node.objective || jobSelection?.adapterId !== record.node.adapterId || jobSelection.role !== record.node.role || (run.runKind === 'implementation' && hashJson(jobRequest.task.implementationBinding) !== hashJson(run.implementationBinding))) throw new Error(`Work Plane export Job binding mismatch: ${record.node.nodeId}`)
+        const thread = await readJson<Record<string, unknown> & { turns?: Array<Record<string, unknown>> }>(await safeRuntimePath(this.runtimeRoot, `threads/${record.threadId}/thread.json`))
+        if (thread.threadId !== record.threadId || thread.taskId !== record.childTaskId || thread.jobId !== record.childJobId || (run.runKind === 'implementation' && hashJson(thread.implementationBinding) !== hashJson(run.implementationBinding))) throw new Error(`Work Plane export Thread binding mismatch: ${record.node.nodeId}`)
+        if (!thread.turns?.some((turn) => turn.resultEnvelopeRef === record.resultRef && turn.resultEnvelopeHash === record.resultHash && turn.orchestrationRunId === runId)) throw new Error(`Work Plane export Thread turn binding mismatch: ${record.node.nodeId}`)
+        const evidence = await readJson<Record<string, unknown> & { turns?: Array<Record<string, unknown>> }>(await safeRuntimePath(this.runtimeRoot, `threads/${record.threadId}/evidence-links.json`))
+        if (evidence.threadId !== record.threadId || evidence.taskId !== record.childTaskId || evidence.jobId !== record.childJobId || hashJson(evidence) !== record.evidenceHash || !evidence.turns?.some((turn) => turn.resultEnvelopeRef === record.resultRef && turn.resultEnvelopeHash === record.resultHash)) throw new Error(`Work Plane export Evidence binding mismatch: ${record.node.nodeId}`)
+        const candidate = run.runKind === 'implementation' ? validateImplementationCandidate(result.artifact, record.node.scope.inScope) : undefined
+        return { nodeId: record.node.nodeId, taskId: record.childTaskId, jobId: record.childJobId, threadId: record.threadId, resultRef: record.resultRef, resultHash: record.resultHash, inputHash: record.childInputHash, adapterId: record.node.adapterId, role: record.node.role, result: { status: result.status, summary: boundedArtifactText(result.summary, 2_000), content: boundedArtifactText(result.content, 12_000), verification: result.verification, risks: result.risks }, ...(candidate ? { candidate } : {}) }
       }))
-      const reviewDecisionIds = events.filter((event) => event.type === 'frontdoor.result-reviewed').map((event) => (event.payload.decision as OwnerDecisionEnvelope | undefined)?.decisionId).filter((id): id is string => Boolean(id))
       const artifactId = `artifact-${hashJson([runId, targetHash]).slice(0, 20)}`
       const relativePath = `frontdoor-runs/${runId}/work-plane/${artifactId}.json`
-      const createdAt = this.clock().toISOString()
       const content = { artifactId, runId, requestId: run.requestId, requestHash: run.requestHash, planHash: run.planHash, aggregateRef: run.aggregateResultRef, aggregateHash: hashJson(aggregate), nodes: results, exportedAt: createdAt }
-      const manifest: WorkPlaneArtifactManifest = { artifactId, runId, requestId: run.requestId, taskId: records[0].childTaskId, nodeId: records.length === 1 ? records[0].node.nodeId : 'aggregate', jobId: records.length === 1 ? records[0].childJobId! : 'multiple', threadId: records.length === 1 ? records[0].threadId! : 'multiple', requestHash: run.requestHash, planHash: run.planHash, resultHash: hashJson(results.map((result) => ({ nodeId: result.nodeId, resultHash: result.resultHash }))), aggregateHash: hashJson(aggregate), contentHash: hashJson(content), resultRef: records[0].resultRef!, relativePath, contentType: 'application/json', ownerDecisionIds: [...reviewDecisionIds, envelope.decisionId], createdAt, status: 'exported' }
-      const runDirectory = await safeRuntimeFile(this.runtimeRoot, `frontdoor-runs/${runId}`)
+      const candidate = run.runKind === 'implementation' ? results[0].candidate : undefined
+      const manifest: WorkPlaneArtifactManifest = { artifactId, runId, requestId: run.requestId, taskId: records[0].childTaskId, nodeId: records.length === 1 ? records[0].node.nodeId : 'aggregate', jobId: records.length === 1 ? records[0].childJobId! : 'multiple', threadId: records.length === 1 ? records[0].threadId! : 'multiple', requestHash: run.requestHash, planHash: run.planHash, resultHash: hashJson(results.map((result) => ({ nodeId: result.nodeId, resultHash: result.resultHash }))), aggregateHash: hashJson(aggregate), contentHash: hashJson(content), resultRef: records[0].resultRef!, relativePath, contentType: 'application/json', ownerDecisionIds: [reviewDecision.decisionId, envelope.decisionId], createdAt, status: 'exported', ...(candidate ? { candidateKind: candidate.kind, candidateHash: candidate.candidateHash, candidateFiles: candidate.files.map((file) => ({ relativePath: file.relativePath, contentHash: file.contentHash })), parentRunId: run.implementationBinding?.parentRunId, sourceAggregateRef: run.implementationBinding?.sourceAggregateRef, sourceAggregateHash: run.implementationBinding?.sourceAggregateHash, sourceResultHash: run.implementationBinding?.sourceResultHash, contextBundleHash: run.implementationBinding?.contextBundleHash } : {}) }
+      const runDirectory = await safeRuntimePath(this.runtimeRoot, `frontdoor-runs/${runId}`)
       const workPlaneDirectory = path.join(runDirectory, 'work-plane')
       await assertDecisionBinding(this.runtimeRoot, envelope)
-      await mkdir(workPlaneDirectory)
+      await assertNoSymlinkComponents(runDirectory, workPlaneDirectory)
+      try {
+        await mkdir(workPlaneDirectory)
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new Error('Work Plane export is blocked by an existing or incomplete artifact state (recovery-needed)')
+        throw error
+      }
       const artifactPath = path.join(workPlaneDirectory, `${artifactId}.json`)
       const temporaryArtifactPath = path.join(workPlaneDirectory, `${artifactId}.${process.pid}.${Date.now()}.tmp`)
       try {
         await writeFile(temporaryArtifactPath, `${JSON.stringify({ manifest, content }, null, 2)}\n`, { encoding: 'utf8', flag: 'wx' })
-        await rename(temporaryArtifactPath, artifactPath)
+        await link(temporaryArtifactPath, artifactPath)
+        await rm(temporaryArtifactPath, { force: true })
         await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.owner-decision-recorded', { decision: envelope, artifact: manifest })
       } catch (error) {
-        await rm(workPlaneDirectory, { recursive: true, force: true })
+        await rm(temporaryArtifactPath, { force: true })
+        try {
+          await writeFile(path.join(workPlaneDirectory, 'recovery-needed.json'), `${JSON.stringify({ runId, artifactId, reason: 'artifact export interrupted before Ledger binding', detectedAt: this.clock().toISOString() })}\n`, { encoding: 'utf8', flag: 'wx' })
+        } catch {
+          // Preserve the original failure. The directory itself remains as a recovery signal.
+        }
         throw error
       }
       return manifest
     } finally {
       await releaseRun(this.runtimeRoot, runId, claim.token)
     }
+  }
+
+  async listReviewableCandidates(): Promise<CandidateSummary[]> {
+    const runsDir = path.join(this.runtimeRoot, 'frontdoor-runs')
+    let runDirs: string[] = []
+    try {
+      const entries = await readdir(runsDir, { withFileTypes: true })
+      runDirs = entries.filter((e) => e.isDirectory()).map((e) => e.name)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
+      throw error
+    }
+
+    const summaries: CandidateSummary[] = []
+    for (const runId of runDirs) {
+      const workPlaneDir = path.join(runsDir, runId, 'work-plane')
+      let files: string[] = []
+      try {
+        const entries = await readdir(workPlaneDir, { withFileTypes: true })
+        files = entries.filter((e) => e.isFile() && e.name.startsWith('artifact-') && e.name.endsWith('.json')).map((e) => e.name)
+      } catch {
+        continue
+      }
+      if (files.length === 0) continue
+
+      const events = await readRunEvents(this.runtimeRoot, runId).catch(() => [])
+      for (const file of files) {
+        const artifactPath = path.join(workPlaneDir, file)
+        try {
+          const raw = await readJson<{ manifest: WorkPlaneArtifactManifest; content: { nodes: Array<{ candidate?: { files: Array<{ content: string }> } }> } }>(artifactPath)
+          const manifest = raw.manifest
+          if (manifest.candidateKind !== 'candidate-file-set' || !manifest.candidateHash) continue
+
+          const candidateId = manifest.artifactId
+          const candidateEvents = events.filter((e) => (e.payload as Record<string, unknown>).candidateId === candidateId || ((e.payload as Record<string, unknown>).decision as Record<string, unknown> | undefined)?.candidateId === candidateId)
+
+          let state: CandidateReviewState = 'generated'
+          const reviewed = [...candidateEvents].reverse().find((e) => e.type === 'frontdoor.candidate-reviewed' || (e.type === 'frontdoor.owner-decision-recorded' && ((e.payload as Record<string, unknown>).decision as Record<string, unknown> | undefined)?.gate === 'candidate-review'))
+          if (reviewed) {
+            const decisionEnvelope = (reviewed.payload as Record<string, unknown>).decision as Record<string, unknown> | undefined
+            const decision = String(decisionEnvelope?.decision ?? (reviewed.payload as Record<string, unknown>).decision)
+            if (decision === 'accept') state = 'accepted'
+            else if (decision === 'reject') state = 'rejected'
+            else if (decision === 'follow-up') state = 'follow-up'
+          } else if (candidateEvents.some((e) => e.type === 'frontdoor.candidate-review-started')) {
+            state = 'owner-review'
+          }
+
+          const fileCount = manifest.candidateFiles?.length ?? 0
+          const totalBytes = raw.content?.nodes?.[0]?.candidate?.files?.reduce((sum, f) => sum + Buffer.byteLength(f.content ?? '', 'utf8'), 0) ?? 0
+
+          summaries.push({
+            candidateId,
+            parentRunId: manifest.parentRunId ?? '',
+            childRunId: runId,
+            candidateHash: manifest.candidateHash,
+            fileCount,
+            totalBytes,
+            state,
+            exportedAt: manifest.createdAt
+          })
+        } catch {
+          continue
+        }
+      }
+    }
+    return summaries.sort((a, b) => b.exportedAt.localeCompare(a.exportedAt))
+  }
+
+  async inspectCandidate(candidateId: string): Promise<CandidateInspectionResult> {
+    const summaries = await this.listReviewableCandidates()
+    const summary = summaries.find((s) => s.candidateId === candidateId)
+    if (!summary) throw new Error(`Candidate not found: ${candidateId}`)
+
+    const relativePath = `frontdoor-runs/${summary.childRunId}/work-plane/${candidateId}.json`
+    const artifactPath = path.join(this.runtimeRoot, relativePath)
+    const raw = await readJson<{ manifest: WorkPlaneArtifactManifest; content: { nodes: Array<{ candidate?: import('../../shared/implementationTypes').ImplementationCandidate }> } }>(artifactPath)
+    const { manifest, content } = await readVerifiedWorkPlaneArtifact(this.runtimeRoot, summary.childRunId, raw.manifest)
+    if (manifest.artifactId !== candidateId || manifest.candidateKind !== 'candidate-file-set') throw new Error(`Invalid Candidate artifact: ${candidateId}`)
+
+    const typedContent = content as { nodes: Array<{ candidate?: import('../../shared/implementationTypes').ImplementationCandidate }> }
+    const node = typedContent.nodes.find((n) => n.candidate)
+    if (!node?.candidate) throw new Error(`Candidate payload missing in artifact: ${candidateId}`)
+
+
+    const run = await readRun(this.runtimeRoot, summary.childRunId)
+    if (!run.implementationBinding) throw new Error(`Candidate implementation binding missing: ${candidateId}`)
+
+    await this.startCandidateReview(candidateId)
+
+    const updatedSummaries = await this.listReviewableCandidates()
+    const updatedSummary = updatedSummaries.find((s) => s.candidateId === candidateId) ?? summary
+
+    const targetHash = candidateReviewTargetHash(
+      summary.childRunId,
+      candidateId,
+      manifest.candidateHash!,
+      run.implementationBinding.sourceResultHash,
+      run.implementationBinding.parentReviewDecisionId
+    )
+
+    return {
+      summary: updatedSummary,
+      candidate: node.candidate,
+      binding: run.implementationBinding,
+      manifest: manifest as unknown as Record<string, unknown>,
+      state: updatedSummary.state,
+      targetHash
+    }
+  }
+
+
+
+  async startCandidateReview(candidateId: string): Promise<CandidateReviewStartedResult> {
+    const summaries = await this.listReviewableCandidates()
+    const summary = summaries.find((s) => s.candidateId === candidateId)
+    if (!summary) throw new Error(`Candidate not found: ${candidateId}`)
+
+    const events = await readRunEvents(this.runtimeRoot, summary.childRunId)
+    const existing = events.find((e) => e.type === 'frontdoor.candidate-review-started' && (e.payload as Record<string, unknown>).candidateId === candidateId)
+
+    const startedAt = (existing?.payload as Record<string, unknown>)?.startedAt as string ?? this.clock().toISOString()
+
+    if (!existing) {
+      await recordRunEvent(this.runtimeRoot, summary.childRunId, 'frontdoor.candidate-review-started', {
+        candidateId,
+        startedAt
+      })
+    }
+
+    return { candidateId, state: 'owner-review', startedAt }
+  }
+
+  async reviewCandidate(input: CandidateReviewDecisionInput): Promise<CandidateReviewOwnerDecisionEnvelope> {
+    if (!input.approvedBy || input.approvedBy.trim().length === 0) throw new Error('approvedBy is required')
+    if (!['accept', 'reject', 'follow-up'].includes(input.decision)) throw new Error(`Invalid candidate decision: ${input.decision}`)
+
+    const summaries = await this.listReviewableCandidates()
+    const summary = summaries.find((s) => s.candidateId === input.candidateId)
+    if (!summary) throw new Error(`Candidate not found: ${input.candidateId}`)
+
+    if (summary.state === 'accepted' || summary.state === 'rejected' || summary.state === 'follow-up') {
+      throw new Error(`Candidate review is already in a terminal state: ${summary.state}`)
+    }
+
+    const events = await readRunEvents(this.runtimeRoot, summary.childRunId)
+    const started = events.find((e) => e.type === 'frontdoor.candidate-review-started' && (e.payload as Record<string, unknown>).candidateId === input.candidateId)
+    if (!started) throw new Error('candidate review was not started')
+
+    const relativePath = `frontdoor-runs/${summary.childRunId}/work-plane/${input.candidateId}.json`
+    const artifactPath = path.join(this.runtimeRoot, relativePath)
+    const raw = await readJson<{ manifest: WorkPlaneArtifactManifest }>(artifactPath)
+    const { manifest } = await readVerifiedWorkPlaneArtifact(this.runtimeRoot, summary.childRunId, raw.manifest)
+    if (manifest.artifactId !== input.candidateId || manifest.candidateKind !== 'candidate-file-set' || manifest.candidateHash !== summary.candidateHash) {
+      throw new Error('candidate artifact hash mismatch')
+    }
+
+
+    const run = await readRun(this.runtimeRoot, summary.childRunId)
+    if (!run.implementationBinding) throw new Error('candidate binding mismatch')
+
+    await assertImplementationParentBindingCurrent(this.runtimeRoot, run.implementationBinding, this.clock().toISOString())
+    await assertImplementationSourceArtifacts(this.runtimeRoot, run.implementationBinding)
+
+    const expectedTargetHash = candidateReviewTargetHash(
+      summary.childRunId,
+      input.candidateId,
+      manifest.candidateHash,
+      run.implementationBinding.sourceResultHash,
+      run.implementationBinding.parentReviewDecisionId
+    )
+
+    if (input.targetHash !== expectedTargetHash) {
+      throw new Error(`candidate review target hash mismatch: expected ${expectedTargetHash}, got ${input.targetHash}`)
+    }
+
+    const decidedAt = this.clock().toISOString()
+    const expiresAt = new Date(this.clock().getTime() + 60 * 60 * 1000).toISOString()
+
+    const decisionId = `owner-decision-${hashJson([summary.childRunId, 'candidate-review', input.candidateId, input.decision, input.targetHash, input.approvedBy, decidedAt]).slice(0, 20)}`
+
+    const envelope: CandidateReviewOwnerDecisionEnvelope = {
+      decisionId,
+      runId: summary.childRunId,
+      requestId: run.requestId,
+      taskId: manifest.taskId,
+      candidateId: input.candidateId,
+      candidateHash: manifest.candidateHash,
+      targetHash: input.targetHash,
+      approvedBy: input.approvedBy,
+      capability: 'candidate-review',
+      decidedAt,
+      expiresAt,
+      decision: input.decision,
+      note: input.note
+    }
+
+    const genericEnvelope: OwnerDecisionEnvelope = {
+      decisionId,
+      runId: summary.childRunId,
+      requestId: run.requestId,
+      gate: 'candidate-review',
+      decision: input.decision,
+      targetHash: input.targetHash,
+      approvedBy: input.approvedBy,
+      decidedAt,
+      allowedCapability: 'propose',
+      dataPolicy: 'local-only',
+      expiresAt,
+      note: input.note
+    }
+
+    await recordRunEvent(this.runtimeRoot, summary.childRunId, 'frontdoor.owner-decision-recorded', {
+      decision: genericEnvelope,
+      candidateId: input.candidateId
+    })
+
+    await recordRunEvent(this.runtimeRoot, summary.childRunId, 'frontdoor.candidate-reviewed', {
+      decision: envelope,
+      candidateId: input.candidateId,
+      state: input.decision
+    })
+
+    return envelope
   }
 }

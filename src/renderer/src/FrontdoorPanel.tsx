@@ -10,8 +10,10 @@ const gateLabels: Record<OwnerGate, string> = {
   question: 'Question',
   'result-review': 'Result Review',
   completion: 'Completion',
-  'artifact-export': 'Artifact Export'
+  'artifact-export': 'Artifact Export',
+  'candidate-review': 'Candidate Review'
 }
+
 
 type Result<T> = { ok: true; value: T } | { ok: false; error: string }
 
@@ -97,6 +99,10 @@ export default function FrontdoorPanel(): JSX.Element {
     }
   })
 
+  const [candidates, setCandidates] = useState<import('../../shared/implementationTypes').CandidateSummary[]>([])
+  const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null)
+  const [candidateInspection, setCandidateInspection] = useState<import('../../shared/implementationTypes').CandidateInspectionResult | null>(null)
+
   const inspect = useCallback(async (runId: string): Promise<void> => {
     const result = await window.adfFrontdoor.inspect(runId)
     if (result.ok) {
@@ -106,6 +112,22 @@ export default function FrontdoorPanel(): JSX.Element {
     } else setMessage(result.error)
   }, [])
 
+  const refreshCandidates = useCallback(async (): Promise<void> => {
+    const result = await window.adfFrontdoor.listCandidates()
+    if (result.ok) setCandidates(result.value)
+  }, [])
+
+  const inspectCandidateItem = useCallback(async (candidateId: string): Promise<void> => {
+    setSelectedCandidateId(candidateId)
+    const result = await window.adfFrontdoor.inspectCandidate(candidateId)
+    if (result.ok) {
+      setCandidateInspection(result.value)
+      void refreshCandidates()
+    } else {
+      setMessage(`Candidate inspection error: ${result.error}`)
+    }
+  }, [refreshCandidates])
+
   const refresh = useCallback(async (): Promise<void> => {
     const result = await window.adfFrontdoor.list()
     if (!result.ok) {
@@ -113,13 +135,15 @@ export default function FrontdoorPanel(): JSX.Element {
       return
     }
     setRuns(result.value)
+    void refreshCandidates()
     const nextId = selectedRunId && result.value.some((run) => run.runId === selectedRunId) ? selectedRunId : result.value[0]?.runId
     if (nextId) await inspect(nextId)
     else {
       setSelectedRunId(null)
       setInspection(null)
     }
-  }, [inspect, selectedRunId])
+  }, [inspect, refreshCandidates, selectedRunId])
+
 
   useEffect(() => {
     void refresh()
@@ -434,8 +458,117 @@ export default function FrontdoorPanel(): JSX.Element {
                 {inspection.decisions.map((decision) => <li key={decision.decisionId}><strong>{decision.gate}</strong> · {decision.decision} · {decision.approvedBy}<br /><small>target: {decision.targetHash}</small></li>)}
               </ul>
             </section>
+
+            <section className="frontdoor-card" aria-label="Candidate Review">
+              <h3>Candidate Review (候補成果物レビュー)</h3>
+              {candidates.length === 0 ? (
+                <p className="lane-empty">レビュー対象のCandidateはまだありません。</p>
+              ) : (
+                <div>
+                  <div className="frontdoor-run-list">
+                    {candidates.map((cand) => (
+                      <button
+                        key={cand.candidateId}
+                        type="button"
+                        className={`frontdoor-run-item ${selectedCandidateId === cand.candidateId ? 'selected' : ''}`}
+                        onClick={() => void inspectCandidateItem(cand.candidateId)}
+                      >
+                        <strong>{cand.candidateId}</strong>
+                        <span className="run-state">{cand.state}</span>
+                        <small>{cand.fileCount} ファイル ({cand.totalBytes} B)</small>
+                      </button>
+                    ))}
+                  </div>
+
+                  {candidateInspection && selectedCandidateId === candidateInspection.summary.candidateId && (
+                    <div style={{ marginTop: '12px' }}>
+                      <dl className="detail-grid">
+                        <div><dt>Candidate ID</dt><dd>{candidateInspection.summary.candidateId}</dd></div>
+                        <div><dt>State</dt><dd><strong>{candidateInspection.state}</strong></dd></div>
+                        <div><dt>Candidate Hash</dt><dd><small>{candidateInspection.summary.candidateHash}</small></dd></div>
+                        <div><dt>Parent Run ID</dt><dd>{candidateInspection.binding.parentRunId}</dd></div>
+                      </dl>
+
+                      <h4>候補ファイル一覧 ({candidateInspection.candidate.files.length}件)</h4>
+                      {candidateInspection.candidate.files.map((file) => (
+                        <div key={file.relativePath} style={{ marginBottom: '8px' }}>
+                          <p><strong>{file.relativePath}</strong> <small>(hash: {file.contentHash.slice(0, 16)}...)</small></p>
+                          <pre className="frontdoor-json" style={{ maxHeight: '160px', overflow: 'auto' }}>{file.content}</pre>
+                        </div>
+                      ))}
+
+                      {candidateInspection.state === 'owner-review' && (
+                        <div className="frontdoor-action-group" style={{ marginTop: '12px' }}>
+                          <button
+                            type="button"
+                            className="text-button"
+                            disabled={!canOwnerAct}
+                            onClick={() => void runAction(async () => {
+                              const res = await window.adfFrontdoor.reviewCandidate({
+                                candidateId: candidateInspection.summary.candidateId,
+                                decision: 'accept',
+                                approvedBy: approvedBy.trim(),
+                                targetHash: candidateInspection.targetHash,
+                                note: note.trim() || undefined
+                              })
+                              if (res.ok) void refreshCandidates()
+                              return res
+                            })}
+                          >
+                            採用承認 (Accept)
+                          </button>
+                          <button
+                            type="button"
+                            className="text-button text-button-danger"
+                            disabled={!canOwnerAct}
+                            onClick={() => void runAction(async () => {
+                              const res = await window.adfFrontdoor.reviewCandidate({
+                                candidateId: candidateInspection.summary.candidateId,
+                                decision: 'reject',
+                                approvedBy: approvedBy.trim(),
+                                targetHash: candidateInspection.targetHash,
+                                note: note.trim() || undefined
+                              })
+                              if (res.ok) void refreshCandidates()
+                              return res
+                            })}
+                          >
+                            不採用 (Reject)
+                          </button>
+                          <button
+                            type="button"
+                            className="text-button"
+                            disabled={!canOwnerAct}
+                            onClick={() => void runAction(async () => {
+                              const res = await window.adfFrontdoor.reviewCandidate({
+                                candidateId: candidateInspection.summary.candidateId,
+                                decision: 'follow-up',
+                                approvedBy: approvedBy.trim(),
+                                targetHash: candidateInspection.targetHash,
+                                note: note.trim() || undefined
+                              })
+                              if (res.ok) void refreshCandidates()
+                              return res
+                            })}
+                          >
+                            再提案要求 (Follow-up)
+                          </button>
+                        </div>
+                      )}
+
+                      {['accepted', 'rejected', 'follow-up'].includes(candidateInspection.state) && (
+                        <p className="turn-refs" style={{ marginTop: '8px' }}>
+                          この Candidate は終端状態 (<strong>{candidateInspection.state}</strong>) に達しました。修正・再提案は新しい Candidate ID で管理されます。
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </section>
           </div>
         )}
+
       </div>
     </section>
   )

@@ -436,9 +436,14 @@ describe('ADF-EXTERNAL-ADAPTER-001 Electron wiring', () => {
       'frontdoor:complete',
       'frontdoor:export-artifact',
       'frontdoor:stop',
-      'frontdoor:recover'
+      'frontdoor:recover',
+      'frontdoor:list-candidates',
+      'frontdoor:inspect-candidate',
+      'frontdoor:start-candidate-review',
+      'frontdoor:review-candidate'
     ])
   })
+
 
   it('rejects a malformed threadId or adapterId before touching the Thread', async () => {
     const transport = new MockExternalTransport({ status: 'success', content: 'ok' })

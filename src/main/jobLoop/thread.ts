@@ -1,5 +1,6 @@
 import type { ConversationThread, ConversationTurn, OwnerAction, RecoveryInfo, ThreadState, ThreadSummary } from '../../shared/threadTypes'
 import type { AdapterPlan } from '../../shared/jobLoopTypes'
+import type { ImplementationSourceBinding } from '../../shared/implementationTypes'
 import { hashJson } from './hash'
 
 export const defaultMaxTurns = 6
@@ -42,6 +43,7 @@ export interface CreateThreadInput {
   contextHash: string
   routingPlanHash: string
   adapterPlan: AdapterPlan
+  implementationBinding?: ImplementationSourceBinding
   inputHash: string
   createdAt: string
   maxTurns?: number
@@ -67,6 +69,7 @@ export function createThread(input: CreateThreadInput): ConversationThread {
     contextHash: input.contextHash,
     routingPlanHash: input.routingPlanHash,
     adapterPlan: input.adapterPlan,
+    ...(input.implementationBinding ? { implementationBinding: input.implementationBinding } : {}),
     inputHash: input.inputHash,
     state: 'open',
     maxTurns,

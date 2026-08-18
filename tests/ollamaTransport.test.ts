@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { SyntheticPacket } from '../src/shared/externalAdapterTypes'
-import { OllamaLocalHttpTransport, checkOllamaReadiness, defaultOllamaBaseUrl, defaultOllamaModel } from '../src/main/jobLoop/ollamaTransport'
+import { OllamaLocalHttpTransport, checkOllamaReadiness, defaultOllamaBaseUrl, defaultOllamaGenerationOptions, defaultOllamaModel } from '../src/main/jobLoop/ollamaTransport'
 import { buildSyntheticPacket } from '../src/main/jobLoop/syntheticPacket'
 
 const thread = { taskId: 'ADF-ADAPTER-PROVIDER-NEUTRAL-001', threadId: 'th1', jobId: 'job1', turns: [] } as never
@@ -64,9 +64,64 @@ describe('ADF-ADAPTER-PROVIDER-NEUTRAL-001 Ollama local-http transport', () => {
     const body = JSON.parse(seenInit?.body as string)
     expect(body.model).toBe(defaultOllamaModel)
     expect(body.stream).toBe(false)
+    expect(body.options).toEqual(defaultOllamaGenerationOptions)
     expect(body.prompt).toContain('合成パケット')
     expect(seenInit?.redirect).toBe('error')
     delete process.env.SHOULD_NOT_BE_READ
+  })
+
+  it('allows an explicitly configured generation profile without changing the transport contract', async () => {
+    let seenBody: Record<string, unknown> | undefined
+    const transport = new OllamaLocalHttpTransport({
+      generationOptions: { num_ctx: 4096, num_predict: 256, temperature: 0.2 },
+      fetchImpl: async (_input, init) => {
+        seenBody = JSON.parse(init.body as string) as Record<string, unknown>
+        return json({ response: 'ok' })
+      }
+    })
+
+    await transport.send(packet, options)
+
+    expect(seenBody?.options).toEqual({ num_ctx: 4096, num_predict: 256, temperature: 0.2 })
+  })
+
+  it('maps Ollama timing and token metrics without retaining response text outside content', async () => {
+    const { fetchImpl } = stub(() => json({
+      response: '受信しました。',
+      total_duration: 12_000_000,
+      load_duration: 3_000_000,
+      prompt_eval_count: 24,
+      prompt_eval_duration: 2_000_000,
+      eval_count: 8,
+      eval_duration: 7_000_000,
+      unexpected_diagnostic: 'must not pass through'
+    }))
+
+    const outcome = await new OllamaLocalHttpTransport({ fetchImpl }).send(packet, options)
+
+    expect(outcome.metrics).toEqual({
+      totalDurationNs: 12_000_000,
+      loadDurationNs: 3_000_000,
+      promptEvalCount: 24,
+      promptEvalDurationNs: 2_000_000,
+      evalCount: 8,
+      evalDurationNs: 7_000_000
+    })
+    expect(JSON.stringify(outcome.metrics)).not.toContain('unexpected_diagnostic')
+  })
+
+  it('ignores malformed or negative provider metrics', async () => {
+    const { fetchImpl } = stub(() => json({
+      response: '受信しました。',
+      total_duration: '12ms',
+      load_duration: -1,
+      prompt_eval_count: Number.NaN,
+      eval_count: null
+    }))
+
+    const outcome = await new OllamaLocalHttpTransport({ fetchImpl }).send(packet, options)
+
+    expect(outcome.metrics).toBeUndefined()
   })
 
   it('fails closed before fetch when a local-http transport is pointed at a non-loopback or credentialed URL', async () => {

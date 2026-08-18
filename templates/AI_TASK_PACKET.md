@@ -13,6 +13,11 @@ Task type: Research / Design / Docs / Implementation / Review
 Objective:
 完了条件:
 
+Final Flow Contribution:
+Vertical Slice Outcome:
+Next Flow Unlocked:
+Deferred Details:
+
 Required Obsidian Context:
 - Vault ID / root:
 - [[ノート名]] — 正規パスまたは共有リンク:
@@ -32,6 +37,7 @@ Approval status:
 禁止事項:
 
 出力に必ず含めるもの:
+- 完成形に対する今回の貢献と、今回つながった縦切り
 - 確認したContextと採用した制約
 - Plan、影響、検証方法、停止条件
 - 実施した変更、検証結果、未検証事項（実装時のみ）
@@ -45,3 +51,5 @@ Approval status:
 - Required Obsidian Contextにアクセスできない、または正規パス・共有リンクを確認できない場合は、`Blocked`で止まる。
 - Task本体とこのパケットに矛盾がある場合は、Task本体と最新の人間指示を優先して停止・確認する。
 - パケットはTaskの開始時に作り、実際に参照したノートと採用した制約をTaskへ残す。
+- `Final Flow Contribution`が空欄、または完成形の利用者フローに結び付かない場合は、実装前にTaskを見直す。
+- `Deferred Details`に置いた細部は、現在の縦切りを止める安全・権限・データ整合性問題でない限り、同じTaskへ戻して拡張しない。

@@ -61,7 +61,9 @@ function definition(event: FrontdoorLedgerEvent, run: OrchestrationRun): Omit<Fr
     case 'frontdoor.node-completed':
       kind = 'agent'
       label = `AI Node Result受領: ${text(context.nodeId, 'unknown')}`
-      detail = `${context.adapterId ?? 'Adapter未記録'} / ResultをEvidence検証へ渡しました。`
+      detail = payload.autoContinued === true
+        ? `${context.adapterId ?? 'Adapter未記録'} / 安全条件を満たしたため次のNodeへ自動継続しました。`
+        : `${context.adapterId ?? 'Adapter未記録'} / ResultをEvidence検証へ渡しました。`
       break
     case 'frontdoor.node-failed':
       kind = 'agent'

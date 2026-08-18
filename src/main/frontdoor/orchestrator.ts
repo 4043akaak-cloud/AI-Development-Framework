@@ -1,21 +1,21 @@
 import path from 'node:path'
 import type { ApprovedTaskPacket } from '../../shared/jobLoopTypes'
-import type { AggregateResult, DecompositionNode, DecompositionPlan, FrontdoorInspection, FrontdoorLedgerEvent, FrontdoorNodeReview, FrontdoorQuestion, FrontdoorRequest, FrontdoorReturn, OrchestrationNodeRecord, OrchestrationRun } from '../../shared/frontdoorTypes'
+import type { AggregateResult, DecompositionNode, DecompositionPlan, FrontdoorInspection, FrontdoorNodeReview, FrontdoorQuestion, FrontdoorRequest, FrontdoorReturn, OrchestrationNodeRecord, OrchestrationRun } from '../../shared/frontdoorTypes'
 import { hashJson } from '../jobLoop/hash'
 import { validateApprovedTask } from '../jobLoop/contracts'
 import type { ConversationRelay } from '../jobLoop/relay'
 import type { AdapterDependencyResult } from '../jobLoop/conversationAdapters'
-import { createDecompositionPlan, readyNodeIds, validateDecompositionPlan } from './decomposition'
+import { createDecompositionPlan, nodeReviewPolicyForPlan, readyNodeIds } from './decomposition'
 import { createFrontdoorRequest } from './intake'
 import { aggregateResults, buildFrontdoorReturn } from './returnEnvelope'
 import { questionsFromThread } from './questionAggregator'
-import { assertBundleReady, claimRun, readPlan, readRequest, readRun, readRunClaim, readRunEvents, recordRunEvent, releaseRun, replayRunFromEvents, writeAggregate, writeRun, writeRunBundleExclusive } from './ledger'
-import { replayFrontdoorRun } from './eventLedger'
+import { claimRun, readPlan, readRequest, readRun, readRunClaim, readRunEvents, recordRunEvent, releaseRun, replayRunFromEvents, writeAggregate, writeRun, writeRunBundleExclusive } from './ledger'
 import { readJson } from '../jobLoop/ledger'
 import type { AdapterResultEnvelope } from '../jobLoop/resultEnvelope'
 import { assertDispatchApproved, buildDecisionEnvelope, FrontdoorOwnerGateService, nodeReviewTargetHash, nodeTargetHash } from './ownerGates'
 import { getAdapterProfile } from '../jobLoop/adapterRegistry'
 import { buildActivityTrace } from './activityTrace'
+import { assertRunEventConsistency, assertRunIntegrity } from './runIntegrity'
 
 export interface FrontdoorOrchestratorOptions {
   relay: ConversationRelay
@@ -40,38 +40,6 @@ function packetContextReferences(packet: ApprovedTaskPacket): string[] {
   return [packet.context.githubTask, ...packet.context.obsidianContext]
 }
 
-async function assertRunIntegrity(runtimeRoot: string, run: OrchestrationRun, request: FrontdoorRequest, plan: DecompositionPlan, verifyBundle = true): Promise<void> {
-  if (verifyBundle) await assertBundleReady(runtimeRoot, run.runId)
-  if (requestHash(request) !== run.requestHash || request.inputHash !== run.requestHash) throw new Error('Frontdoor request hash integrity check failed')
-  if (planHash(plan) !== run.planHash || plan.planHash !== run.planHash) throw new Error('Frontdoor plan hash integrity check failed')
-  const expectedRunId = `run-${hashJson([request.requestId, request.inputHash, plan.planHash]).slice(0, 20)}`
-  if (run.runId !== expectedRunId) throw new Error('Frontdoor run binding hash integrity check failed')
-  if (run.requestId !== request.requestId) throw new Error('Frontdoor run request binding mismatch')
-  if (!Array.isArray(run.nodes) || run.nodes.some((record) => record.childTaskId !== childTaskId(request.requestId, record.node.nodeId) || !Number.isInteger(record.attempt) || record.attempt < 0)) throw new Error('Frontdoor node record binding is invalid')
-  const isNodeReviewContinuation = run.state === 'ready-for-approval' && run.ownerGate === 'awaiting-owner:dispatch' && run.nodes.some((record) => record.state === 'completed' || record.state === 'failed' || record.state === 'awaiting-question')
-  if (run.state === 'ready-for-approval' && (!isNodeReviewContinuation && run.nodes.some((record) => record.state !== 'queued' || record.resultRef || record.threadId || record.childJobId) || run.approvalIds.length > 0 || run.aggregateResultRef || run.nodeReview)) throw new Error('Frontdoor ready state is inconsistent with node records')
-  if (['complete', 'partial', 'failed', 'cancelled'].includes(run.state) && run.nodes.some((record) => record.state === 'queued' || record.state === 'running')) throw new Error('Frontdoor terminal state has unfinished nodes')
-  validateDecompositionPlan(request, plan)
-  if (run.nodes.length !== plan.nodes.length || run.nodes.some((record) => {
-    const expected = plan.nodes.find((node) => node.nodeId === record.node.nodeId)
-    return !expected || hashJson(record.node) !== hashJson(expected)
-  })) throw new Error('Frontdoor run node plan does not match the persisted plan')
-}
-
-function runProjection(run: OrchestrationRun): unknown {
-  return { runId: run.runId, requestId: run.requestId, requestHash: run.requestHash, planHash: run.planHash, state: run.state, ownerGate: run.ownerGate, nodes: run.nodes, approvalIds: run.approvalIds, openQuestionIds: run.openQuestionIds, aggregateResultRef: run.aggregateResultRef, nodeReview: run.nodeReview }
-}
-
-function assertRunEventConsistency(run: OrchestrationRun, events: readonly FrontdoorLedgerEvent[]): void {
-  if (events.length === 0) throw new Error('Frontdoor run has no ledger events')
-  const replayed = replayFrontdoorRun(events)
-  if (hashJson(runProjection(replayed)) !== hashJson(runProjection(run))) throw new Error('Frontdoor event replay does not match run.json')
-  const lastResume = Math.max(-1, ...events.filter((event) => event.type === 'frontdoor.question-answered' || event.type === 'frontdoor.node-review-continued').map((event) => event.sequence))
-  const progressed = events.some((event) => event.sequence > lastResume && ['frontdoor.approval-bound', 'frontdoor.node-started', 'frontdoor.node-completed', 'frontdoor.node-failed', 'frontdoor.run-completed', 'frontdoor.run-stopped'].includes(event.type))
-  if (run.state === 'ready-for-approval' && progressed) throw new Error('Frontdoor ready state conflicts with persisted execution events')
-  if (['complete', 'partial', 'failed', 'blocked-by-question', 'cancelled'].includes(run.state) && !events.some((event) => event.type === 'frontdoor.run-completed' || event.type === 'frontdoor.run-stopped')) throw new Error('Frontdoor terminal state has no terminal ledger event')
-}
-
 function changedNodeRecords(before: OrchestrationRun, after: OrchestrationRun): OrchestrationNodeRecord[] {
   return after.nodes.filter((record) => {
     const previous = before.nodes.find((candidate) => candidate.node.nodeId === record.node.nodeId)
@@ -90,6 +58,7 @@ function assertPacketMatchesNode(request: FrontdoorRequest, run: OrchestrationRu
   if (!packetReferences.every((reference) => request.contextReferences.includes(reference))) errors.push(`packet context exceeds parent request for ${node.node.nodeId}`)
   if (hashJson(packet.context) !== packet.contextHash) errors.push(`packet context hash mismatch for ${node.node.nodeId}`)
   if (!packet.frontdoorBinding || packet.frontdoorBinding.runId !== run.runId || packet.frontdoorBinding.requestHash !== run.requestHash || packet.frontdoorBinding.planHash !== run.planHash || packet.frontdoorBinding.nodeId !== node.node.nodeId) errors.push(`packet Frontdoor binding is missing or mismatched for ${node.node.nodeId}`)
+  if (run.runKind === 'implementation' && hashJson(packet.implementationBinding) !== hashJson(run.implementationBinding)) errors.push(`packet implementation binding mismatch for ${node.node.nodeId}`)
   if (packet.adapterPlan.selections.length !== 1) errors.push(`node packet must contain one adapter selection: ${node.node.nodeId}`)
   const selection = packet.adapterPlan.selections[0]
   if (!selection || selection.adapterId !== node.node.adapterId || selection.role !== node.node.role) errors.push(`packet adapter plan mismatch for ${node.node.nodeId}`)
@@ -153,7 +122,21 @@ export class FrontdoorOrchestrator {
     const now = this.clock().toISOString()
     const runId = `run-${hashJson([request.requestId, request.inputHash, plan.planHash]).slice(0, 20)}`
     const nodes: OrchestrationNodeRecord[] = plan.nodes.map((node) => ({ node, state: 'queued', childTaskId: childTaskId(request.requestId, node.nodeId), questionIds: [], attempt: 0 }))
-    const run: OrchestrationRun = { runId, requestId: request.requestId, requestHash: request.inputHash, planHash: plan.planHash, state: 'ready-for-approval', nodes, approvalIds: [], openQuestionIds: [], createdAt: now, updatedAt: now, ownerGate: 'awaiting-owner:intake' }
+    const run: OrchestrationRun = {
+      runId,
+      requestId: request.requestId,
+      requestHash: request.inputHash,
+      planHash: plan.planHash,
+      state: 'ready-for-approval',
+      nodes,
+      approvalIds: [],
+      openQuestionIds: [],
+      createdAt: now,
+      updatedAt: now,
+      ownerGate: 'awaiting-owner:intake',
+      ...(request.runKind ? { runKind: request.runKind } : {}),
+      ...(request.implementationBinding ? { implementationBinding: request.implementationBinding } : {})
+    }
     try {
       await writeRunBundleExclusive(this.runtimeRoot, request, plan, run)
     } catch (error) {
@@ -194,8 +177,7 @@ export class FrontdoorOrchestrator {
       const questions = [] as import('../../shared/frontdoorTypes').FrontdoorQuestion[]
       const evidenceRefs: string[] = []
       let executedNodeId: string | undefined
-      execution: {
-      if (run.nodes.some((node) => node.state === 'queued')) {
+      execution: while (run.nodes.some((node) => node.state === 'queued')) {
         const ready = readyNodeIds(run.nodes)
         if (ready.length === 0) {
           run = { ...run, nodes: run.nodes.map((node) => node.state === 'queued' ? { ...node, state: 'cancelled', error: 'dependency failed or was cancelled' } : node), updatedAt: this.clock().toISOString() }
@@ -215,6 +197,7 @@ export class FrontdoorOrchestrator {
           if (envelope.taskId !== dependency.childTaskId || envelope.jobId !== dependency.childJobId || envelope.inputHash !== dependency.childInputHash || envelope.orchestrationRunId !== runId) throw new Error(`dependency result identity mismatch for ${dependencyId}`)
           dependencyResults.push({ runId, nodeId: dependencyId, resultRef: dependency.resultRef, resultHash: dependency.resultHash, status: dependency.resultStatus, ...(envelope.content ? { content: envelope.content.slice(0, 1000) } : {}) })
         }
+        let shouldAutoContinue = false
         try {
           // Readiness is checked immediately before this Node can create a Job/Thread. A
           // Proposal may succeed while the local provider becomes unavailable before its
@@ -253,13 +236,27 @@ export class FrontdoorOrchestrator {
               ? 'awaiting-question'
               : 'completed'
           let resultHash: string | undefined
-          if (turn?.resultEnvelopeRef) resultHash = hashJson(await readJson<AdapterResultEnvelope>(path.join(this.runtimeRoot, turn.resultEnvelopeRef)))
+          let evidenceHash: string | undefined
+          let resultEnvelope: AdapterResultEnvelope | undefined
+          if (turn?.resultEnvelopeRef) {
+            resultEnvelope = await readJson<AdapterResultEnvelope>(path.join(this.runtimeRoot, turn.resultEnvelopeRef))
+            resultHash = hashJson(resultEnvelope)
+          }
+          if (completed.threadId) evidenceHash = hashJson(await readJson<Record<string, unknown>>(path.join(this.runtimeRoot, `threads/${completed.threadId}/evidence-links.json`)))
           const beforeCompletion = run
-          run = { ...run, nodes: run.nodes.map((node) => node.node.nodeId === nodeId ? { ...node, state: nextState, childJobId: completed.jobId, threadId: completed.threadId, childInputHash: completed.inputHash, resultStatus: turn?.status, resultRef: turn?.resultEnvelopeRef, resultHash, questionIds: nodeQuestions.map((question) => question.questionId), error: nextState === 'failed' ? turn?.content : undefined } : node), updatedAt: this.clock().toISOString() }
+          run = { ...run, nodes: run.nodes.map((node) => node.node.nodeId === nodeId ? { ...node, state: nextState, childJobId: completed.jobId, threadId: completed.threadId, childInputHash: completed.inputHash, resultStatus: turn?.status, resultRef: turn?.resultEnvelopeRef, resultHash, evidenceHash, questionIds: nodeQuestions.map((question) => question.questionId), error: nextState === 'failed' ? turn?.content : undefined } : node), updatedAt: this.clock().toISOString() }
           if (nextState === 'failed') run = cancelDependents(run, nodeId, 'dependency failed')
           if (nextState === 'awaiting-question') run = { ...run, state: 'blocked-by-question', nodes: run.nodes.map((node) => node.state === 'queued' ? { ...node, state: 'cancelled', error: 'blocked by Owner question' } : node) }
+          const safeToAutoContinue = nodeReviewPolicyForPlan(plan) === 'auto-continue-safe'
+            && nextState === 'completed'
+            && resultEnvelope?.status === 'success'
+            && resultEnvelope.verification.length > 0
+            && resultEnvelope.verification.every((item) => item.status === 'pass')
+            && resultEnvelope.risks.length === 0
+            && nodeQuestions.every((question) => question.status !== 'open')
+          shouldAutoContinue = safeToAutoContinue && run.nodes.some((node) => node.state === 'queued') && readyNodeIds(run.nodes).length > 0
           await writeRun(this.runtimeRoot, run)
-          await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.node-completed', { nodeId, threadId: completed.threadId, resultStatus: turn?.status, nodeState: nextState, questionIds: nodeQuestions.map((question) => question.questionId), nodeRecords: changedNodeRecords(beforeCompletion, run), runState: run.state })
+          await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.node-completed', { nodeId, threadId: completed.threadId, resultStatus: turn?.status, nodeState: nextState, questionIds: nodeQuestions.map((question) => question.questionId), autoContinued: shouldAutoContinue, nodeRecords: changedNodeRecords(beforeCompletion, run), runState: run.state })
         } catch (error) {
           const message = String((error as Error).message ?? error).slice(0, 200)
           const beforeFailure = run
@@ -267,7 +264,10 @@ export class FrontdoorOrchestrator {
           await writeRun(this.runtimeRoot, run)
           await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.node-failed', { nodeId, error: message, nodeRecords: changedNodeRecords(beforeFailure, run), runState: run.state })
         }
-      }
+        if (run.nodes.some((node) => node.state === 'queued')) {
+          if (shouldAutoContinue) continue execution
+          break execution
+        }
       }
 
       const completedNode = executedNodeId ? run.nodes.find((node) => node.node.nodeId === executedNodeId) : undefined
@@ -420,7 +420,24 @@ export class FrontdoorOrchestrator {
     if (!question) throw new Error(`current open Question not found: ${questionId}`)
     return question
   }
+
+  listReviewableCandidates(): Promise<import('../../shared/implementationTypes').CandidateSummary[]> {
+    return this.ownerGates.listReviewableCandidates()
+  }
+
+  inspectCandidate(candidateId: string): Promise<import('../../shared/implementationTypes').CandidateInspectionResult> {
+    return this.ownerGates.inspectCandidate(candidateId)
+  }
+
+  startCandidateReview(candidateId: string): Promise<import('../../shared/implementationTypes').CandidateReviewStartedResult> {
+    return this.ownerGates.startCandidateReview(candidateId)
+  }
+
+  reviewCandidate(input: import('../../shared/implementationTypes').CandidateReviewDecisionInput): Promise<import('../../shared/implementationTypes').CandidateReviewOwnerDecisionEnvelope> {
+    return this.ownerGates.reviewCandidate(input)
+  }
 }
+
 
 function cancelDependents(run: OrchestrationRun, failedNodeId: string, reason: string): OrchestrationRun {
   const blocked = new Set([failedNodeId])

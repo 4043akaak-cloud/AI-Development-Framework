@@ -69,7 +69,8 @@ export class DeterministicFakePlanner implements FrontdoorPlanner {
       requestId: request.requestId,
       version: 1,
       nodes,
-      aggregationPolicy: 'stop-on-blocking-question'
+      aggregationPolicy: 'stop-on-blocking-question',
+      nodeReviewPolicy: 'auto-continue-safe'
     })
 
     return {

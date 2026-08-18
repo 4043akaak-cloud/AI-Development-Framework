@@ -65,6 +65,8 @@ export function createDispatchKey(packet: ApprovedTaskPacket): string {
     packet.adapter,
     packet.approval.approvalId,
     packet.approval.routingPlanHash,
+    packet.frontdoorBinding ?? null,
+    packet.implementationBinding ?? null,
     'debate-round-1'
   ])
 }

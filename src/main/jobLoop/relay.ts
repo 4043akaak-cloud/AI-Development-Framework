@@ -155,6 +155,7 @@ export class ConversationRelay {
       if (profile.status !== 'available') continue
       if (profile.dataPolicy !== 'local-only') continue
       if (profile.connection === 'local-http') continue
+      if (profile.autoSelectable === false) continue
       return adapter
     }
     throw new ThreadRejectedError([`no local relay adapter registered for role ${role}`])
@@ -277,7 +278,20 @@ export class ConversationRelay {
     const id = `thread-${hashJson([packet.taskId, packet.approval.approvalId, registration.jobId]).slice(0, 16)}`
     await ensureDir(this.threadDirectory(id))
     const existing = await this.tryRead(id)
-    if (existing) return existing
+    if (existing) {
+      if (existing.taskId !== packet.taskId
+        || existing.jobId !== registration.jobId
+        || existing.approvalId !== packet.approval.approvalId
+        || existing.scopeHash !== packet.scopeHash
+        || existing.contextHash !== packet.contextHash
+        || existing.routingPlanHash !== packet.approval.routingPlanHash
+        || hashJson(existing.adapterPlan) !== hashJson(packet.adapterPlan)
+        || existing.inputHash !== registration.inputHash
+        || hashJson(existing.implementationBinding ?? null) !== hashJson(packet.implementationBinding ?? null)) {
+        throw new ThreadRejectedError(['existing Thread binding does not match the approved Packet; recovery-needed'])
+      }
+      return existing
+    }
 
     const thread = createThread({
       threadId: id,
@@ -289,6 +303,7 @@ export class ConversationRelay {
       contextHash: packet.contextHash,
       routingPlanHash: packet.approval.routingPlanHash,
       adapterPlan: packet.adapterPlan,
+      ...(packet.implementationBinding ? { implementationBinding: packet.implementationBinding } : {}),
       inputHash: registration.inputHash,
       createdAt: this.now(),
       maxTurns: options.maxTurns ?? defaultMaxTurns
@@ -462,7 +477,7 @@ export class ConversationRelay {
       status: answer.envelopeStatus ?? answer.status,
       content: answer.content,
       summary: answer.summary ?? answer.content.slice(0, 200),
-      artifact: { turnId, threadId: thread.threadId, sequence: stored.sequence, respondsToTurnId: stored.respondsToTurnId ?? null },
+      artifact: { ...(answer.artifact ?? {}), turnId, threadId: thread.threadId, sequence: stored.sequence, respondsToTurnId: stored.respondsToTurnId ?? null },
       verification: answer.verification ?? [],
       risks: answer.risks ?? [],
       ...(answer.questions ? { questions: answer.questions } : {}),
@@ -569,7 +584,7 @@ export class ConversationRelay {
       jobId: thread.jobId,
       approvalId: thread.approvalId,
       jobLedger: `jobs/${thread.jobId}/`,
-      turns: thread.turns.map((turn) => ({ turnId: turn.turnId, adapterId: turn.adapterId, role: turn.role, status: turn.status, resultEnvelopeRef: turn.resultEnvelopeRef ?? null }))
+      turns: thread.turns.map((turn) => ({ turnId: turn.turnId, adapterId: turn.adapterId, role: turn.role, status: turn.status, resultEnvelopeRef: turn.resultEnvelopeRef ?? null, resultEnvelopeHash: turn.resultEnvelopeHash ?? null }))
     })
   }
 

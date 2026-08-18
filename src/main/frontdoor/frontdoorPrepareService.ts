@@ -27,7 +27,7 @@ function requestBody(request: FrontdoorRequest): FrontdoorPrepareInput['request'
 
 function planBody(plan: DecompositionPlan): FrontdoorPrepareInput['plan'] {
   const { planHash: _planHash, ...body } = plan
-  return body
+  return { ...body, nodeReviewPolicy: body.nodeReviewPolicy ?? 'auto-continue-safe' }
 }
 
 function assertLocalAdapterPlan(orchestrator: FrontdoorOrchestrator, plan: FrontdoorPrepareInput['plan']): void {
@@ -85,7 +85,7 @@ export async function prepareFrontdoorRunOrThrow(orchestrator: FrontdoorOrchestr
   const existing = await existingRunForRequest(orchestrator, request.requestId)
   if (existing) {
     if (hashJson(requestBody(existing.request)) !== hashJson(input.request)) throw new Error(`requestId already exists with different Request content: ${request.requestId}`)
-    if (hashJson(planBody(existing.plan)) !== hashJson(input.plan)) throw new Error(`requestId already exists with different Plan content: ${request.requestId}`)
+    if (hashJson(planBody(existing.plan)) !== hashJson(planBody(plan))) throw new Error(`requestId already exists with different Plan content: ${request.requestId}`)
     return { run: existing.run, reused: true }
   }
 

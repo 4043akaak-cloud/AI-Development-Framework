@@ -8,6 +8,9 @@ import { FrontdoorOrchestrator } from './orchestrator'
 import { prepareFrontdoorRunOrThrow } from './frontdoorPrepareService'
 import type { FrontdoorPlanner } from './planner'
 import { createFrontdoorRequest } from './intake'
+import { buildImplementationPacket, prepareImplementationRun as prepareImplementationChildRun, type PrepareImplementationRunInput } from './implementationRun'
+import { proposeObsidianUpdate } from './obsidianProposal'
+import type { ObsidianWriteProposal } from '../../shared/obsidianProposalTypes'
 
 export interface FrontdoorApprovalInput {
   runId: unknown
@@ -65,6 +68,18 @@ export interface FrontdoorStopInput {
 
 export function prepareFrontdoorRun(orchestrator: FrontdoorOrchestrator, input: unknown): Promise<RelayResult<FrontdoorPrepareResult>> {
   return guard(() => prepareFrontdoorRunOrThrow(orchestrator, input))
+}
+
+export function prepareImplementationRun(orchestrator: FrontdoorOrchestrator, input: PrepareImplementationRunInput): Promise<RelayResult<Awaited<ReturnType<typeof prepareImplementationChildRun>>>> {
+  return guard(() => prepareImplementationChildRun(orchestrator, input))
+}
+
+export function materializeImplementationPacket(orchestrator: FrontdoorOrchestrator, runId: unknown, approvedBy: unknown): Promise<RelayResult<ApprovedTaskPacket>> {
+  return guard(() => {
+    if (typeof runId !== 'string' || !/^[A-Za-z0-9._:-]{1,240}$/.test(runId) || runId.includes('..')) throw new Error('invalid runId')
+    if (typeof approvedBy !== 'string' || approvedBy.trim().length === 0 || approvedBy.length > 120) throw new Error('approvedBy is required')
+    return buildImplementationPacket(orchestrator, runId, approvedBy.trim())
+  })
 }
 
 export function proposeFrontdoorPlan(planner: FrontdoorPlanner, input: unknown): Promise<RelayResult<FrontdoorPlanProposal>> {
@@ -184,6 +199,10 @@ export function inspectFrontdoorRun(orchestrator: FrontdoorOrchestrator, runId: 
   return guard(() => orchestrator.inspectRun(identifier(runId, 'runId')))
 }
 
+export function proposeFrontdoorObsidianUpdate(orchestrator: FrontdoorOrchestrator, input: { runId: unknown; relativePath?: unknown }): Promise<RelayResult<ObsidianWriteProposal>> {
+  return guard(async () => proposeObsidianUpdate(orchestrator.runtimeRoot, await orchestrator.inspectRun(identifier(input.runId, 'runId')), { relativePath: input.relativePath }))
+}
+
 export function approveFrontdoorRun(orchestrator: FrontdoorOrchestrator, input: FrontdoorApprovalInput): Promise<RelayResult<OwnerDecisionEnvelope>> {
   return guard(async () => {
     const runId = identifier(input.runId, 'runId')
@@ -245,4 +264,30 @@ export function stopFrontdoorRun(orchestrator: FrontdoorOrchestrator, input: Fro
 
 export function recoverFrontdoorRun(orchestrator: FrontdoorOrchestrator, runId: unknown): Promise<RelayResult<OrchestrationRun>> {
   return guard(() => orchestrator.recoverRun(identifier(runId, 'runId')))
+}
+
+export function listReviewableCandidates(orchestrator: FrontdoorOrchestrator): Promise<RelayResult<import('../../shared/implementationTypes').CandidateSummary[]>> {
+  return guard(() => orchestrator.listReviewableCandidates())
+}
+
+export function inspectCandidate(orchestrator: FrontdoorOrchestrator, candidateId: unknown): Promise<RelayResult<import('../../shared/implementationTypes').CandidateInspectionResult>> {
+  return guard(() => orchestrator.inspectCandidate(identifier(candidateId, 'candidateId')))
+}
+
+export function startCandidateReview(orchestrator: FrontdoorOrchestrator, candidateId: unknown): Promise<RelayResult<import('../../shared/implementationTypes').CandidateReviewStartedResult>> {
+  return guard(() => orchestrator.startCandidateReview(identifier(candidateId, 'candidateId')))
+}
+
+export function reviewCandidate(orchestrator: FrontdoorOrchestrator, input: unknown): Promise<RelayResult<import('../../shared/implementationTypes').CandidateReviewOwnerDecisionEnvelope>> {
+  return guard(async () => {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('candidate review input must be an object')
+    const raw = input as Record<string, unknown>
+    const candidateId = identifier(raw.candidateId, 'candidateId')
+    const approvedBy = owner(raw.approvedBy)
+    const decision = raw.decision
+    if (decision !== 'accept' && decision !== 'reject' && decision !== 'follow-up') throw new Error('invalid candidate decision')
+    const targetHash = identifier(raw.targetHash, 'targetHash')
+    const safeNote = note(raw.note)
+    return orchestrator.reviewCandidate({ candidateId, approvedBy, decision, targetHash, note: safeNote })
+  })
 }

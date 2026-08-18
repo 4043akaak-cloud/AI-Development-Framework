@@ -6,7 +6,8 @@ import { safeDevelopmentRendererUrl } from '../shared/rendererUrlPolicy'
 import { createLiveRelay } from './liveRelay'
 import type { ConversationRelay } from './jobLoop/relay'
 import { cancelExternal, continueThread, decideThread, externalSendState, getThread, listApprovedTaskIds, listExternalAdapters, listThreads, ollamaReadiness, preflightExternal, recoverThread, scanForRecovery, sendExternal, sendFirstTurn, startApprovedThread } from './relayService'
-import { approveFrontdoorRun, answerFrontdoorQuestion, completeFrontdoorRun, dispatchFrontdoorRun, exportFrontdoorArtifact, inspectFrontdoorRun, listFrontdoorRuns, prepareFrontdoorRun, proposeFrontdoorPlan, recoverFrontdoorRun, reviewFrontdoorNode, reviewFrontdoorResult, stopFrontdoorRun } from './frontdoor/frontdoorService'
+import { approveFrontdoorRun, answerFrontdoorQuestion, completeFrontdoorRun, dispatchFrontdoorRun, exportFrontdoorArtifact, inspectCandidate, inspectFrontdoorRun, listFrontdoorRuns, listReviewableCandidates, prepareFrontdoorRun, proposeFrontdoorPlan, recoverFrontdoorRun, reviewCandidate, reviewFrontdoorNode, reviewFrontdoorResult, startCandidateReview, stopFrontdoorRun } from './frontdoor/frontdoorService'
+
 import { FrontdoorOrchestrator } from './frontdoor/orchestrator'
 import { DeterministicFakePlanner } from './frontdoor/planner'
 
@@ -82,6 +83,11 @@ app.whenReady().then(async () => {
   ipcMain.handle('frontdoor:export-artifact', (_event, input: unknown) => exportFrontdoorArtifact(frontdoor, input as Parameters<typeof exportFrontdoorArtifact>[1]))
   ipcMain.handle('frontdoor:stop', (_event, input: unknown) => stopFrontdoorRun(frontdoor, input as Parameters<typeof stopFrontdoorRun>[1]))
   ipcMain.handle('frontdoor:recover', (_event, runId: unknown) => recoverFrontdoorRun(frontdoor, runId))
+  ipcMain.handle('frontdoor:list-candidates', () => listReviewableCandidates(frontdoor))
+  ipcMain.handle('frontdoor:inspect-candidate', (_event, candidateId: unknown) => inspectCandidate(frontdoor, candidateId))
+  ipcMain.handle('frontdoor:start-candidate-review', (_event, candidateId: unknown) => startCandidateReview(frontdoor, candidateId))
+  ipcMain.handle('frontdoor:review-candidate', (_event, input: unknown) => reviewCandidate(frontdoor, input))
+
 
   // One pass, before the window exists, so the renderer cannot act on a Thread mid-scan.
   await scanForRecovery(relay)

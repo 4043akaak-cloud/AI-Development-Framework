@@ -123,13 +123,17 @@ describe('ADF-MCP-CLIENT-E2E-001 stdio MCP client', () => {
 
       const listed = await client.request('tools/list') as { tools: Array<{ name: string }> }
       expect(listed.tools.map((tool) => tool.name)).toEqual([
-        'adf_frontdoor_prepare', 'adf_frontdoor_inspect', 'adf_frontdoor_dispatch_approved', 'adf_frontdoor_get_result', 'adf_frontdoor_get_workplane_artifact', 'adf_frontdoor_list_runs'
+        'adf_frontdoor_prepare', 'adf_frontdoor_inspect', 'adf_frontdoor_get_context_capsule', 'adf_frontdoor_propose_obsidian_update', 'adf_frontdoor_dispatch_approved', 'adf_frontdoor_get_result', 'adf_frontdoor_get_workplane_artifact', 'adf_frontdoor_list_runs'
       ])
 
       const prepared = textResult(await client.request('tools/call', { name: 'adf_frontdoor_prepare', arguments: input(requestId) })) as { runId: string; ownerGate: string }
       expect(prepared.ownerGate).toBe('awaiting-owner:intake')
       const run = await owner.getRun(prepared.runId)
       expect(await ownerRelay.listThreads()).toEqual([])
+
+      const capsule = textResult(await client.request('tools/call', { name: 'adf_frontdoor_get_context_capsule', arguments: { runId: prepared.runId, maxChars: 4_000 } })) as { runId: string; compression: { mode: string; actualChars: number; maxChars: number }; source: { requestHash: string; planHash: string } }
+      expect(capsule).toMatchObject({ runId: prepared.runId, compression: { mode: 'deterministic', maxChars: 4_000 }, source: { requestHash: run.requestHash, planHash: run.planHash } })
+      expect(capsule.compression.actualChars).toBeLessThanOrEqual(4_000)
 
       await writeApprovedPacket(runtimeRoot, packet(requestId, run))
       const blocked = textResult(await client.request('tools/call', { name: 'adf_frontdoor_dispatch_approved', arguments: { runId: prepared.runId } }))

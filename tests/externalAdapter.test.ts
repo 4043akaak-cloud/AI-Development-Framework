@@ -207,6 +207,21 @@ describe('ADF-EXTERNAL-ADAPTER-001 approved send', () => {
     expect(JSON.stringify(calls[0])).not.toMatch(/api[_-]?key|sk-ant|authorization/i)
   })
 
+  it('persists numeric provider metrics in the external-call Ledger without payload data', async () => {
+    const transport = new MockExternalTransport({
+      status: 'success',
+      content: '受信しました。',
+      metrics: { totalDurationNs: 12_000_000, loadDurationNs: 3_000_000, evalCount: 8 }
+    })
+    const { relay, threadId } = await relayWith(transport)
+    await grantApproval(relay, threadId)
+    await relay.continueJob(threadId, adapterId)
+
+    const calls = (await readFile(path.join(relay.threadDirectory(threadId), 'external-calls.jsonl'), 'utf8')).split('\n').filter(Boolean).map((line) => JSON.parse(line))
+    expect(calls[0].metrics).toEqual({ totalDurationNs: 12_000_000, loadDurationNs: 3_000_000, evalCount: 8 })
+    expect(JSON.stringify(calls[0])).not.toContain('受信しました')
+  })
+
   it('reports the approved send budget as exhausted after one call', async () => {
     const transport = new MockExternalTransport({ status: 'success', content: 'ok' })
     const { relay, threadId } = await relayWith(transport, adapterId, ['proposal', 'critic'])

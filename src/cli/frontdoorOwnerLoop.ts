@@ -34,15 +34,18 @@ const frontdoorOptions = {
   note: { type: 'string' },
   'question-id': { type: 'string' },
   'node-id': { type: 'string' },
+  'candidate-id': { type: 'string' },
+  'target-hash': { type: 'string' },
   'answer-ref': { type: 'string' },
   decision: { type: 'string' },
   json: { type: 'boolean' },
   help: { type: 'boolean' }
 } as const
 
-type FrontdoorCommand = 'prepare' | 'inspect' | 'approve' | 'dispatch' | 'review-node' | 'answer' | 'review-result' | 'complete' | 'export-artifact' | 'stop' | 'recover'
+type FrontdoorCommand = 'prepare' | 'inspect' | 'approve' | 'dispatch' | 'review-node' | 'answer' | 'review-result' | 'complete' | 'export-artifact' | 'stop' | 'recover' | 'list-candidates' | 'inspect-candidate' | 'review-candidate'
 
-const commands: readonly FrontdoorCommand[] = ['prepare', 'inspect', 'approve', 'dispatch', 'review-node', 'answer', 'review-result', 'complete', 'export-artifact', 'stop', 'recover']
+const commands: readonly FrontdoorCommand[] = ['prepare', 'inspect', 'approve', 'dispatch', 'review-node', 'answer', 'review-result', 'complete', 'export-artifact', 'stop', 'recover', 'list-candidates', 'inspect-candidate', 'review-candidate']
+
 
 function usage(command?: string): string {
   if (command === 'approve') {
@@ -184,8 +187,45 @@ export async function runFrontdoorCli(argv: string[], io: FrontdoorCliIO = defau
       return 0
     }
 
+    if (command === 'list-candidates') {
+      const candidates = await orchestrator.listReviewableCandidates()
+      output(io, { command, candidates }, json)
+      return 0
+    }
+
+    if (command === 'inspect-candidate') {
+      const candidateId = requiredString(values, 'candidate-id')
+      if (!candidateId) throw new Error('inspect-candidate requires --candidate-id <id>')
+      const inspection = await orchestrator.inspectCandidate(candidateId)
+      output(io, { command, inspection }, json)
+      return 0
+    }
+
+    if (command === 'review-candidate') {
+      const candidateId = requiredString(values, 'candidate-id')
+      if (!candidateId) throw new Error('review-candidate requires --candidate-id <id>')
+      const decision = requiredString(values, 'decision')
+      if (decision !== 'accept' && decision !== 'reject' && decision !== 'follow-up') throw new Error('review-candidate requires --decision accept|reject|follow-up')
+      const approvedBy = requiredString(values, 'approved-by')
+      if (!approvedBy) throw new Error('review-candidate requires --approved-by <name>')
+
+      const inspection = await orchestrator.inspectCandidate(candidateId)
+      const targetHash = requiredString(values, 'target-hash') ?? inspection.targetHash
+      const envelope = await orchestrator.reviewCandidate({
+        candidateId,
+        approvedBy,
+        decision,
+        targetHash,
+        note: requiredString(values, 'note') ?? undefined
+      })
+
+      output(io, { command, envelope }, json)
+      return 0
+    }
+
     const runId = requiredString(values, 'run-id')
     if (!runId) throw new Error(`${command} requires --run-id <run-id>`)
+
 
     if (command === 'inspect') {
       output(io, await inspectRun(orchestrator, runId), json)

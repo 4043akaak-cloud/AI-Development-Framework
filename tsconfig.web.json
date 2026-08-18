@@ -10,5 +10,5 @@
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["src/renderer/**/*.ts", "src/renderer/**/*.tsx", "src/shared/boardTypes.ts", "src/shared/controlPlaneTypes.ts", "src/shared/foundationPolicy.ts", "src/shared/projectRegistry.ts", "src/shared/threadTypes.ts", "src/shared/jobLoopTypes.ts"]
+    "include": ["src/renderer/**/*.ts", "src/renderer/**/*.tsx", "src/shared/boardTypes.ts", "src/shared/controlPlaneTypes.ts", "src/shared/foundationPolicy.ts", "src/shared/projectRegistry.ts", "src/shared/threadTypes.ts", "src/shared/jobLoopTypes.ts", "src/shared/implementationTypes.ts"]
 }

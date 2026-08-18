@@ -1,8 +1,10 @@
 # ADF Current State
 
-> Last updated: 2026-08-15（`ADF-FRONTDOOR-OLLAMA-WORKPLANE-E2E-001`のMCP経由実Ollama E2E・Work Plane Exportまで反映。過去の個別Task記述には旧時点の記録が残る）
+> Last updated: 2026-08-15（`ADF-FRONTDOOR-OLLAMA-WORKPLANE-E2E-001`のMCP経由実Ollama E2E・Work Plane Exportまで反映。次段のWork Plane Integrity Gateを設計中。過去の個別Task記述には旧時点の記録が残る）
 
 ## 現在地
+
+製品運用標準として、[ADF Product Completion Blueprint](./ADF_PRODUCT_COMPLETION_BLUEPRINT.md)を採用した。以後のTaskは、Owner → 窓口AI → ADF → 複数AI → 統合回答 → 次の指示という最終フローへの貢献を明示し、縦切りの利用可能化を細部の改善より優先する。既存のWork Plane、Adapter、Ledger、MCP、Ollama資産は破棄せず、この標準の下で再利用・接続する。
 
 協働憲章、Task Lifecycle、正本作業コピー規約、基本テンプレートは整備済み。Phase 0、振り返り、`ADF-ORCH-001`、`ADF-MVP1-001`を完了した。手動・読み取り専用Task Boardは、Control Planeの閲覧部分として実装・Project Ownerレビュー済みである。`ADF-REVIEW-001`では、最初の外部AIまたは人間による独立レビューを、接続前の手動実験として設計・記録した。
 
@@ -18,6 +20,8 @@ ADFの製品境界は、Project進捗管理とAI間の受け渡しに限定す�
 
 Local Runtime基盤は完成しているが、最終目標である「窓口AI → ADF → 得意分野ごとの複数AI → ADF → 窓口AI」のEnd-to-End協調は発展途上である。`ADF-FRONTDOOR-ORCHESTRATION-001`を2026-08-14に開始し、Fake Adapter限定でFrontdoorRequest、分解DAG、Node状態機械、Result / Question集約、FrontdoorReturnを一周させた。続く`ADF-FRONTDOOR-LEDGER-EVENT-SOURCING-001`では`events.jsonl`を正本とするtyped hash-chain Ledger、決定的Replay、atomic Bundle、claim安全性を実装しDoneとなった。`ADF-FRONTDOOR-OWNER-GATE-001`ではOwnerのIntake、完成形、分解、Dispatch、質問、Result Review、Completionを共通契約として実装し、`e38e31c`でDoneとなった。`ADF-FRONTDOOR-OLLAMA-TWO-NODE-E2E-001`では、Project Owner承認の4 Gateを通して実OllamaのProposal→Critic依存2 Nodeを一回実行し、Runtime再読込・Replay・Evidence／Ledger整合を確認済みである。`ADF-MCP-001`では窓口AIからlocal stdio MCPを経由してFrontdoor Request／Planを投入し、Owner承認済みRunの状態・Resultを取得する入口を実装し、`ADF-FRONTDOOR-OLLAMA-WORKPLANE-E2E-001`でWork Plane artifactまで接続した。AI任意編集Work Plane、実装AI、独立Review Job、実Providerの自動選定は後続Taskとする。
 
+次の完成形ステップは、承認済みResultからchild Implementation Runを派生し、候補成果物をOwner Reviewへ返すことである。`ADF-WORKPLANE-INTEGRITY-GATE-001`はDoneとなり、`ADF-WORKPLANE-IMPLEMENTATION-AGENT-001`を2026-08-15に開始した。初回はFake／injected、`propose`／`local-only`、candidate-file-setに限定し、実ProviderとCanonical統合は別Taskとする。
+
 本Taskの停止ルール: 同じ原因による検証失敗が2回連続、または別原因でも3回続いた場合、Codexは実装を止めてProject Ownerへ確認する。Scope拡張、新規依存、外部送信、認証、費用、Work Plane書込み、既存安全境界の弱体化が必要になった場合も停止する。
 
 **完了済み**: `ADF-BOARD-PROJECTION-001`、`ADF-JOB-LOOP-001`（Legacy化を受諾してDone。現行Liveなのは`registerApprovedJob`等の共通登録経路のみで、旧Fake討論・旧`projectBoard`/`readBoard`・`JobRuntime`直接実行経路は現行Electronから到達不能なLegacyコードとして記録）、`ADF-DISPATCH-ACK-001`（Dispatch Packet生成とACK完全照合が`registerApprovedJob`経由で現行アプリのLive機能。JOB-LOOP-001のような広範なLegacy化ではない）、`ADF-CLAUDE-ADAPTER-001`（**複数AI Adapter共通基盤は完成。ただし実AI接続は未実施。** Adapter Registry・Routing plan生成/hash検証・Result Envelope検証はLive、旧`adapter-results.json`/`buildResult`/`runApprovedTask`経由の独立Result記録はLegacy）、`ADF-TASK-PACKET-CLI-001`（**ローカルMVPの入口であるApproved Task Packet生成が完了した。** Execution Summaryは固定JSONブロック方式で確定し、3 Task文書で抽出・hash計算・`validateApprovedTask`がPass。既存Packetは要約fixtureであり、既存hashとの一致は必須にしない。既存Packetの自動上書き・自動再承認は行わない）、およびローカルMVPのThread／Fake AI／Owner Review／Recovery／Live Boardの一連の機能。
@@ -29,6 +33,13 @@ Local Runtime基盤は完成しているが、最終目標である「窓口AI �
 Anthropic APIキーの取得と外部AIへの実送信は引き続き保留である。External Adapterは接続経路（Electron main／IPC／preload／UI、認証状態preflight）まで実装済みだが、実送信は未実施である。`ADF-BOARD-PROJECTION-001`は、`open + turnCount > 0`の実機表示と`recovery-needed`のLive Board実機表示の2項目を、単体テストで検証済みかつDoneを妨げない残存リスクとして記録している。`ADF-TASK-PACKET-CLI-001`は、Task本文とExecution Summaryの将来的な乖離を検出できないことを残存リスクとして記録している。受信途中の中断と外部Adapter固有の冪等性は引き続き後続Taskで扱う。
 
 ## 次のTask
+
+[`ADF-WORKPLANE-INTEGRITY-GATE-001`](../tasks/ADF-WORKPLANE-INTEGRITY-GATE-001.md): `Done`。Work Plane／MCP共通のpath・symlink・protected root境界、Run／Event Ledger／Result／Evidence／Job／Thread binding、最新paired Owner Decision／expiry、no-clobber、recovery-needed markerを実装。Vitest 355/355、Node/Web/CLI typecheck、Electron build、diff check Pass。独立Safety再レビューと最終Diff確認を完了し、2026-08-15にProject Ownerが完了承認した。実装AI、実Provider、外部送信、canonical write、commit／pushは対象外。
+
+[`ADF-WORKPLANE-CANDIDATE-REVIEW-001`](../tasks/ADF-WORKPLANE-CANDIDATE-REVIEW-001.md): `Verifying`。Candidate Artifactの不変性、改ざん検証付き読み込み、共通`CandidateReviewApplicationService`（`listReviewableCandidates` / `inspectCandidate` / `startCandidateReview` / `reviewCandidate`）、`generated` → `owner-review` → `accepted` / `rejected` / `follow-up`（終端状態）、`targetHash`・`expiresAt`・二重Decision・非`owner-review`状態の拒否、CLIおよびElectron UI（FrontdoorPanel）からの共通Application Service使用、Runtime Ledger（`events.jsonl`）のみの追記、Canonical repo / Obsidian正本の無変更検証を実装完了。372/372 tests (33 test files)、Node/Web/CLI typecheck、`electron-vite build`、`git diff --check` Pass。
+
+[`ADF-WORKPLANE-IMPLEMENTATION-AGENT-001`](../tasks/ADF-WORKPLANE-IMPLEMENTATION-AGENT-001.md): `Done`。承認済み親Resultからchild Implementation Runを1件だけ派生し、`propose`／`local-only`のFake／injected Adapterでcandidate-file-setを生成、hash／path／Ledger検証後にOwner Review待ちで停止する実装・自動検証・独立レビューが完了。365/365 tests、Node／Web／CLI typecheck、Electron build、diff-check Pass。P0／P1なし。Owner完了承認待ち。実Claude CLI、実Ollama、外部送信、Canonical統合は対象外。
+
 
 [`ADF-FRONTDOOR-OLLAMA-WORKPLANE-E2E-001`](../tasks/ADF-FRONTDOOR-OLLAMA-WORKPLANE-E2E-001.md): `Done`。Result Review後の明示Export Gate、Run隔離Work Plane artifact、MCP read-only artifact取得、Result hash／Job／Task binding検証、CLI／Electron入口を実装。Run `run-30c7a84186862404fe38`でProposal／CriticをMCP経由で実Ollamaへ送信し、Result／Evidence／Job／Thread／Event Ledger／Work Plane artifactを確認、Electron Live Board表示も確認した。自動Routing、API key、外部送信、Canonical repo／Obsidian書込み、commit／pushは行っていない。新artifact toolをWindow AIの既存MCP接続へ表示するには接続再起動が必要。
 

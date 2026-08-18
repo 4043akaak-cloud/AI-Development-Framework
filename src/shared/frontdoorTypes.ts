@@ -1,4 +1,5 @@
 import type { AdapterRole, Capability, JobScope, ResultStatus } from './jobLoopTypes'
+import type { ImplementationSourceBinding } from './implementationTypes'
 
 export type FrontdoorRequestState = 'received' | 'needs-clarification' | 'ready-for-decomposition' | 'rejected'
 export type OrchestrationState = 'ready-for-approval' | 'running' | 'awaiting-owner' | 'complete' | 'partial' | 'blocked-by-question' | 'failed' | 'cancelled'
@@ -6,9 +7,10 @@ export type OrchestrationNodeState = 'queued' | 'ready' | 'running' | 'completed
 export type FrontdoorQuestionKind = 'clarification' | 'missing-context' | 'scope-change' | 'approval-required' | 'execution-blocked' | 'conflict'
 export type FrontdoorQuestionStatus = 'open' | 'answered' | 'dismissed'
 
-export type OwnerGate = 'intake' | 'completion-shape' | 'decomposition' | 'dispatch' | 'node-review' | 'question' | 'result-review' | 'completion' | 'artifact-export'
+export type OwnerGate = 'intake' | 'completion-shape' | 'decomposition' | 'dispatch' | 'node-review' | 'question' | 'result-review' | 'completion' | 'artifact-export' | 'candidate-review'
 export type OwnerDecision = 'clarify' | 'edit' | 'reject' | 'proceed' | 'approve' | 'approve-selected' | 'dispatch' | 'defer' | 'stop' | 'answer' | 'revise-plan' | 'accept' | 'follow-up' | 'continue' | 'complete' | 'export'
 export type OwnerGateState = 'received' | `awaiting-owner:${OwnerGate}` | 'running' | 'completed' | 'stopped' | 'rejected' | 'blocked'
+
 
 export interface OwnerDecisionEnvelope {
   decisionId: string
@@ -44,6 +46,8 @@ export interface FrontdoorRequestInput {
   requestedOutput: string
   contextReferences: string[]
   scope: JobScope
+  runKind?: 'frontdoor' | 'implementation'
+  implementationBinding?: ImplementationSourceBinding
 }
 
 export interface FrontdoorPrepareInput {
@@ -90,12 +94,17 @@ export interface DecompositionNode {
   depth: number
 }
 
+/** Node間のOwner確認を、承認済みPlan内で安全条件付きに自動継続するか。 */
+export type NodeReviewPolicy = 'auto-continue-safe' | 'owner-each-node'
+
 export interface DecompositionPlanInput {
   planId: string
   requestId: string
   version: number
   nodes: DecompositionNode[]
   aggregationPolicy: 'collect-all' | 'stop-on-blocking-question'
+  /** Omitted legacy Plans are normalized to auto-continue-safe at creation time. */
+  nodeReviewPolicy?: NodeReviewPolicy
 }
 
 export interface DecompositionPlan extends DecompositionPlanInput {
@@ -111,6 +120,7 @@ export interface OrchestrationNodeRecord {
   resultStatus?: ResultStatus
   resultRef?: string
   resultHash?: string
+  evidenceHash?: string
   childInputHash?: string
   questionIds: string[]
   attempt: number
@@ -131,6 +141,8 @@ export interface OrchestrationRun {
   updatedAt: string
   ownerGate?: OwnerGateState
   nodeReview?: FrontdoorNodeReview
+  runKind?: 'frontdoor' | 'implementation'
+  implementationBinding?: ImplementationSourceBinding
 }
 
 export interface FrontdoorNodeReview {
@@ -225,6 +237,14 @@ export interface WorkPlaneArtifactManifest {
   ownerDecisionIds: string[]
   createdAt: string
   status: 'exported'
+  candidateKind?: 'candidate-file-set'
+  candidateHash?: string
+  candidateFiles?: Array<{ relativePath: string; contentHash: string }>
+  parentRunId?: string
+  sourceAggregateRef?: string
+  sourceAggregateHash?: string
+  sourceResultHash?: string
+  contextBundleHash?: string
 }
 
 export type FrontdoorActivityKind = 'system' | 'owner' | 'agent' | 'verification'
@@ -279,6 +299,9 @@ export type FrontdoorEventType =
   | 'frontdoor.run-stopped'
   | 'frontdoor.run-completed'
   | 'frontdoor.run-snapshot'
+  | 'frontdoor.candidate-review-started'
+  | 'frontdoor.candidate-reviewed'
+
 
 export interface FrontdoorLedgerEvent<TPayload extends Record<string, unknown> = Record<string, unknown>> {
   schemaVersion: 1

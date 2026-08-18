@@ -59,18 +59,6 @@ export class JobRuntime {
     const jobId = `job-${dispatchKey.slice(0, 16)}`
     const directory = this.jobDirectory(jobId)
     const requestPath = path.join(directory, 'request.json')
-    if (await this.exists(requestPath)) {
-      const existing = await readJson<JobRequest>(requestPath)
-      return { jobId, directory, inputHash: existing.inputHash, createdAt: existing.createdAt, alreadyRegistered: true }
-    }
-
-    const dispatchPacket = createDispatchPacket(packet)
-    const dispatchAck = this.receiver.receive(dispatchPacket)
-    validateDispatchAck(dispatchPacket, dispatchAck)
-    if (!dispatchAck) throw new DispatchBlockedError(['ack is missing'])
-    validateAdapterPlan(packet.adapterPlan)
-
-    const createdAt = this.clock().toISOString()
     const task: JobRequest['task'] = {
       taskId: packet.taskId,
       objective: packet.objective,
@@ -83,9 +71,26 @@ export class JobRuntime {
       adapter: packet.adapter,
       fixtureMode: packet.fixtureMode,
       target: packet.target,
-      adapterPlan: packet.adapterPlan
+      adapterPlan: packet.adapterPlan,
+      ...(packet.frontdoorBinding ? { frontdoorBinding: packet.frontdoorBinding } : {}),
+      ...(packet.implementationBinding ? { implementationBinding: packet.implementationBinding } : {})
     }
     const inputHash = hashJson(task)
+    if (await this.exists(requestPath)) {
+      const existing = await readJson<JobRequest>(requestPath)
+      if (existing.jobId !== jobId || existing.dispatchKey !== dispatchKey || existing.inputHash !== hashJson(existing.task) || existing.inputHash !== inputHash || hashJson(existing.task.frontdoorBinding ?? null) !== hashJson(packet.frontdoorBinding ?? null) || hashJson(existing.task.implementationBinding ?? null) !== hashJson(packet.implementationBinding ?? null)) {
+        throw new DispatchBlockedError(['existing Job binding does not match the approved Packet; recovery-needed'])
+      }
+      return { jobId, directory, inputHash: existing.inputHash, createdAt: existing.createdAt, alreadyRegistered: true }
+    }
+
+    const dispatchPacket = createDispatchPacket(packet)
+    const dispatchAck = this.receiver.receive(dispatchPacket)
+    validateDispatchAck(dispatchPacket, dispatchAck)
+    if (!dispatchAck) throw new DispatchBlockedError(['ack is missing'])
+    validateAdapterPlan(packet.adapterPlan)
+
+    const createdAt = this.clock().toISOString()
     const request: JobRequest = { jobId, dispatchKey, inputHash, createdAt, task }
     await ensureDir(directory)
     await writeJsonAtomic(path.join(directory, 'dispatch-packet.json'), dispatchPacket)

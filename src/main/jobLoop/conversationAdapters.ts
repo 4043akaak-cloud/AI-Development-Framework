@@ -1,5 +1,6 @@
 import type { AdapterRole } from '../../shared/jobLoopTypes'
 import type { AdapterDependencyResult, AdapterRunState, ConversationTurn, RelayTurnPayload } from '../../shared/threadTypes'
+import { hashJson } from './hash'
 
 export type { AdapterDependencyResult } from '../../shared/threadTypes'
 
@@ -137,6 +138,31 @@ export class FakeCriticConversationAdapter extends InProcessConversationAdapter 
       summary: `Fake反論 ${round} 件目`,
       verification: [{ name: 'prior-turn-reference', status: target || dependency ? 'pass' : 'not-run' }],
       risks: target || dependency ? [] : ['評価対象の提案が存在しない']
+    }
+  }
+}
+
+/** Candidate probe used by the Implementation Agent vertical slice; it never writes files. */
+export class FakeImplementationConversationAdapter extends InProcessConversationAdapter {
+  readonly adapterId = 'fake-implementation'
+  readonly role = 'implementation' as const
+
+  protected compose({ title }: AdapterRequest): RelayTurnPayload {
+    const sourceFile = { relativePath: 'candidate/README.md', content: `候補: ${title}` }
+    const files = [{ ...sourceFile, contentHash: hashJson(sourceFile.content) }]
+    const candidate = {
+      kind: 'candidate-file-set' as const,
+      baseSnapshotHash: hashJson({ title }),
+      files,
+      candidateHash: hashJson({ kind: 'candidate-file-set', baseSnapshotHash: hashJson({ title }), files })
+    }
+    return {
+      content: JSON.stringify(candidate),
+      status: 'success',
+      summary: 'Fake implementation candidate',
+      artifact: candidate,
+      verification: [{ name: 'candidate-schema', status: 'pass' }],
+      risks: ['Fake candidate only; semantic implementation review is separate']
     }
   }
 }

@@ -1,4 +1,4 @@
-import type { DecompositionNode, DecompositionPlan, DecompositionPlanInput, FrontdoorRequest } from '../../shared/frontdoorTypes'
+import type { DecompositionNode, DecompositionPlan, DecompositionPlanInput, FrontdoorRequest, NodeReviewPolicy } from '../../shared/frontdoorTypes'
 import { hashJson } from '../jobLoop/hash'
 
 export class DecompositionRejectedError extends Error {
@@ -72,6 +72,7 @@ export function validateDecompositionPlan(request: FrontdoorRequest, plan: Decom
   if (!Number.isInteger(plan.version) || plan.version < 1) errors.push('plan version is invalid')
   if (!Array.isArray(plan.nodes) || plan.nodes.length === 0) errors.push('plan must contain at least one node')
   if (plan.nodes.length > request.constraints.maxNodes) errors.push('plan exceeds maxNodes')
+  if (plan.nodeReviewPolicy !== undefined && !['auto-continue-safe', 'owner-each-node'].includes(plan.nodeReviewPolicy)) errors.push('plan nodeReviewPolicy is invalid')
   const ids = new Set<string>()
   for (const node of plan.nodes) errors.push(...validateNode(node, request, ids)), ids.add(node.nodeId)
   if (errors.length) throw new DecompositionRejectedError(errors)
@@ -83,7 +84,13 @@ export function validateDecompositionPlan(request: FrontdoorRequest, plan: Decom
 
 export function createDecompositionPlan(request: FrontdoorRequest, input: DecompositionPlanInput): DecompositionPlan {
   validateDecompositionPlan(request, input)
-  return { ...input, planHash: hashJson(input) }
+  const nodeReviewPolicy: NodeReviewPolicy = input.nodeReviewPolicy ?? 'auto-continue-safe'
+  const normalizedInput = { ...input, nodeReviewPolicy }
+  return { ...normalizedInput, planHash: hashJson(normalizedInput) }
+}
+
+export function nodeReviewPolicyForPlan(plan: Pick<DecompositionPlanInput, 'nodeReviewPolicy'>): NodeReviewPolicy {
+  return plan.nodeReviewPolicy ?? 'auto-continue-safe'
 }
 
 export function readyNodeIds(runNodes: readonly { node: DecompositionNode; state: string }[]): string[] {

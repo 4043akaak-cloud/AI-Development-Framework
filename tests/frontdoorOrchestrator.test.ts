@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import type { ApprovedTaskPacket, FixtureMode } from '../src/shared/jobLoopTypes'
 import type { DecompositionNode, FrontdoorRequestInput } from '../src/shared/frontdoorTypes'
 import { ConversationRelay } from '../src/main/jobLoop/relay'
-import { FakeProposalConversationAdapter } from '../src/main/jobLoop/conversationAdapters'
+import { FakeCriticConversationAdapter, FakeProposalConversationAdapter } from '../src/main/jobLoop/conversationAdapters'
 import { ExternalConversationAdapter } from '../src/main/jobLoop/externalAdapter'
 import { OllamaLocalHttpTransport } from '../src/main/jobLoop/ollamaTransport'
 import { buildExplicitAdapterPlan } from '../src/main/jobLoop/adapterRegistry'
@@ -80,7 +80,7 @@ describe('Frontdoor orchestrator', () => {
     const relay = new ConversationRelay({ runtimeRoot })
     const orchestrator = new FrontdoorOrchestrator({ relay })
     const planNodes = [node('proposal', 'fake-ai-a', 'proposal'), node('critic', 'fake-ai-b', 'critic', ['proposal'])]
-    const run = await orchestrator.createRun(baseRequest, { planId: 'plan-e2e-001', requestId: baseRequest.requestId, version: 1, nodes: planNodes, aggregationPolicy: 'collect-all' })
+    const run = await orchestrator.createRun(baseRequest, { planId: 'plan-e2e-001', requestId: baseRequest.requestId, version: 1, nodes: planNodes, aggregationPolicy: 'collect-all', nodeReviewPolicy: 'owner-each-node' })
     await approveDispatch(orchestrator, run.runId, planNodes.map((node_) => node_.nodeId))
     const packets = { proposal: boundPacket(run, baseRequest.requestId, planNodes[0]), critic: boundPacket(run, baseRequest.requestId, planNodes[1]) }
     const first = await orchestrator.executeApprovedRun(run.runId, packets)
@@ -118,7 +118,7 @@ describe('Frontdoor orchestrator', () => {
     const orchestrator = new FrontdoorOrchestrator({ relay })
     const proposal = node('proposal', 'fake-ai-a', 'proposal')
     const critic = node('critic', 'fake-ai-b', 'critic', ['proposal'])
-    const run = await orchestrator.createRun(baseRequest, { planId: 'plan-node-review-stop-001', requestId: baseRequest.requestId, version: 1, nodes: [proposal, critic], aggregationPolicy: 'collect-all' })
+    const run = await orchestrator.createRun(baseRequest, { planId: 'plan-node-review-stop-001', requestId: baseRequest.requestId, version: 1, nodes: [proposal, critic], aggregationPolicy: 'collect-all', nodeReviewPolicy: 'owner-each-node' })
     await approveDispatch(orchestrator, run.runId, [proposal.nodeId, critic.nodeId])
     const packets = { proposal: boundPacket(run, baseRequest.requestId, proposal), critic: boundPacket(run, baseRequest.requestId, critic) }
     await orchestrator.executeApprovedRun(run.runId, packets)
@@ -130,13 +130,32 @@ describe('Frontdoor orchestrator', () => {
     expect(events.some((event) => event.type === 'frontdoor.node-review-continued')).toBe(false)
   })
 
+  it('keeps the Owner gate when an auto-continue Plan receives a partial or risky Result', async () => {
+    const runtimeRoot = await mkdtemp(path.join(tmpdir(), 'adf-frontdoor-auto-continue-risk-'))
+    const relay = new ConversationRelay({ runtimeRoot, adapters: [new FakeProposalConversationAdapter('partial'), new FakeCriticConversationAdapter()] })
+    const orchestrator = new FrontdoorOrchestrator({ relay })
+    const proposal = node('proposal', 'fake-ai-a', 'proposal')
+    const critic = node('critic', 'fake-ai-b', 'critic', ['proposal'])
+    const run = await orchestrator.createRun(baseRequest, { planId: 'plan-auto-continue-risk-001', requestId: baseRequest.requestId, version: 1, nodes: [proposal, critic], aggregationPolicy: 'collect-all', nodeReviewPolicy: 'auto-continue-safe' })
+    await approveDispatch(orchestrator, run.runId, [proposal.nodeId, critic.nodeId])
+    const packets = { proposal: boundPacket(run, baseRequest.requestId, proposal, 'partial'), critic: boundPacket(run, baseRequest.requestId, critic) }
+
+    const result = await orchestrator.executeApprovedRun(run.runId, packets)
+
+    expect(result.status).toBe('partial')
+    await expect(orchestrator.getRun(run.runId)).resolves.toMatchObject({ state: 'awaiting-owner', ownerGate: 'awaiting-owner:node-review', nodeReview: { nodeId: 'proposal', nextNodeIds: ['critic'] } })
+    expect(await relay.listThreads()).toHaveLength(1)
+    const events = await readFrontdoorEvents(runtimeRoot, run.runId)
+    expect(events.some((event) => event.type === 'frontdoor.node-completed' && event.payload.nodeId === 'proposal' && event.payload.autoContinued === false)).toBe(true)
+  })
+
   it('rejects a tampered Node Review target before continuation', async () => {
     const runtimeRoot = await mkdtemp(path.join(tmpdir(), 'adf-frontdoor-node-review-tamper-'))
     const relay = new ConversationRelay({ runtimeRoot })
     const orchestrator = new FrontdoorOrchestrator({ relay })
     const proposal = node('proposal', 'fake-ai-a', 'proposal')
     const critic = node('critic', 'fake-ai-b', 'critic', ['proposal'])
-    const run = await orchestrator.createRun(baseRequest, { planId: 'plan-node-review-tamper-001', requestId: baseRequest.requestId, version: 1, nodes: [proposal, critic], aggregationPolicy: 'collect-all' })
+    const run = await orchestrator.createRun(baseRequest, { planId: 'plan-node-review-tamper-001', requestId: baseRequest.requestId, version: 1, nodes: [proposal, critic], aggregationPolicy: 'collect-all', nodeReviewPolicy: 'owner-each-node' })
     await approveDispatch(orchestrator, run.runId, [proposal.nodeId, critic.nodeId])
     const packets = { proposal: boundPacket(run, baseRequest.requestId, proposal), critic: boundPacket(run, baseRequest.requestId, critic) }
     await orchestrator.executeApprovedRun(run.runId, packets)
@@ -295,7 +314,7 @@ describe('ADF-FRONTDOOR-REAL-ADAPTER-DISPATCH-001', () => {
     const orchestrator = new FrontdoorOrchestrator({ relay })
     const proposal = node('proposal', 'ollama-local', 'proposal')
     const critic = node('critic', 'ollama-local', 'critic', ['proposal'])
-    const run = await orchestrator.createRun(baseRequest, { planId: 'plan-ollama-two-role-001', requestId: baseRequest.requestId, version: 1, nodes: [proposal, critic], aggregationPolicy: 'collect-all' })
+    const run = await orchestrator.createRun(baseRequest, { planId: 'plan-ollama-two-role-001', requestId: baseRequest.requestId, version: 1, nodes: [proposal, critic], aggregationPolicy: 'collect-all', nodeReviewPolicy: 'auto-continue-safe' })
     await writeOllamaPackets(runtimeRoot, run, baseRequest.requestId, [proposal, critic])
     await approveDispatch(orchestrator, run.runId, [proposal.nodeId, critic.nodeId])
 
@@ -304,14 +323,10 @@ describe('ADF-FRONTDOOR-REAL-ADAPTER-DISPATCH-001', () => {
       critic: boundPacket(run, baseRequest.requestId, critic)
     }
 
-    const first = await orchestrator.executeApprovedRun(run.runId, packets)
-    expect(first.status).toBe('partial')
-    expect(first.childResultRefs).toHaveLength(1)
-    expect((await orchestrator.inspectRun(run.runId)).nodeReview?.nodeId).toBe('proposal')
-    await orchestrator.reviewNode(run.runId, 'proposal', 'Project Owner', 'continue')
     const result = await orchestrator.executeApprovedRun(run.runId, packets)
     expect(result.status).toBe('complete')
     expect(result.childResultRefs).toHaveLength(2)
+    expect((await orchestrator.inspectRun(run.runId)).nodeReview).toBeUndefined()
     await expect(assertFrontdoorOllamaEvidence(runtimeRoot, run.runId, relay)).resolves.toHaveLength(2)
     expect(calls).toEqual([
       'http://127.0.0.1:11434/api/tags',
@@ -340,6 +355,7 @@ describe('ADF-FRONTDOOR-REAL-ADAPTER-DISPATCH-001', () => {
     expect(criticCalls).toEqual(expect.arrayContaining([expect.objectContaining({ adapterId: 'ollama-local', role: 'critic', threadId: savedCritic.threadId, jobId: criticEnvelope.jobId })]))
     const frontdoorEvents = await readFrontdoorEvents(runtimeRoot, run.runId)
     validateFrontdoorEventChain(frontdoorEvents, run.runId)
+    expect(frontdoorEvents.some((event) => event.type === 'frontdoor.node-completed' && event.payload.nodeId === 'proposal' && event.payload.autoContinued === true)).toBe(true)
     expect(frontdoorEvents.some((event) => event.type === 'frontdoor.node-completed' && event.payload.nodeId === 'critic')).toBe(true)
     await expect(orchestrator.getRun(run.runId)).resolves.toMatchObject({ state: 'awaiting-owner', ownerGate: 'awaiting-owner:result-review' })
   })
@@ -365,7 +381,7 @@ describe('ADF-FRONTDOOR-REAL-ADAPTER-DISPATCH-001', () => {
     const orchestrator = new FrontdoorOrchestrator({ relay })
     const proposal = node('proposal', 'ollama-local', 'proposal')
     const critic = node('critic', 'ollama-local', 'critic', ['proposal'])
-    const run = await orchestrator.createRun(baseRequest, { planId: 'plan-ollama-critic-readiness-001', requestId: baseRequest.requestId, version: 1, nodes: [proposal, critic], aggregationPolicy: 'collect-all' })
+    const run = await orchestrator.createRun(baseRequest, { planId: 'plan-ollama-critic-readiness-001', requestId: baseRequest.requestId, version: 1, nodes: [proposal, critic], aggregationPolicy: 'collect-all', nodeReviewPolicy: 'owner-each-node' })
     await writeOllamaPackets(runtimeRoot, run, baseRequest.requestId, [proposal, critic])
     await approveDispatch(orchestrator, run.runId, [proposal.nodeId, critic.nodeId])
 
