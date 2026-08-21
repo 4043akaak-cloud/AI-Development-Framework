@@ -1,5 +1,7 @@
 # ADF Current State
 
+> 2026-08-21: `ADF-MCP-FRONTDOOR-2CYCLE-E2E-001` を開始。既存の `adf_frontdoor` MCP入口を使った窓口AIの2Cycle実証を、Fake Adapter・local-only・Owner Gate維持で進める。外部送信、資格情報、正本自動書込み、commit／pushは対象外。
+
 > Last updated: 2026-08-15（`ADF-FRONTDOOR-OLLAMA-WORKPLANE-E2E-001`のMCP経由実Ollama E2E・Work Plane Exportまで反映。次段のWork Plane Integrity Gateを設計中。過去の個別Task記述には旧時点の記録が残る）
 
 ## 現在地
