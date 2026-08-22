@@ -461,7 +461,7 @@ export class FrontdoorOwnerGateService {
       await assertRunIntegrity(this.runtimeRoot, run, request, plan)
       const events = await readRunEvents(this.runtimeRoot, runId)
       assertRunEventConsistency(run, events)
-      if (run.state !== 'awaiting-owner' || !run.aggregateResultRef) throw new Error('Work Plane export requires an accepted Result Review before completion')
+      if (!['awaiting-owner', 'complete'].includes(run.state) || !run.aggregateResultRef) throw new Error('Work Plane export requires an accepted Result Review before or after completion')
       const aggregate = await readJson<AggregateResult>(path.join(this.runtimeRoot, run.aggregateResultRef))
       assertAggregateBelongsToRun(runId, aggregate)
       const proposed = events.find((event) => event.type === 'frontdoor.completion-proposed' && event.payload.aggregateRef === run.aggregateResultRef)
@@ -470,6 +470,7 @@ export class FrontdoorOwnerGateService {
       const reviewDecision = latestResultReviewDecision(events, reviewTargetHash)
       if (!reviewDecision || reviewDecision.decision !== 'accept') throw new Error('Work Plane export requires an accepted Result Review; the latest Result Review is not accepted')
       assertDecisionNotExpired(reviewDecision, this.clock().toISOString())
+      if (run.state === 'complete' && !hasDecision(events, 'completion', ['complete'], reviewTargetHash)) throw new Error('Work Plane export requires a Completion Decision bound to the current Result Review')
       if (run.runKind === 'implementation' && run.implementationBinding) {
         await assertImplementationParentBindingCurrent(this.runtimeRoot, run.implementationBinding, this.clock().toISOString())
         await assertImplementationSourceArtifacts(this.runtimeRoot, run.implementationBinding)

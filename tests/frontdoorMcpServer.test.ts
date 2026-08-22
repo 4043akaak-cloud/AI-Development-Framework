@@ -73,7 +73,7 @@ describe('ADF-MCP-001 local Frontdoor MCP server', () => {
     expect(initialized?.result).toMatchObject({ protocolVersion: '2025-06-18', capabilities: { tools: { listChanged: false } } })
     const listed = await server.handle({ jsonrpc: '2.0', id: 2, method: 'tools/list' })
     expect((listed?.result as { tools: Array<{ name: string }> }).tools.map((tool) => tool.name)).toEqual([
-      'adf_frontdoor_prepare', 'adf_frontdoor_inspect', 'adf_frontdoor_get_context_capsule', 'adf_frontdoor_propose_obsidian_update', 'adf_frontdoor_dispatch_approved', 'adf_frontdoor_get_result', 'adf_frontdoor_get_workplane_artifact', 'adf_frontdoor_list_runs'
+      'adf_frontdoor_prepare', 'adf_frontdoor_prepare_next_request_from_candidate', 'adf_frontdoor_inspect', 'adf_frontdoor_get_context_capsule', 'adf_frontdoor_propose_obsidian_update', 'adf_frontdoor_dispatch_approved', 'adf_frontdoor_get_result', 'adf_frontdoor_get_workplane_artifact', 'adf_frontdoor_list_runs'
     ])
   })
 

@@ -9,6 +9,7 @@ import { prepareFrontdoorRunOrThrow } from './frontdoorPrepareService'
 import type { FrontdoorPlanner } from './planner'
 import { createFrontdoorRequest } from './intake'
 import { buildImplementationPacket, prepareImplementationRun as prepareImplementationChildRun, type PrepareImplementationRunInput } from './implementationRun'
+import { prepareNextRequestFromAcceptedCandidate as prepareNextRequestFromAcceptedCandidateRun, type PrepareNextRequestFromCandidateInput } from './candidateRequest'
 import { proposeObsidianUpdate } from './obsidianProposal'
 import type { ObsidianWriteProposal } from '../../shared/obsidianProposalTypes'
 
@@ -72,6 +73,10 @@ export function prepareFrontdoorRun(orchestrator: FrontdoorOrchestrator, input: 
 
 export function prepareImplementationRun(orchestrator: FrontdoorOrchestrator, input: PrepareImplementationRunInput): Promise<RelayResult<Awaited<ReturnType<typeof prepareImplementationChildRun>>>> {
   return guard(() => prepareImplementationChildRun(orchestrator, input))
+}
+
+export function prepareNextRequestFromAcceptedCandidate(orchestrator: FrontdoorOrchestrator, input: PrepareNextRequestFromCandidateInput): Promise<RelayResult<Awaited<ReturnType<typeof prepareNextRequestFromAcceptedCandidateRun>>>> {
+  return guard(() => prepareNextRequestFromAcceptedCandidateRun(orchestrator, input))
 }
 
 export function materializeImplementationPacket(orchestrator: FrontdoorOrchestrator, runId: unknown, approvedBy: unknown): Promise<RelayResult<ApprovedTaskPacket>> {

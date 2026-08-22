@@ -26,6 +26,29 @@ export function validateFrontdoorRequest(input: FrontdoorRequestInput): void {
   if (!Array.isArray(input?.constraints?.allowedCapabilities) || input.constraints.allowedCapabilities.length === 0) errors.push('allowedCapabilities are required')
   if (!Number.isInteger(input?.constraints?.maxNodes) || input.constraints.maxNodes < 1) errors.push('maxNodes must be a positive integer')
   if (!Number.isInteger(input?.constraints?.maxDepth) || input.constraints.maxDepth < 1) errors.push('maxDepth must be a positive integer')
+  if (input?.sourceCandidateBinding) {
+    const binding = input.sourceCandidateBinding
+    const identifiers: Array<[string, unknown]> = [
+      ['candidateId', binding.candidateId],
+      ['artifactRef', binding.artifactRef],
+      ['reviewDecisionId', binding.reviewDecisionId],
+      ['childRunId', binding.childRunId],
+      ['parentRunId', binding.parentRunId],
+      ['sourceAggregateRef', binding.sourceAggregateRef],
+      ['sourceResultRef', binding.sourceResultRef],
+      ['sourceEvidenceRef', binding.sourceEvidenceRef]
+    ]
+    for (const [label, value] of identifiers) if (!nonEmptyText(value) || value.includes('..')) errors.push(`sourceCandidateBinding.${label} is invalid`)
+    const hashes: Array<[string, unknown]> = [
+      ['candidateHash', binding.candidateHash],
+      ['reviewTargetHash', binding.reviewTargetHash],
+      ['sourceAggregateHash', binding.sourceAggregateHash],
+      ['sourceResultHash', binding.sourceResultHash],
+      ['sourceEvidenceHash', binding.sourceEvidenceHash],
+      ['bindingHash', binding.bindingHash]
+    ]
+    for (const [label, value] of hashes) if (typeof value !== 'string' || !/^[a-f0-9]{64}$/.test(value)) errors.push(`sourceCandidateBinding.${label} must be a SHA-256 hash`)
+  }
   if (errors.length) throw new FrontdoorRequestRejectedError(errors)
 }
 

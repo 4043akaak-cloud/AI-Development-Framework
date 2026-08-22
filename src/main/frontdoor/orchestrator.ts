@@ -136,7 +136,8 @@ export class FrontdoorOrchestrator {
       updatedAt: now,
       ownerGate: 'awaiting-owner:intake',
       ...(request.runKind ? { runKind: request.runKind } : {}),
-      ...(request.implementationBinding ? { implementationBinding: request.implementationBinding } : {})
+      ...(request.implementationBinding ? { implementationBinding: request.implementationBinding } : {}),
+      ...(request.sourceCandidateBinding ? { sourceCandidateBinding: request.sourceCandidateBinding } : {})
     }
     try {
       await writeRunBundleExclusive(this.runtimeRoot, request, plan, run)

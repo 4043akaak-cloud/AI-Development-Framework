@@ -2,6 +2,7 @@ import { readdir } from 'node:fs/promises'
 import path from 'node:path'
 import type { AdapterProfile } from '../../shared/jobLoopTypes'
 import type { FrontdoorPrepareInput, FrontdoorPrepareResult, FrontdoorRequest, DecompositionPlan, OrchestrationRun } from '../../shared/frontdoorTypes'
+import type { AcceptedCandidateSourceBinding } from '../../shared/implementationTypes'
 import { hashJson } from '../jobLoop/hash'
 import { readJson } from '../jobLoop/ledger'
 import { getAdapterProfile } from '../jobLoop/adapterRegistry'
@@ -76,8 +77,11 @@ async function existingRunForRequest(orchestrator: FrontdoorOrchestrator, reques
   return null
 }
 
-export async function prepareFrontdoorRunOrThrow(orchestrator: FrontdoorOrchestrator, value: unknown): Promise<FrontdoorPrepareResult> {
+export async function prepareFrontdoorRunOrThrow(orchestrator: FrontdoorOrchestrator, value: unknown, options: { trustedSourceCandidateBinding?: AcceptedCandidateSourceBinding } = {}): Promise<FrontdoorPrepareResult> {
   const input = normalizeInput(value)
+  if (input.request.sourceCandidateBinding) {
+    if (!options.trustedSourceCandidateBinding || hashJson(input.request.sourceCandidateBinding) !== hashJson(options.trustedSourceCandidateBinding)) throw new Error('sourceCandidateBinding must be created by the accepted Candidate Request flow')
+  }
   const request = createFrontdoorRequest(input.request)
   const plan = createDecompositionPlan(request, input.plan)
   assertLocalAdapterPlan(orchestrator, input.plan)

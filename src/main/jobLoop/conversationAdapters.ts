@@ -19,6 +19,8 @@ export interface AdapterRequest {
   inputHash?: string
   scopeHash?: string
   contextHash?: string
+  /** Exact relative paths approved by the Task Packet for candidate output. */
+  approvedFileSet?: readonly string[]
   orchestrationRunId?: string
   /** Evidence references from completed dependency Nodes; content is never injected implicitly. */
   dependencyResults?: readonly AdapterDependencyResult[]
@@ -147,8 +149,10 @@ export class FakeImplementationConversationAdapter extends InProcessConversation
   readonly adapterId = 'fake-implementation'
   readonly role = 'implementation' as const
 
-  protected compose({ title }: AdapterRequest): RelayTurnPayload {
-    const sourceFile = { relativePath: 'candidate/README.md', content: `候補: ${title}` }
+  protected compose({ title, approvedFileSet }: AdapterRequest): RelayTurnPayload {
+    const relativePath = approvedFileSet?.[0]
+    if (!relativePath) throw new AdapterProtocolError('implementation adapter requires an approved candidate file set')
+    const sourceFile = { relativePath, content: `候補: ${title}` }
     const files = [{ ...sourceFile, contentHash: hashJson(sourceFile.content) }]
     const candidate = {
       kind: 'candidate-file-set' as const,

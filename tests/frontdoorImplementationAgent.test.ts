@@ -12,7 +12,7 @@ import { FrontdoorOrchestrator } from '../src/main/frontdoor/orchestrator'
 import { buildImplementationPacket, prepareImplementationRun } from '../src/main/frontdoor/implementationRun'
 import { validateImplementationCandidate } from '../src/main/frontdoor/candidateArtifact'
 
-const parentScope = { inScope: ['candidate/README.md'], outOfScope: ['canonical-write', 'external-send', 'commit', 'push', 'merge'] }
+const parentScope = { inScope: ['candidate/README.md', 'next-request'], outOfScope: ['canonical-write', 'external-send', 'commit', 'push', 'merge'] }
 const parentRequest: FrontdoorRequestInput = {
   requestId: 'implementation-parent-001',
   source: 'test',
@@ -107,6 +107,18 @@ describe('ADF-WORKPLANE-IMPLEMENTATION-AGENT-001', () => {
     expect(envelope.artifact.candidateHash).toMatch(/^[a-f0-9]{64}$/)
   })
 
+  it('binds the candidate path to the child Packet allowed file set', async () => {
+    const { orchestrator, run } = await createParent()
+    const prepared = await prepareImplementationRun(orchestrator, { parentRunId: run.runId, sourceNodeId: 'proposal', allowedFiles: ['next-request'] })
+    const packet = await approveChild(orchestrator, prepared.run.runId)
+    await orchestrator.executeApprovedRun(prepared.run.runId, { implementation: packet })
+    const child = await orchestrator.inspectRun(prepared.run.runId)
+    const resultRef = child.run.nodes[0].resultRef
+    if (!resultRef) throw new Error('candidate Result reference missing')
+    const envelope = JSON.parse(await readFile(path.join(orchestrator.runtimeRoot, resultRef), 'utf8')) as { artifact: { files: Array<{ relativePath: string; content: string; contentHash: string }> } }
+    expect(envelope.artifact.files).toEqual([{ relativePath: 'next-request', content: expect.any(String), contentHash: expect.any(String) }])
+  })
+
   it('rejects candidate export after the persisted candidate hash is tampered', async () => {
     const { orchestrator, run } = await createParent()
     const prepared = await prepareImplementationRun(orchestrator, { parentRunId: run.runId, sourceNodeId: 'proposal', allowedFiles: ['candidate/README.md'] })
@@ -162,6 +174,19 @@ describe('ADF-WORKPLANE-IMPLEMENTATION-AGENT-001', () => {
     expect(manifest.candidateKind).toBe('candidate-file-set')
     expect(manifest.parentRunId).toBe(run.runId)
     expect(manifest.candidateFiles).toEqual([{ relativePath: 'candidate/README.md', contentHash: expect.any(String) }])
+  })
+
+  it('exports a validated candidate after Completion when the review binding remains current', async () => {
+    const { orchestrator, run } = await createParent()
+    const prepared = await prepareImplementationRun(orchestrator, { parentRunId: run.runId, sourceNodeId: 'proposal', allowedFiles: ['next-request'] })
+    const packet = await approveChild(orchestrator, prepared.run.runId)
+    await orchestrator.executeApprovedRun(prepared.run.runId, { implementation: packet })
+    await orchestrator.reviewResult(prepared.run.runId, 'Project Owner', 'accept')
+    await orchestrator.completeRun(prepared.run.runId, 'Project Owner')
+    const manifest = await orchestrator.exportWorkPlaneArtifact(prepared.run.runId, 'Project Owner')
+    expect(manifest.candidateKind).toBe('candidate-file-set')
+    expect(manifest.candidateFiles).toEqual([{ relativePath: 'next-request', contentHash: expect.any(String) }])
+    expect((await orchestrator.inspectRun(prepared.run.runId)).run.ownerGate).toBe('completed')
   })
 
   it('rejects a source file outside the parent Scope', async () => {

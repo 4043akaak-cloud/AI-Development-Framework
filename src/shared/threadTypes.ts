@@ -88,6 +88,8 @@ export interface ConversationThread {
   /** The approved Task Packet's own adapterPlan, hash-bound to routingPlanHash. An explicit adapterId
    *  dispatch to a local-only adapter must be one of these selections — see relay.ts sendToAdapterUnsafe. */
   adapterPlan: AdapterPlan
+  /** Exact file set approved by the Task Packet for candidate-producing adapters. */
+  approvedFileSet?: string[]
   implementationBinding?: ImplementationSourceBinding
   /** Job input hash from the registered Job, used to bind every Result Envelope to this Job. */
   inputHash: string

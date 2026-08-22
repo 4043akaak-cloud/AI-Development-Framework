@@ -5,7 +5,7 @@ import { readRunEvents } from '../main/frontdoor/ledger'
 import { hashJson } from '../main/jobLoop/hash'
 import type { AdapterResultEnvelope } from '../main/jobLoop/resultEnvelope'
 import { createLiveRelay } from '../main/liveRelay'
-import { dispatchFrontdoorRun, inspectFrontdoorRun, listFrontdoorRuns, prepareFrontdoorRun, proposeFrontdoorObsidianUpdate } from '../main/frontdoor/frontdoorService'
+import { dispatchFrontdoorRun, inspectFrontdoorRun, listFrontdoorRuns, prepareFrontdoorRun, prepareNextRequestFromAcceptedCandidate, proposeFrontdoorObsidianUpdate } from '../main/frontdoor/frontdoorService'
 import { FrontdoorOrchestrator } from '../main/frontdoor/orchestrator'
 import type { FrontdoorPrepareInput, WorkPlaneArtifactManifest } from '../shared/frontdoorTypes'
 import { safeRuntimePath } from '../main/frontdoor/pathIntegrity'
@@ -50,6 +50,16 @@ const tools = [
       type: 'object',
       properties: { request: { type: 'object' }, plan: { type: 'object' } },
       required: ['request', 'plan'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'adf_frontdoor_prepare_next_request_from_candidate',
+    description: 'Create an Intake-gated Request from an accepted Candidate using explicit window-AI Request and Plan input. Validates and records Candidate provenance; does not approve or dispatch.',
+    inputSchema: {
+      type: 'object',
+      properties: { candidateId: { type: 'string' }, request: { type: 'object' }, plan: { type: 'object' } },
+      required: ['candidateId', 'request', 'plan'],
       additionalProperties: false
     }
   },
@@ -187,7 +197,7 @@ function projectInspection(inspection: Awaited<ReturnType<FrontdoorOrchestrator[
       aggregateResultRef: inspection.run.aggregateResultRef,
       nodes: inspection.run.nodes.map((record) => ({ nodeId: record.node.nodeId, role: record.node.role, adapterId: record.node.adapterId, state: record.state, attempt: record.attempt, childTaskId: record.childTaskId, childJobId: record.childJobId, threadId: record.threadId, resultStatus: record.resultStatus, resultRef: record.resultRef, resultHash: record.resultHash, childInputHash: record.childInputHash, questionIds: record.questionIds, error: boundedText(record.error, 500) }))
     },
-    request: { requestId: inspection.request.requestId, source: inspection.request.source, objective: boundedText(inspection.request.objective), projectRef: boundedText(inspection.request.projectRef, 500), requestedOutput: boundedText(inspection.request.requestedOutput), inputHash: inspection.request.inputHash, state: inspection.request.state },
+    request: { requestId: inspection.request.requestId, source: inspection.request.source, objective: boundedText(inspection.request.objective), projectRef: boundedText(inspection.request.projectRef, 500), requestedOutput: boundedText(inspection.request.requestedOutput), inputHash: inspection.request.inputHash, state: inspection.request.state, sourceCandidateBinding: inspection.request.sourceCandidateBinding },
     plan: { planId: inspection.plan.planId, requestId: inspection.plan.requestId, version: inspection.plan.version, aggregationPolicy: inspection.plan.aggregationPolicy, nodeReviewPolicy: inspection.plan.nodeReviewPolicy, planHash: inspection.plan.planHash, nodes: inspection.plan.nodes.map((node) => ({ nodeId: node.nodeId, objective: boundedText(node.objective, 1000), role: node.role, adapterId: node.adapterId, dependsOn: node.dependsOn, depth: node.depth })) },
     decisions: inspection.decisions.map((decision) => ({ decisionId: decision.decisionId, gate: decision.gate, decision: decision.decision, targetHash: decision.targetHash, approvedBy: boundedText(decision.approvedBy, 120), decidedAt: decision.decidedAt })),
     aggregate: inspection.aggregate ? { aggregateId: inspection.aggregate.aggregateId, runId: inspection.aggregate.runId, status: inspection.aggregate.status, completedNodes: inspection.aggregate.completedNodes, failedNodes: inspection.aggregate.failedNodes, partialNodes: inspection.aggregate.partialNodes, childResults: inspection.aggregate.childResults, openQuestions: inspection.aggregate.openQuestions.map((question) => ({ questionId: question.questionId, nodeId: question.nodeId, kind: question.kind, text: boundedText(question.text, 2000), required: question.required, blocking: question.blocking, status: question.status })), conflicts: inspection.aggregate.conflicts.map((conflict) => boundedText(conflict, 2000)), evidenceRefs: inspection.aggregate.evidenceRefs, ownerDecisionRequired: inspection.aggregate.ownerDecisionRequired, nextAction: boundedText(inspection.aggregate.nextAction, 1000), createdAt: inspection.aggregate.createdAt } : undefined,
@@ -268,6 +278,16 @@ export class FrontdoorMcpServer {
       case 'adf_frontdoor_prepare': {
         const prepared = requireSuccess(await prepareFrontdoorRun(this.frontdoor, prepareInput(args)))
         return toolResult({ runId: prepared.run.runId, requestId: prepared.run.requestId, state: prepared.run.state, ownerGate: prepared.run.ownerGate, requestHash: prepared.run.requestHash, planHash: prepared.run.planHash, reused: prepared.reused, nextAction: prepared.run.ownerGate })
+      }
+      case 'adf_frontdoor_prepare_next_request_from_candidate': {
+        onlyKeys(args, ['candidateId', 'request', 'plan'])
+        if (!isRecord(args.request) || !isRecord(args.plan)) throw new Error('candidate Request preparation requires request and plan objects')
+        const prepared = requireSuccess(await prepareNextRequestFromAcceptedCandidate(this.frontdoor, {
+          candidateId: safeIdentifier(args.candidateId, 'candidateId'),
+          request: args.request as never,
+          plan: args.plan as never
+        }))
+        return toolResult({ runId: prepared.run.runId, requestId: prepared.run.requestId, state: prepared.run.state, ownerGate: prepared.run.ownerGate, requestHash: prepared.run.requestHash, planHash: prepared.run.planHash, reused: prepared.reused, sourceCandidateBinding: prepared.sourceCandidateBinding, nextAction: prepared.run.ownerGate })
       }
       case 'adf_frontdoor_inspect': {
         onlyKeys(args, ['runId'])

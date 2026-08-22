@@ -22,6 +22,24 @@ export interface ImplementationSourceBinding {
   capabilityGrantHash: string
   bindingHash: string
 }
+
+/** Provenance binding for a Request explicitly created from an accepted Candidate. */
+export interface AcceptedCandidateSourceBinding {
+  candidateId: string
+  candidateHash: string
+  artifactRef: string
+  reviewDecisionId: string
+  reviewTargetHash: string
+  childRunId: string
+  parentRunId: string
+  sourceAggregateRef: string
+  sourceAggregateHash: string
+  sourceResultRef: string
+  sourceResultHash: string
+  sourceEvidenceRef: string
+  sourceEvidenceHash: string
+  bindingHash: string
+}
 export interface CandidateFile {
   relativePath: string
   content: string

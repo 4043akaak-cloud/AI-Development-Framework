@@ -123,7 +123,7 @@ describe('ADF-MCP-CLIENT-E2E-001 stdio MCP client', () => {
 
       const listed = await client.request('tools/list') as { tools: Array<{ name: string }> }
       expect(listed.tools.map((tool) => tool.name)).toEqual([
-        'adf_frontdoor_prepare', 'adf_frontdoor_inspect', 'adf_frontdoor_get_context_capsule', 'adf_frontdoor_propose_obsidian_update', 'adf_frontdoor_dispatch_approved', 'adf_frontdoor_get_result', 'adf_frontdoor_get_workplane_artifact', 'adf_frontdoor_list_runs'
+        'adf_frontdoor_prepare', 'adf_frontdoor_prepare_next_request_from_candidate', 'adf_frontdoor_inspect', 'adf_frontdoor_get_context_capsule', 'adf_frontdoor_propose_obsidian_update', 'adf_frontdoor_dispatch_approved', 'adf_frontdoor_get_result', 'adf_frontdoor_get_workplane_artifact', 'adf_frontdoor_list_runs'
       ])
 
       const prepared = textResult(await client.request('tools/call', { name: 'adf_frontdoor_prepare', arguments: input(requestId) })) as { runId: string; ownerGate: string }

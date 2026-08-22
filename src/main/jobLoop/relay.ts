@@ -286,6 +286,7 @@ export class ConversationRelay {
         || existing.contextHash !== packet.contextHash
         || existing.routingPlanHash !== packet.approval.routingPlanHash
         || hashJson(existing.adapterPlan) !== hashJson(packet.adapterPlan)
+        || hashJson(existing.approvedFileSet ?? []) !== hashJson(packet.target.allowedFiles ?? [])
         || existing.inputHash !== registration.inputHash
         || hashJson(existing.implementationBinding ?? null) !== hashJson(packet.implementationBinding ?? null)) {
         throw new ThreadRejectedError(['existing Thread binding does not match the approved Packet; recovery-needed'])
@@ -303,6 +304,7 @@ export class ConversationRelay {
       contextHash: packet.contextHash,
       routingPlanHash: packet.approval.routingPlanHash,
       adapterPlan: packet.adapterPlan,
+      approvedFileSet: packet.target.allowedFiles,
       ...(packet.implementationBinding ? { implementationBinding: packet.implementationBinding } : {}),
       inputHash: registration.inputHash,
       createdAt: this.now(),
@@ -375,6 +377,7 @@ export class ConversationRelay {
         inputHash: thread.inputHash,
         scopeHash: thread.scopeHash,
         contextHash: thread.contextHash,
+        ...(thread.approvedFileSet ? { approvedFileSet: thread.approvedFileSet } : {}),
         ...(orchestrationRunId ? { orchestrationRunId } : {}),
         ...(dependencyResults?.length ? { dependencyResults } : {})
       })

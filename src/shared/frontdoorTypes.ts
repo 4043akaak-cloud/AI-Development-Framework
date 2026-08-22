@@ -1,5 +1,5 @@
 import type { AdapterRole, Capability, JobScope, ResultStatus } from './jobLoopTypes'
-import type { ImplementationSourceBinding } from './implementationTypes'
+import type { AcceptedCandidateSourceBinding, ImplementationSourceBinding } from './implementationTypes'
 
 export type FrontdoorRequestState = 'received' | 'needs-clarification' | 'ready-for-decomposition' | 'rejected'
 export type OrchestrationState = 'ready-for-approval' | 'running' | 'awaiting-owner' | 'complete' | 'partial' | 'blocked-by-question' | 'failed' | 'cancelled'
@@ -48,6 +48,7 @@ export interface FrontdoorRequestInput {
   scope: JobScope
   runKind?: 'frontdoor' | 'implementation'
   implementationBinding?: ImplementationSourceBinding
+  sourceCandidateBinding?: AcceptedCandidateSourceBinding
 }
 
 export interface FrontdoorPrepareInput {
@@ -143,6 +144,7 @@ export interface OrchestrationRun {
   nodeReview?: FrontdoorNodeReview
   runKind?: 'frontdoor' | 'implementation'
   implementationBinding?: ImplementationSourceBinding
+  sourceCandidateBinding?: AcceptedCandidateSourceBinding
 }
 
 export interface FrontdoorNodeReview {
@@ -327,6 +329,7 @@ export type FrontdoorEventType =
   | 'frontdoor.run-snapshot'
   | 'frontdoor.candidate-review-started'
   | 'frontdoor.candidate-reviewed'
+  | 'frontdoor.candidate-request-created'
 
 
 export interface FrontdoorLedgerEvent<TPayload extends Record<string, unknown> = Record<string, unknown>> {

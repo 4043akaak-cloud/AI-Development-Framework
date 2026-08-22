@@ -43,6 +43,7 @@ export interface CreateThreadInput {
   contextHash: string
   routingPlanHash: string
   adapterPlan: AdapterPlan
+  approvedFileSet?: readonly string[]
   implementationBinding?: ImplementationSourceBinding
   inputHash: string
   createdAt: string
@@ -69,6 +70,7 @@ export function createThread(input: CreateThreadInput): ConversationThread {
     contextHash: input.contextHash,
     routingPlanHash: input.routingPlanHash,
     adapterPlan: input.adapterPlan,
+    ...(input.approvedFileSet ? { approvedFileSet: [...input.approvedFileSet] } : {}),
     ...(input.implementationBinding ? { implementationBinding: input.implementationBinding } : {}),
     inputHash: input.inputHash,
     state: 'open',

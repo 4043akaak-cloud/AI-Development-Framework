@@ -3,7 +3,7 @@ import { AnthropicMessagesTransport } from './jobLoop/anthropicTransport'
 import { OllamaLocalHttpTransport } from './jobLoop/ollamaTransport'
 import type { OllamaTransportOptions } from './jobLoop/ollamaTransport'
 import { ExternalConversationAdapter } from './jobLoop/externalAdapter'
-import { FakeCriticConversationAdapter, FakeProposalConversationAdapter } from './jobLoop/conversationAdapters'
+import { FakeCriticConversationAdapter, FakeImplementationConversationAdapter, FakeProposalConversationAdapter } from './jobLoop/conversationAdapters'
 
 /**
  * Builds the live Provider-neutral Relay registration used by Electron Main and local
@@ -23,6 +23,7 @@ export function createLiveRelay(runtimeRoot: string, ollamaOptions: Pick<OllamaT
     adapters: [
       new FakeProposalConversationAdapter(),
       new FakeCriticConversationAdapter(),
+      new FakeImplementationConversationAdapter(),
       new ExternalConversationAdapter(externalAdapterId, 'proposal', externalTransport, {
         authorise: (request) => relay.externalHooks(externalAdapterId, externalTransport).authorise(request),
         recordCall: (record) => relay.externalHooks(externalAdapterId, externalTransport).recordCall(record),

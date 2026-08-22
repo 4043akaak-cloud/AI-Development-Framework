@@ -30,6 +30,11 @@ function definition(event: FrontdoorLedgerEvent, run: OrchestrationRun): Omit<Fr
       label = 'Request受領'
       detail = 'Frontdoor Runを作成しました。'
       break
+    case 'frontdoor.candidate-request-created':
+      kind = 'agent'
+      label = '採用CandidateからRequest生成'
+      detail = '窓口AIが明示したRequestにCandidateの来歴を束縛しました。'
+      break
     case 'frontdoor.owner-gate-opened':
       kind = 'owner'
       status = 'waiting'

@@ -24,7 +24,8 @@ export function frontdoorRunProjection(run: OrchestrationRun): unknown {
     aggregateResultRef: run.aggregateResultRef,
     nodeReview: run.nodeReview,
     runKind: run.runKind,
-    implementationBinding: run.implementationBinding
+    implementationBinding: run.implementationBinding,
+    sourceCandidateBinding: run.sourceCandidateBinding
   }
 }
 
@@ -41,6 +42,7 @@ function hasDecision(decisions: ReadonlyMap<string, OwnerDecisionEnvelope>, gate
 }
 
 function advanceOwnerGate(run: OrchestrationRun, decisions: ReadonlyMap<string, OwnerDecisionEnvelope>): OrchestrationRun {
+  if (['complete', 'partial', 'failed', 'cancelled'].includes(run.state) || run.ownerGate === 'completed' || run.ownerGate === 'stopped') return run
   if (!hasDecision(decisions, 'intake', ['proceed'])) return run
   if (!hasDecision(decisions, 'completion-shape', ['approve'])) return { ...run, ownerGate: 'awaiting-owner:completion-shape' }
   if (!hasDecision(decisions, 'decomposition', ['approve-selected'])) return { ...run, ownerGate: 'awaiting-owner:decomposition' }
@@ -125,6 +127,20 @@ export function replayFrontdoorRun(events: readonly FrontdoorLedgerEvent[]): Orc
       // new Owner actions are still checked against the current gate by the
       // service layer.
       run = advanceOwnerGate(run, decisions)
+    }
+    if (event.type === 'frontdoor.candidate-request-created') {
+      const binding = run.sourceCandidateBinding
+      if (!binding
+        || payload.requestId !== run.requestId
+        || payload.requestHash !== run.requestHash
+        || payload.sourceCandidateBindingHash !== binding.bindingHash
+        || payload.candidateId !== binding.candidateId
+        || payload.candidateHash !== binding.candidateHash
+        || payload.artifactRef !== binding.artifactRef
+        || payload.reviewDecisionId !== binding.reviewDecisionId
+        || payload.reviewTargetHash !== binding.reviewTargetHash
+        || payload.sourceRunId !== binding.childRunId
+        || payload.parentRunId !== binding.parentRunId) throw new Error('Candidate Request creation Event is not bound to the persisted Request source Candidate')
     }
     if (event.type === 'frontdoor.node-approved') {
       const decisionId = typeof payload.decisionId === 'string' ? payload.decisionId : ''
