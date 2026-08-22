@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ThreadSummary } from '../src/shared/threadTypes'
-import { laneForThread, liveLaneCounts, projectLiveBoard, statusLabelForThread } from '../src/renderer/src/boardProjection'
+import { isLiveArtifactOpenable, laneForThread, liveLaneCounts, projectLiveBoard, statusLabelForThread } from '../src/renderer/src/boardProjection'
 
 function thread(overrides: Partial<ThreadSummary> = {}): ThreadSummary {
   return {
@@ -88,6 +88,14 @@ describe('projectLiveBoard', () => {
 
   it('returns an empty list for an empty runtime', () => {
     expect(projectLiveBoard([], [])).toEqual([])
+  })
+})
+
+describe('isLiveArtifactOpenable', () => {
+  it('opens only completed real Threads from the Done lane', () => {
+    expect(isLiveArtifactOpenable(projectLiveBoard([thread({ state: 'completed', turnCount: 3 })], [])[0])).toBe(true)
+    expect(isLiveArtifactOpenable(projectLiveBoard([thread({ state: 'approved', turnCount: 2 })], [])[0])).toBe(false)
+    expect(isLiveArtifactOpenable(projectLiveBoard([], ['ADF-NOT-STARTED-001'])[0])).toBe(false)
   })
 })
 

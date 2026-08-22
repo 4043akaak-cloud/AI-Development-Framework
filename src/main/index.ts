@@ -5,7 +5,7 @@ import { openResolvedCanonicalSource, type CanonicalSourceDefinition } from './c
 import { safeDevelopmentRendererUrl } from '../shared/rendererUrlPolicy'
 import { createLiveRelay } from './liveRelay'
 import type { ConversationRelay } from './jobLoop/relay'
-import { cancelExternal, continueThread, decideThread, externalSendState, getThread, listApprovedTaskIds, listExternalAdapters, listThreads, ollamaReadiness, preflightExternal, recoverThread, scanForRecovery, sendExternal, sendFirstTurn, startApprovedThread } from './relayService'
+import { cancelExternal, continueThread, decideThread, externalSendState, getThread, inspectLiveArtifacts, listApprovedTaskIds, listExternalAdapters, listThreads, ollamaReadiness, preflightExternal, recoverThread, scanForRecovery, sendExternal, sendFirstTurn, startApprovedThread } from './relayService'
 import { approveFrontdoorRun, answerFrontdoorQuestion, completeFrontdoorRun, dispatchFrontdoorRun, exportFrontdoorArtifact, inspectCandidate, inspectFrontdoorRun, listFrontdoorRuns, listReviewableCandidates, prepareFrontdoorRun, proposeFrontdoorPlan, recoverFrontdoorRun, reviewCandidate, reviewFrontdoorNode, reviewFrontdoorResult, startCandidateReview, stopFrontdoorRun } from './frontdoor/frontdoorService'
 
 import { FrontdoorOrchestrator } from './frontdoor/orchestrator'
@@ -57,6 +57,7 @@ app.whenReady().then(async () => {
   const planner = new DeterministicFakePlanner()
   ipcMain.handle('relay:list', () => listThreads(relay))
   ipcMain.handle('relay:get', (_event, threadId: unknown) => getThread(relay, threadId))
+  ipcMain.handle('relay:inspect-artifacts', (_event, threadId: unknown) => inspectLiveArtifacts(relay, threadId))
   ipcMain.handle('relay:approved-tasks', () => listApprovedTaskIds(relay))
   ipcMain.handle('relay:start', (_event, taskId: unknown) => startApprovedThread(relay, taskId))
   ipcMain.handle('relay:send-first', (_event, threadId: unknown) => sendFirstTurn(relay, threadId))

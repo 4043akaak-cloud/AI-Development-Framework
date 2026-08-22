@@ -411,6 +411,7 @@ describe('ADF-EXTERNAL-ADAPTER-001 Electron wiring', () => {
       'relay:approved-tasks',
       'relay:list',
       'relay:get',
+      'relay:inspect-artifacts',
       'relay:start',
       'relay:send-first',
       'relay:continue',

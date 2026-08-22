@@ -1,5 +1,6 @@
 import type { OpenSourceResult } from '../../shared/boardTypes'
 import type { ConversationThread, OwnerAction, RecoveryAction, RelayResult, ThreadSummary } from '../../shared/threadTypes'
+import type { LiveArtifactInspection } from '../../shared/liveArtifactTypes'
 import type { ExternalPreflight, OllamaReadiness } from '../../shared/externalAdapterTypes'
 import type { AdapterProfile } from '../../shared/jobLoopTypes'
 import type { FrontdoorInspection, FrontdoorPlanProposal, FrontdoorPrepareInput, FrontdoorPrepareResult, FrontdoorRequestInput, FrontdoorReturn, FrontdoorRunSummary, OwnerDecisionEnvelope, OwnerGate, OrchestrationRun, WorkPlaneArtifactManifest } from '../../shared/frontdoorTypes'
@@ -13,6 +14,7 @@ declare global {
       listApprovedTaskIds: () => Promise<RelayResult<string[]>>
       listThreads: () => Promise<RelayResult<ThreadSummary[]>>
       getThread: (threadId: string) => Promise<RelayResult<ConversationThread>>
+      inspectLiveArtifacts: (threadId: string) => Promise<RelayResult<LiveArtifactInspection>>
       startThread: (taskId: string) => Promise<RelayResult<ConversationThread>>
       sendFirstTurn: (threadId: string) => Promise<RelayResult<ConversationThread>>
       continueThread: (threadId: string, note?: string) => Promise<RelayResult<ConversationThread>>

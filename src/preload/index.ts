@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { OpenSourceResult } from '../shared/boardTypes'
 import type { ConversationThread, OwnerAction, RecoveryAction, RelayResult, ThreadSummary } from '../shared/threadTypes'
+import type { LiveArtifactInspection } from '../shared/liveArtifactTypes'
 import type { ExternalPreflight, OllamaReadiness } from '../shared/externalAdapterTypes'
 import type { AdapterProfile } from '../shared/jobLoopTypes'
 import type { FrontdoorInspection, FrontdoorPlanProposal, FrontdoorPrepareInput, FrontdoorPrepareResult, FrontdoorRequestInput, FrontdoorReturn, FrontdoorRunSummary, OwnerDecisionEnvelope, OwnerGate, OrchestrationRun, WorkPlaneArtifactManifest } from '../shared/frontdoorTypes'
@@ -13,6 +14,7 @@ contextBridge.exposeInMainWorld('adfRelay', {
   listApprovedTaskIds: (): Promise<RelayResult<string[]>> => ipcRenderer.invoke('relay:approved-tasks'),
   listThreads: (): Promise<RelayResult<ThreadSummary[]>> => ipcRenderer.invoke('relay:list'),
   getThread: (threadId: string): Promise<RelayResult<ConversationThread>> => ipcRenderer.invoke('relay:get', threadId),
+  inspectLiveArtifacts: (threadId: string): Promise<RelayResult<LiveArtifactInspection>> => ipcRenderer.invoke('relay:inspect-artifacts', threadId),
   startThread: (taskId: string): Promise<RelayResult<ConversationThread>> => ipcRenderer.invoke('relay:start', taskId),
   sendFirstTurn: (threadId: string): Promise<RelayResult<ConversationThread>> => ipcRenderer.invoke('relay:send-first', threadId),
   continueThread: (threadId: string, note?: string): Promise<RelayResult<ConversationThread>> => ipcRenderer.invoke('relay:continue', threadId, note ?? null),

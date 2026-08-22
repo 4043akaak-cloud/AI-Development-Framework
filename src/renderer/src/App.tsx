@@ -3,7 +3,8 @@ import type { BoardCard, BoardLane, SnapshotState } from '../../shared/boardType
 import { artifactSnapshot, adapterSnapshot, grantSnapshot, integrationGateSnapshot, jobSnapshot } from './data/foundationSnapshot'
 import { boardSnapshot } from './data/boardSnapshot'
 import { registeredProjectFor, registeredProjects } from '../../shared/projectRegistry'
-import { liveLaneCounts, projectLiveBoard, type LiveBoardEntry } from './boardProjection'
+import { isLiveArtifactOpenable, liveLaneCounts, projectLiveBoard, type LiveBoardEntry } from './boardProjection'
+import type { LiveArtifactInspection } from '../../shared/liveArtifactTypes'
 import ThreadPanel from './ThreadPanel'
 import FrontdoorPanel from './FrontdoorPanel'
 import './styles.css'
@@ -40,9 +41,10 @@ function SourceButton({ label, sourceId }: { label: string; sourceId: string }):
   )
 }
 
-function LiveCard({ entry }: { entry: LiveBoardEntry }): JSX.Element {
-  return (
-    <div className="task-card live-card" aria-label={`${entry.taskId} (${entry.statusLabel})`}>
+function LiveCard({ entry, selected, onOpen }: { entry: LiveBoardEntry; selected: boolean; onOpen: () => void }): JSX.Element {
+  const openable = isLiveArtifactOpenable(entry)
+  const body = (
+    <>
       <span className="card-id">{entry.taskId}</span>
       <span className="card-objective">{entry.title}</span>
       <span className="card-status">状態: {entry.statusLabel}</span>
@@ -52,7 +54,87 @@ function LiveCard({ entry }: { entry: LiveBoardEntry }): JSX.Element {
         {entry.recoveryRequired && <span className="live-badge recovery">Recovery</span>}
       </div>
       {entry.updatedAt && <small className="turn-refs">更新: {entry.updatedAt}</small>}
-    </div>
+      {openable && <span className="live-artifact-cta">成果物を確認</span>}
+    </>
+  )
+  if (!openable) return <div className="task-card live-card" aria-label={`${entry.taskId} (${entry.statusLabel})`}>{body}</div>
+  return <button type="button" className={`task-card live-card live-card-action ${selected ? 'selected' : ''}`} aria-label={`${entry.taskId} の成果物を確認`} aria-pressed={selected} onClick={onOpen}>{body}</button>
+}
+
+function artifactStatusCopy(status: string): string {
+  switch (status) {
+    case 'available': return '確認済み'
+    case 'broken': return 'Broken（参照不可）'
+    case 'not-generated': return '未生成'
+    default: return '対象外'
+  }
+}
+
+function LiveArtifactPanel({ threadId, onClose }: { threadId: string; onClose: () => void }): JSX.Element {
+  const [inspection, setInspection] = useState<LiveArtifactInspection | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let active = true
+    setInspection(null)
+    setError(null)
+    void window.adfRelay.inspectLiveArtifacts(threadId).then((result) => {
+      if (!active) return
+      if (result.ok) setInspection(result.value)
+      else setError(result.error)
+    })
+    return () => { active = false }
+  }, [threadId])
+
+  return (
+    <section className="live-artifact-panel" aria-label="完了Threadの成果物" aria-live="polite">
+      <div className="thread-heading">
+        <div>
+          <p className="eyebrow">EVIDENCE PLANE · READ ONLY</p>
+          <h3>成果物を確認</h3>
+          <p>ResultとEvidenceはMain側でThread・Job・hashを検証してから表示しています。ここから承認・送信・Export・正本書込みは行いません。</p>
+        </div>
+        <button type="button" className="text-button" onClick={onClose}>閉じる</button>
+      </div>
+      {error && <p className="failure" role="alert">成果物を読み込めませんでした: {error}</p>}
+      {!inspection && !error && <p className="lane-empty">成果物を検証中…</p>}
+      {inspection && (
+        <>
+          <dl className="detail-grid">
+            <div><dt>Task</dt><dd>{inspection.taskId}</dd></div>
+            <div><dt>Thread</dt><dd>{inspection.threadId}</dd></div>
+            <div><dt>Job</dt><dd>{inspection.jobId}</dd></div>
+          </dl>
+          <section className="live-artifact-section" aria-label="Result Envelope">
+            <h4>Result Envelope</h4>
+            {inspection.results.length === 0 && <p className="lane-empty">Resultはまだありません。</p>}
+            {inspection.results.map((result) => (
+              <article key={result.turnId} className={`live-artifact-card ${result.artifactStatus}`}>
+                <div className="turn-meta"><strong>{result.role}</strong><span>{result.adapterId}</span><small>{artifactStatusCopy(result.artifactStatus)} · {result.status}</small></div>
+                <small className="turn-refs">Turn {result.turnId} · {result.reference} · hash {result.hash ?? '検証不可'}</small>
+                {result.summary && <p className="turn-content"><strong>要約：</strong>{result.summary}</p>}
+                {result.content && <pre className="live-artifact-content">{result.content}</pre>}
+                {result.verification && result.verification.length > 0 && <ul className="live-artifact-list">{result.verification.map((check) => <li key={check.name}>{check.status === 'pass' ? '✓' : check.status === 'fail' ? '×' : '○'} {check.name}{check.reason ? ` — ${check.reason}` : ''}</li>)}</ul>}
+                {result.risks && result.risks.length > 0 && <p className="turn-refs"><strong>Risk：</strong>{result.risks.join(' · ')}</p>}
+                {result.issue && <p className="failure">{result.issue}</p>}
+              </article>
+            ))}
+          </section>
+          <section className="live-artifact-section" aria-label="Evidence">
+            <h4>Evidence</h4>
+            <article className={`live-artifact-card ${inspection.evidence.artifactStatus}`}>
+              <strong>{artifactStatusCopy(inspection.evidence.artifactStatus)}</strong>
+              <small className="turn-refs">{inspection.evidence.reference} · {inspection.evidence.turnCount} Turn · hash {inspection.evidence.hash ?? '検証不可'}</small>
+              {inspection.evidence.issue && <p className="failure">{inspection.evidence.issue}</p>}
+            </article>
+          </section>
+          <section className="live-artifact-section" aria-label="Work Plane">
+            <h4>Work Plane</h4>
+            <article className="live-artifact-card"><strong>{artifactStatusCopy(inspection.workPlane.artifactStatus)}</strong><p className="turn-refs">{inspection.workPlane.note}</p></article>
+          </section>
+        </>
+      )}
+    </section>
   )
 }
 
@@ -78,6 +160,7 @@ export default function App(): JSX.Element {
   // Live Board state. Independent from the Legacy Snapshot above: fetched from the Runtime Ledger
   // via the existing read-only relay IPC, never merged into the Legacy Snapshot's own lane counts.
   const [liveEntries, setLiveEntries] = useState<LiveBoardEntry[] | null>(null)
+  const [selectedLiveThreadId, setSelectedLiveThreadId] = useState<string | null>(null)
   const [liveError, setLiveError] = useState<string | null>(null)
   const [liveLoading, setLiveLoading] = useState(false)
 
@@ -160,13 +243,14 @@ export default function App(): JSX.Element {
                 <section key={lane.id} className="lane">
                   <h2>{lane.label}<span>{liveCounts[lane.id]}</span></h2>
                   <div className="lane-cards">
-                    {entries.length === 0 ? <p className="lane-empty">対象なし</p> : entries.map((entry) => <LiveCard key={entry.threadId ?? entry.taskId} entry={entry} />)}
+                    {entries.length === 0 ? <p className="lane-empty">対象なし</p> : entries.map((entry) => <LiveCard key={entry.threadId ?? entry.taskId} entry={entry} selected={entry.threadId === selectedLiveThreadId} onOpen={() => setSelectedLiveThreadId(entry.threadId ?? null)} />)}
                   </div>
                 </section>
               )
             })}
           </div>
         )}
+        {selectedLiveThreadId && <LiveArtifactPanel threadId={selectedLiveThreadId} onClose={() => setSelectedLiveThreadId(null)} />}
       </section>
 
       <FrontdoorPanel />

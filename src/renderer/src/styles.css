@@ -52,11 +52,24 @@ h1, h2, h3, p { margin-top: 0; } h1 { margin-bottom: 8px; font-size: 32px; } h2 
 .live-board { margin-top: 20px; border: 1px solid #2a5349; border-radius: 14px; background: #0d1e2f; padding: 22px; }
 .live-board .thread-heading { margin-bottom: 14px; }
 .live-card { cursor: default; }
+.live-card-action { cursor: pointer; }
+.live-artifact-cta { color: #9df0dd; font-size: 11px; font-weight: 700; }
 .live-card:hover { border-color: #355d74; background: #112639; }
+.live-card-action:hover, .live-card-action.selected { border-color: #7ed1c3; background: #17384c; }
 .live-badges { display: flex; flex-wrap: wrap; gap: 6px; }
 .live-badge { width: fit-content; padding: 3px 7px; border-radius: 99px; font-size: 11px; font-weight: 700; }
 .live-badge.owner-action { background: #194f48; color: #9df0dd; }
 .live-badge.recovery { background: #682e34; color: #ffc2c7; }
+.live-artifact-panel { margin-top: 18px; border: 1px solid #3f7a6d; border-radius: 12px; background: #0c1f1c; padding: 16px; }
+.live-artifact-panel .thread-heading { border-bottom-color: #2a5349; }
+.live-artifact-panel h3, .live-artifact-section h4 { color: #c8f3e8; }
+.live-artifact-section { display: grid; gap: 9px; margin-top: 16px; }
+.live-artifact-section h4 { margin: 0; }
+.live-artifact-card { display: grid; gap: 7px; border: 1px solid #2a5349; border-left-width: 4px; border-radius: 9px; background: #11302b; padding: 12px; }
+.live-artifact-card.available { border-left-color: #7ed1c3; }
+.live-artifact-card.broken { border-left-color: #ffc2c7; background: #2a1b20; }
+.live-artifact-content { max-height: 240px; overflow: auto; margin: 0; white-space: pre-wrap; color: #d9f3ec; font: inherit; font-size: 13px; line-height: 1.5; }
+.live-artifact-list { margin: 0; padding-left: 20px; color: #b3ccc4; font-size: 12px; }
 .legacy-board-wrapper { margin-top: 20px; border: 1px solid #4d4630; border-radius: 14px; background: #17140d; padding: 22px; }
 .legacy-board-wrapper .thread-heading { margin-bottom: 14px; }
 .legacy-board-wrapper .eyebrow { color: #d9b46a; }

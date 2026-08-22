@@ -3,9 +3,11 @@ import { readdir } from 'node:fs/promises'
 import type { AdapterProfile, ApprovedTaskPacket } from '../shared/jobLoopTypes'
 import type { ExternalPreflight, OllamaReadiness } from '../shared/externalAdapterTypes'
 import type { ConversationThread, OwnerAction, RecoveryAction, RelayResult, ThreadSummary } from '../shared/threadTypes'
+import type { LiveArtifactInspection } from '../shared/liveArtifactTypes'
 import { readJson } from './jobLoop/ledger'
 import type { ConversationRelay } from './jobLoop/relay'
 import { checkOllamaReadiness } from './jobLoop/ollamaTransport'
+import { inspectThreadArtifacts } from './jobLoop/liveArtifacts'
 
 const ownerActions: readonly OwnerAction[] = ['continue', 'stop', 'approve', 'next-task']
 
@@ -71,6 +73,14 @@ export function listThreads(relay: ConversationRelay): Promise<RelayResult<Threa
 
 export function getThread(relay: ConversationRelay, threadId: unknown): Promise<RelayResult<ConversationThread>> {
   return guard(() => relay.getConversationState(asIdentifier(threadId, 'threadId')))
+}
+
+/** Read-only, hash- and binding-checked Result/Evidence view for a completed Live Board Thread. */
+export function inspectLiveArtifacts(relay: ConversationRelay, threadId: unknown): Promise<RelayResult<LiveArtifactInspection>> {
+  return guard(async () => {
+    const thread = await relay.getConversationState(asIdentifier(threadId, 'threadId'))
+    return inspectThreadArtifacts(relay.runtimeRoot, thread)
+  })
 }
 
 /** Starts a Thread only for a Task that already has an Owner-approved packet on disk. */

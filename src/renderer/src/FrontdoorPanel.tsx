@@ -341,6 +341,26 @@ export default function FrontdoorPanel(): JSX.Element {
               </ul>
             </section>
 
+            {inspection.goalAlignment && (
+              <section className="frontdoor-card" aria-label="North Star Goal Alignment">
+                <h3>North Star進捗監視</h3>
+                <dl className="detail-grid">
+                  <div><dt>判定</dt><dd><strong>{inspection.goalAlignment.status}</strong></dd></div>
+                  <div><dt>現在地点</dt><dd>{inspection.goalAlignment.currentStep}</dd></div>
+                  <div><dt>期待Gate</dt><dd>{inspection.goalAlignment.expectedOwnerGate ?? 'なし'}</dd></div>
+                  <div><dt>Run投影Gate</dt><dd>{inspection.goalAlignment.actualOwnerGate ?? 'なし'}</dd></div>
+                  <div><dt>次に解放されるFlow</dt><dd>{inspection.goalAlignment.nextUnlockedStep ?? '現在のGateを完了'}</dd></div>
+                </dl>
+                <p className="turn-content">{inspection.goalAlignment.nextAction}</p>
+                <p className="turn-refs">{inspection.goalAlignment.goal.northStar}</p>
+                {inspection.goalAlignment.signals.length > 0 && (
+                  <ul className="frontdoor-decision-list">
+                    {inspection.goalAlignment.signals.map((item) => <li key={item.code}><strong>{item.severity}</strong> · {item.code} · {item.message}</li>)}
+                  </ul>
+                )}
+              </section>
+            )}
+
             <section className="frontdoor-card frontdoor-activity-toggle" aria-label="AI Activity表示設定">
               <div>
                 <h3>AI Activity（おまけ）</h3>

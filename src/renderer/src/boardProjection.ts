@@ -25,6 +25,11 @@ export interface LiveBoardEntry {
   updatedAt?: string
 }
 
+/** Only a completed real Thread has a result set that can be opened from the Done lane. */
+export function isLiveArtifactOpenable(entry: LiveBoardEntry): boolean {
+  return entry.kind === 'thread' && entry.state === 'completed' && Boolean(entry.threadId)
+}
+
 /**
  * `open` splits on turnCount because a freshly started Thread with no Turns yet still reads as
  * "being planned", not "in progress" — the first Turn is what actually starts implementation.
