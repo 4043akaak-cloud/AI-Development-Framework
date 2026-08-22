@@ -168,6 +168,59 @@ Window AI
 - Cycle 1は `awaiting-owner:result-review`。Proposal／Criticともsuccess、failed／partial／openQuestions／conflictsなし。
 - Result Review、Completion、Cycle 2 Requestは未実施。Result ReviewのOwner Decision後にのみ、次のRequestへ進む。
 
+### North Star Goal Alignment Monitor Record
+
+- 2026-08-21: Project Ownerが監視設計を承認し、読み取り専用のGoal Alignment Monitorを追加した。
+- 判定層 `src/main/frontdoor/goalAlignment.ts` は、North Starの現在地点、Ledgerから導出した期待Owner Gate、Run投影Gate、完了済みFlow、次に解放されるFlow、Request／Plan／Aggregate／Node Evidence bindingを比較する。
+- `FrontdoorInspection.goalAlignment`へ判定結果を付加し、Electron `FrontdoorPanel`、Frontdoor CLI Inspect、`adf_frontdoor` MCP Inspectから同じ判定を参照できる。監視はOwner Decisionを作成せず、Runtime／Canonical repo／Obsidianへ書き込まない。
+- Cycle 2 Run `run-47d82f0b99ebfb5f4cac`で、Intake Decision `owner-decision-7a44cac57818e255a6e9`とDecomposition Decision `owner-decision-e8dbf6c6071f4e3235c0`がLedgerに存在する一方、保存Runの`ownerGate`が`awaiting-owner:intake`のまま残る状態を、次のように検知した。
+  - status: `drift`
+  - currentStep: `plan`
+  - expectedOwnerGate: `completion-shape`
+  - actualOwnerGate: `intake`
+  - signal: `owner-gate-projection-stale`
+- このMonitorは不整合を表示するが、自動修復・承認再記録・Dispatchは行わない。Owner Gate投影をLedger Replayと一致させる修正は、別設計・別承認の後続Taskとする。
+- 検証: Goal Alignment対象19 tests、全Vitest 394/394、Node／Web／CLI typecheck、Electron build、`git diff --check`がPass。既存の未コミットLive Board／MCP Cursor差分は変更していない。
+
+### Cycle 2 Approval / Packet Record
+
+- Completion Shape `approve`: `owner-decision-a75bd51ae30b35be0715`。target hash `0de456c1682906b07dd9ce6a5543c502de23a08d62d50767cb492a64b7b435e4`。
+- Cycle 2 Proposal Packet: `adf-2cycle-20260821-cycle2::proposal`、Packet hash `b395926dd84e16e3688454a13efaedfd0c8f7b6572ef8075d5ad32312d583780`、Fake Adapter `fake-ai-a`、local-only。
+- Cycle 2 Critic Packet: `adf-2cycle-20260821-cycle2::critic`、Packet hash `35c450354bfc1ab03a3464741c683a0ce74d79a651e6ba9b0ea2ac39ee5a9a44`、Fake Adapter `fake-ai-b`、local-only。
+- 両PacketはRun `run-47d82f0b99ebfb5f4cac`、Request hash `4bc4cc4d9fa3394980431b55a8f18935d66a8820be8e358ccc00161ea839c466`、Plan hash `db661342a5dac4657c51f243ef28f82433bfbdc50391e4a2d9261632df79630e`、各Nodeへ束縛し、既存Packetを上書きしていない。
+- Packet-bound Dispatch `dispatch`: `owner-decision-547c7f05b1676ce74ae5`、target hash `8aadff93e978d2cbd7b8b40d57c6b93f57c9a75e80daae5d6c42e85cd92cdd2e`。Proposal／CriticのNode approvalとPacket hashをLedgerで確認した。
+- 現在はNode実行前。Job／Thread／Result／EvidenceはCycle 2では未生成。実Dispatchは別のOwner指示を受けるまで実行しない。
+- Goal Alignment Monitorは、Dispatch承認後の現在地点を`ai-execution`、状態を`drift`とし、期待される実行開始に対してRun投影`intake`が古いことを検知している。
+
+### Projection / Replay / Dispatch Boundary Repair Record
+
+- 2026-08-22: Project Ownerが再設計を承認し、Ledger ReplayをOwner Gateの意味上の正本、`run.json`を再構築可能なProjection Cacheとして扱う実装へ変更した。
+- `readProjectedRun`は、Ledger Replayとの差分がOwner Gateだけの場合に限ってRuntimeの`run.json`／bundle manifestを再構築する。Node／Result／State／binding差分は`Frontdoor event replay/projection integrity`としてfail-closedにする。
+- Owner DecisionのReplayは、Intake → Completion Shape → Decomposition → Dispatchの承認済み最長地点を決定論的に導出する。既存Ledgerの承認記録順序は変更せず、既存のCycle 2記録も再生可能にした。
+- Dispatch target hashへ選択Nodeの実行状態、Result hash、Child input hash、Packet hashを含め、`approval-bound`をDispatch Decision ID／target hashへ束縛した。Node Review後は実行コンテキストが変わるため、旧Dispatch承認を再利用せず、再度の明示Dispatch承認を要求する。
+- 検証: 全Vitest `395/395`、Node／Web／CLI typecheck、Electron build、`git diff --check`がPass。Cycle 2 Run `run-47d82f0b99ebfb5f4cac`をLedgerから再読込し、`Goal Alignment = aligned`、`currentStep = dispatch`、`expectedOwnerGate = dispatch`、`actualOwnerGate = dispatch`、eventCount `8`を確認した。
+- 現在は、承認済みPacketの実Dispatch前で停止している。Cycle 2のJob／Thread／Result／Evidence／Aggregateは未生成であり、実Node実行には別の明示的Owner指示が必要である。外部送信、資格情報、課金、Canonical repo／Obsidian書込みは行っていない。
+- 実装後Safety/Critic読み取りレビュー: P0なし。残存P1は、Cycle 2の実行証跡未生成、Runtime投影修復を読み取り境界で行う設計、下位Fake向けLegacy非Packet-bound経路、Owner identity／期限管理の強化余地、既存dirty差分との最終Diff分離である。現Cycle 2のMCP経路はPacket-bound・local-onlyを強制している。
+
+### Cycle 2 Packet Scope Repair Record
+
+- 2026-08-22: 実DispatchのPreflightで、Proposal／Critic Packetの`outOfScope`にPlan側に存在しない`merge`が含まれ、厳密なscope一致検証により停止した。Job／Thread／Result／Evidenceは生成されていない。
+- Project Ownerの修正設計承認後、fail-closedの完全一致検証は維持し、現在のPlan scopeから`merge`だけを除いたReplacement PacketをRuntimeへ配置した。各Packetの`scopeHash`と`approval.scopeHash`の自己整合を確認した。
+- 修正後Packet hash: Proposal `512788d1c5c88759d718be413e56628c3efcb7c9650ced95b23613cc9844dfbb`、Critic `83184b5304268230e770ed2b286d2375905271a3ef348557cff779c06a30b03d`。
+- 修正後のPacket-bound Dispatch target hashは`173ff0b4d2bcf35d686dcf954e0edf0bcab12673b82c0b03f66ebd6bd0ab41d7`。旧target hashのDispatch承認は再利用せず、現在Packetに対するOwner再承認待ちである。
+- 修正前Packetは`approved-tasks/*::scope-mismatch-original.json`として保存し、旧Ledger上のDecision／Node approvalとの再現性を保持した。現在はNode未実行、外部送信・Canonical書込み・commit・pushなし。
+- 2026-08-22: Replacement Packetに対するOwner再承認を記録。Decision `owner-decision-03fd752a890a087a9f46`、target hash `173ff0b4d2bcf35d686dcf954e0edf0bcab12673b82c0b03f66ebd6bd0ab41d7`。
+- 同target hashへ`frontdoor.approval-bound`を記録し、Proposal Nodeだけを実Dispatchした。Criticは依存Nodeとしてqueuedのまま保持した。
+- Proposal Job `job-c6bcbd38e4f96ce6`、Thread `thread-cf32d92a2a4d1a61`、Result ref `threads/thread-cf32d92a2a4d1a61/results/turn-0-83437ab50eaf.json`、Result hash `e6aefcf8fc44e97187293dcf66724054c076cb73f03aed443bbbba73ff32dd1c`、Evidence hash `de0f51fdbf998097859ff853d4b9825eab15521b843ce6a310623f142c673931`を確認した。Result verificationは`scope-boundary: pass`、riskなし。
+- 現在のRunは`awaiting-owner:node-review`、Goal Alignmentは`awaiting-owner / node-review`。Aggregateは未生成で、Critic実行にはProposal ResultをOwnerが確認し、Node Review `continue`を明示する必要がある。
+- 2026-08-22: Proposal Node Review `continue`を記録。Decision `owner-decision-11e87f884c63657dc5f2`、target hash `7c7e920693dc9815ab324e4b8a0bed5ee24fcf756756f088fa0159952176e1b1`。Proposal Result／Evidenceを承認し、Criticへの依存継続を許可した。
+- Node Review後は実行コンテキストが変化したため、Runは`ready-for-approval / awaiting-owner:dispatch`へ戻った。Criticを起動する新Dispatch target hashは`71133bcbf35e5376aac3943619b947021cd57ddf4ab9aba8d6e4914192e706fa`であり、Critic実行前の再Dispatch承認待ちである。
+- 2026-08-22: Critic DispatchをOwner承認。Decision `owner-decision-f457f862c56aee508b4f`、target hash `71133bcbf35e5376aac3943619b947021cd57ddf4ab9aba8d6e4914192e706fa`。Proposalは再実行せず、Critic Nodeだけを実行した。
+- Critic Job `job-8bf3cc25e7b6aad6`、Thread `thread-b823a20cc5203bc2`、Result ref `threads/thread-b823a20cc5203bc2/results/turn-0-ab8650b8ecba.json`、Result hash `47470e4a021a2e9ec4684c8545639d420df0c51b5170281f511017cf4d0436e2`、Evidence hash `7058fd90af4110aec7500b6e00180c1c4c072247e0cdfc87f1937a04de238545`を確認した。`prior-turn-reference: pass`で、Proposal Result hash `e6aefcf8fc44e97187293dcf66724054c076cb73f03aed443bbbba73ff32dd1c`への依存bindingを確認した。
+- Aggregate `aggregate-a6208748ddb02c47fa8d`、Aggregate hash `a1ba6d47d6f025af81a9f872ed717482782863f298abf7f6be4799f8adbdbe80`を生成。両Node success、failed／partial／openQuestions／conflictsなし。Runは`awaiting-owner:result-review`で、Result Review前に停止している。
+- 2026-08-22: Cycle 2 Aggregate／EvidenceのResult Review `accept`を記録。Decision `owner-decision-4500a45e453883f1a30d`、target hash `9bd5559219dfc5ffbde4654eb00be130686f636cff8740e02ace1976433f871a`、有効期限は1時間。Runは`awaiting-owner:completion`へ進み、Completion最終承認前で停止している。
+- 2026-08-22: Cycle 2 Completion承認を記録。Decision `owner-decision-125bfbe109c685778dab`、target hashはResult Reviewと同じ`9bd5559219dfc5ffbde4654eb00be130686f636cff8740e02ace1976433f871a`。Run `run-47d82f0b99ebfb5f4cac`は`complete / completed`、Goal Alignmentは`aligned / completed`となり、次のRequestが解放された。
+
 ## 11. Handover
 
 実行後に、CycleごとのRequest／Plan／Run／Node／Job／Thread／Result／Evidence／Decision ID、hash、Ledger Replay、Owner Gate、画面確認、未検証事項、残存リスク、次の安全なTaskを追記する。

@@ -188,6 +188,31 @@ export interface AggregateResult {
   createdAt: string
 }
 
+export interface GoalAlignmentSignal {
+  code: string
+  severity: 'info' | 'warning' | 'error'
+  message: string
+}
+
+export type GoalAlignmentStatus = 'aligned' | 'awaiting-owner' | 'drift' | 'blocked' | 'evidence-gap'
+export type NorthStarStep = 'intake' | 'plan' | 'dispatch' | 'ai-execution' | 'node-review' | 'result-review' | 'completion' | 'completed'
+
+export interface GoalAlignmentReport {
+  status: GoalAlignmentStatus
+  currentStep: NorthStarStep
+  expectedOwnerGate?: OwnerGate
+  actualOwnerGate?: string
+  completedSteps: NorthStarStep[]
+  nextUnlockedStep?: NorthStarStep | 'next-request'
+  nextAction: string
+  signals: GoalAlignmentSignal[]
+  goal: {
+    northStar: string
+    finalFlowContribution: string
+    verticalSliceOutcome: string
+  }
+}
+
 export interface FrontdoorReturn {
   requestId: string
   runId: string
@@ -216,6 +241,7 @@ export interface FrontdoorInspection {
   nodeTargetHashes: Record<string, string>
   nodeReview?: FrontdoorNodeReview
   activities: FrontdoorActivity[]
+  goalAlignment?: GoalAlignmentReport
 }
 
 export interface WorkPlaneArtifactManifest {

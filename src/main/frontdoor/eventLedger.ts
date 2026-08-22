@@ -6,12 +6,45 @@ import { hashJson } from '../jobLoop/hash'
 
 export const frontdoorGenesisHash = 'frontdoor-ledger-genesis-v1'
 
+/**
+ * The persisted run is a rebuildable projection. Keep this semantic projection
+ * stable so replay comparisons do not depend on cache timestamps or manifests.
+ */
+export function frontdoorRunProjection(run: OrchestrationRun): unknown {
+  return {
+    runId: run.runId,
+    requestId: run.requestId,
+    requestHash: run.requestHash,
+    planHash: run.planHash,
+    state: run.state,
+    ownerGate: run.ownerGate,
+    nodes: run.nodes,
+    approvalIds: run.approvalIds,
+    openQuestionIds: run.openQuestionIds,
+    aggregateResultRef: run.aggregateResultRef,
+    nodeReview: run.nodeReview,
+    runKind: run.runKind,
+    implementationBinding: run.implementationBinding
+  }
+}
+
 export function frontdoorEventsPath(runtimeRoot: string, runId: string): string {
   return path.join(runtimeRoot, 'frontdoor-runs', runId, 'events.jsonl')
 }
 
 function eventHash(event: Omit<FrontdoorLedgerEvent, 'eventHash'>): string {
   return hashJson(event)
+}
+
+function hasDecision(decisions: ReadonlyMap<string, OwnerDecisionEnvelope>, gate: OwnerDecisionEnvelope['gate'], values: readonly OwnerDecisionEnvelope['decision'][]): boolean {
+  return [...decisions.values()].some((decision) => decision.gate === gate && values.includes(decision.decision))
+}
+
+function advanceOwnerGate(run: OrchestrationRun, decisions: ReadonlyMap<string, OwnerDecisionEnvelope>): OrchestrationRun {
+  if (!hasDecision(decisions, 'intake', ['proceed'])) return run
+  if (!hasDecision(decisions, 'completion-shape', ['approve'])) return { ...run, ownerGate: 'awaiting-owner:completion-shape' }
+  if (!hasDecision(decisions, 'decomposition', ['approve-selected'])) return { ...run, ownerGate: 'awaiting-owner:decomposition' }
+  return { ...run, ownerGate: 'awaiting-owner:dispatch' }
 }
 
 export async function readFrontdoorEvents(runtimeRoot: string, runId: string): Promise<FrontdoorLedgerEvent[]> {
@@ -87,6 +120,11 @@ export function replayFrontdoorRun(events: readonly FrontdoorLedgerEvent[]): Orc
       if (!decision || decision.runId !== event.runId || !decision.requestId || !decision.decisionId || !decision.approvedBy || !/^[a-f0-9]{64}$/.test(decision.targetHash)) throw new Error('Frontdoor Owner Decision envelope is invalid')
       if (decisions.has(decision.decisionId)) throw new Error('Frontdoor Owner Decision is duplicated')
       decisions.set(decision.decisionId, decision)
+      // Replaying old ledgers may encounter decisions recorded in a different
+      // order. The effective gate is the furthest contiguous approved milestone;
+      // new Owner actions are still checked against the current gate by the
+      // service layer.
+      run = advanceOwnerGate(run, decisions)
     }
     if (event.type === 'frontdoor.node-approved') {
       const decisionId = typeof payload.decisionId === 'string' ? payload.decisionId : ''
@@ -99,6 +137,10 @@ export function replayFrontdoorRun(events: readonly FrontdoorLedgerEvent[]): Orc
         : decisions.get(String(payload.decisionId))
       const expectedGate = event.type === 'frontdoor.question-answered' ? 'question' : event.type === 'frontdoor.result-reviewed' ? 'result-review' : event.type === 'frontdoor.node-review-continued' ? 'node-review' : 'completion'
       if (!decision || decision.runId !== event.runId || decision.gate !== expectedGate || !decisions.has(decision.decisionId)) throw new Error(`Frontdoor ${event.type} is not bound to an Owner Decision`)
+    }
+    if (event.type === 'frontdoor.approval-bound' && payload.decisionId !== undefined) {
+      const decision = decisions.get(String(payload.decisionId))
+      if (!decision || decision.gate !== 'dispatch' || !['dispatch', 'approve-selected'].includes(decision.decision) || decision.targetHash !== payload.targetHash) throw new Error('Frontdoor approval-bound event is not bound to the current Dispatch Decision')
     }
     if (event.type === 'frontdoor.node-started' && (run.state !== 'running' || !currentNode || !['queued', 'ready', 'recovery-needed'].includes(currentNode.state))) throw new Error('Frontdoor node-started event has an invalid prior state')
     if (event.type === 'frontdoor.node-completed' && nodeId && nodeId !== 'dependency-resolution' && (!currentNode || currentNode.state !== 'running')) throw new Error('Frontdoor node completion event has an invalid prior state')
@@ -119,7 +161,7 @@ export function replayFrontdoorRun(events: readonly FrontdoorLedgerEvent[]): Orc
     if (event.type === 'frontdoor.node-review-continued') run = { ...run, state: 'ready-for-approval', ownerGate: 'awaiting-owner:dispatch', approvalIds: [], nodeReview: undefined }
     if (event.type === 'frontdoor.question-answered') run = { ...run, state: 'ready-for-approval', ownerGate: 'awaiting-owner:dispatch', approvalIds: [], aggregateResultRef: undefined, openQuestionIds: run.openQuestionIds.filter((id) => id !== payload.questionId) }
     if (event.type === 'frontdoor.run-recovery-needed') run = { ...run, state: 'awaiting-owner', ownerGate: 'awaiting-owner:dispatch' }
-    if (event.type === 'frontdoor.question-opened') run = { ...run, state: 'awaiting-owner', ownerGate: 'awaiting-owner:question', openQuestionIds: Array.isArray(payload.questionIds) ? payload.questionIds as string[] : run.openQuestionIds }
+    if (event.type === 'frontdoor.question-opened') run = { ...run, state: 'blocked-by-question', ownerGate: 'awaiting-owner:question', aggregateResultRef: typeof payload.aggregateRef === 'string' ? payload.aggregateRef : run.aggregateResultRef, openQuestionIds: Array.isArray(payload.questionIds) ? payload.questionIds as string[] : run.openQuestionIds }
     if (event.type === 'frontdoor.completion-proposed') run = { ...run, state: 'awaiting-owner', ownerGate: 'awaiting-owner:result-review', aggregateResultRef: typeof payload.aggregateRef === 'string' ? payload.aggregateRef : run.aggregateResultRef }
     if (event.type === 'frontdoor.result-reviewed' && (payload.decision as { decision?: unknown } | undefined)?.decision === 'accept') run = { ...run, ownerGate: 'awaiting-owner:completion' }
     if (event.type === 'frontdoor.run-stopped') run = { ...run, state: 'cancelled', ownerGate: 'stopped', nodeReview: undefined }

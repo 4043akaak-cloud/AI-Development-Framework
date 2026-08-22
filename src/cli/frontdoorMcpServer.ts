@@ -198,7 +198,8 @@ function projectInspection(inspection: Awaited<ReturnType<FrontdoorOrchestrator[
     nodeReview: inspection.nodeReview,
     eventCount: inspection.eventCount,
     nodeTargetHashes: inspection.nodeTargetHashes,
-    activities: inspection.activities
+    activities: inspection.activities,
+    goalAlignment: inspection.goalAlignment
   }
 }
 

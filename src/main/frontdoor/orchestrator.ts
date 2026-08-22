@@ -9,12 +9,13 @@ import { createDecompositionPlan, nodeReviewPolicyForPlan, readyNodeIds } from '
 import { createFrontdoorRequest } from './intake'
 import { aggregateResults, buildFrontdoorReturn } from './returnEnvelope'
 import { questionsFromThread } from './questionAggregator'
-import { claimRun, readPlan, readRequest, readRun, readRunClaim, readRunEvents, recordRunEvent, releaseRun, replayRunFromEvents, writeAggregate, writeRun, writeRunBundleExclusive } from './ledger'
+import { claimRun, readPlan, readProjectedRun, readRequest, readRun, readRunClaim, readRunEvents, recordRunEvent, releaseRun, replayRunFromEvents, writeAggregate, writeRun, writeRunBundleExclusive } from './ledger'
 import { readJson } from '../jobLoop/ledger'
 import type { AdapterResultEnvelope } from '../jobLoop/resultEnvelope'
 import { assertDispatchApproved, buildDecisionEnvelope, FrontdoorOwnerGateService, nodeReviewTargetHash, nodeTargetHash } from './ownerGates'
 import { getAdapterProfile } from '../jobLoop/adapterRegistry'
 import { buildActivityTrace } from './activityTrace'
+import { assessGoalAlignment } from './goalAlignment'
 import { assertRunEventConsistency, assertRunIntegrity } from './runIntegrity'
 
 export interface FrontdoorOrchestratorOptions {
@@ -141,7 +142,7 @@ export class FrontdoorOrchestrator {
       await writeRunBundleExclusive(this.runtimeRoot, request, plan, run)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-      const existing = await readRun(this.runtimeRoot, runId)
+      const existing = await readProjectedRun(this.runtimeRoot, runId)
       const existingRequest = await readRequest(this.runtimeRoot, runId)
       const existingPlan = await readPlan(this.runtimeRoot, runId)
       await assertRunIntegrity(this.runtimeRoot, existing, existingRequest, existingPlan)
@@ -157,7 +158,7 @@ export class FrontdoorOrchestrator {
   async executeApprovedRun(runId: string, packets: Readonly<Record<string, ApprovedTaskPacket>>, options: { requirePacketBinding?: boolean } = {}): Promise<FrontdoorReturn> {
     const claim = await claimRun(this.runtimeRoot, runId, `orchestrator-${process.pid}`)
     try {
-      let run = await readRun(this.runtimeRoot, runId)
+      let run = await readProjectedRun(this.runtimeRoot, runId)
       if (run.state !== 'ready-for-approval') throw new Error(`Frontdoor run is not ready for approval: ${run.state}`)
       const request = await readRequest(this.runtimeRoot, runId)
       const plan = await readPlan(this.runtimeRoot, runId)
@@ -168,7 +169,7 @@ export class FrontdoorOrchestrator {
       if (packetIds.join('|') !== nodeIds.join('|')) throw new Error('approved child packet set does not exactly match the DecompositionPlan')
       const packetHashes = Object.fromEntries(run.nodes.map((record) => [record.node.nodeId, hashJson(packets[record.node.nodeId])]))
       const requiresPacketBinding = options.requirePacketBinding === true || run.nodes.some((record) => getAdapterProfile(record.node.adapterId).connection === 'local-http')
-      await assertDispatchApproved(this.runtimeRoot, runId, nodeIds, packetHashes, requiresPacketBinding)
+      const dispatchDecision = await assertDispatchApproved(this.runtimeRoot, runId, nodeIds, packetHashes, requiresPacketBinding)
       for (const node of run.nodes) {
         const packet = packets[node.node.nodeId]
         if (packet.frontdoorBinding?.requestHash !== run.requestHash || packet.frontdoorBinding?.planHash !== run.planHash || packet.frontdoorBinding?.runId !== run.runId) throw new Error(`packet Frontdoor binding mismatch for ${node.node.nodeId}`)
@@ -218,7 +219,13 @@ export class FrontdoorOrchestrator {
         if (run.state === 'ready-for-approval') {
           run = { ...run, state: 'running', ownerGate: 'running', updatedAt: this.clock().toISOString(), approvalIds: run.nodes.map((node) => packets[node.node.nodeId].approval.approvalId) }
           await writeRun(this.runtimeRoot, run)
-          await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.approval-bound', { approvalIds: run.approvalIds })
+          await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.approval-bound', {
+            approvalIds: run.approvalIds,
+            decisionId: dispatchDecision.decisionId,
+            targetHash: dispatchDecision.targetHash,
+            nodeIds,
+            packetHashes
+          })
         }
         run = { ...run, nodes: run.nodes.map((node) => node.node.nodeId === nodeId ? { ...node, state: 'running', attempt: node.attempt + 1 } : node), updatedAt: this.clock().toISOString() }
         await writeRun(this.runtimeRoot, run)
@@ -305,7 +312,7 @@ export class FrontdoorOrchestrator {
       run = { ...run, state: 'awaiting-owner', ownerGate: 'awaiting-owner:result-review', openQuestionIds: aggregate.openQuestions.map((question) => question.questionId), aggregateResultRef: aggregateRef, updatedAt: this.clock().toISOString() }
       await writeRun(this.runtimeRoot, run)
       if (aggregate.openQuestions.length > 0) {
-        await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.question-opened', { questionIds: run.openQuestionIds, runState: run.state })
+        await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.question-opened', { questionIds: run.openQuestionIds, aggregateRef, aggregateHash: hashJson(aggregate), runState: run.state })
       } else {
         await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.completion-proposed', { aggregateRef, aggregateHash: hashJson(aggregate), openQuestionIds: [], runState: run.state })
       }
@@ -355,7 +362,7 @@ export class FrontdoorOrchestrator {
   async stopRun(runId: string, note = 'Owner stopped Frontdoor run', approvedBy = 'Project Owner'): Promise<OrchestrationRun> {
     const claim = await claimRun(this.runtimeRoot, runId, `stop-${process.pid}`)
     try {
-      const run = await readRun(this.runtimeRoot, runId)
+      const run = await readProjectedRun(this.runtimeRoot, runId)
       const request = await readRequest(this.runtimeRoot, runId)
       const plan = await readPlan(this.runtimeRoot, runId)
       await assertRunIntegrity(this.runtimeRoot, run, request, plan)
@@ -375,7 +382,7 @@ export class FrontdoorOrchestrator {
   }
 
   async getRun(runId: string): Promise<OrchestrationRun> {
-    const run = await readRun(this.runtimeRoot, runId)
+    const run = await readProjectedRun(this.runtimeRoot, runId)
     const request = await readRequest(this.runtimeRoot, runId)
     const plan = await readPlan(this.runtimeRoot, runId)
     await assertRunIntegrity(this.runtimeRoot, run, request, plan)
@@ -397,7 +404,7 @@ export class FrontdoorOrchestrator {
     const decisions = events
       .filter((event) => event.type === 'frontdoor.owner-decision-recorded')
       .map((event) => event.payload.decision as import('../../shared/frontdoorTypes').OwnerDecisionEnvelope)
-    return {
+    const inspection: FrontdoorInspection = {
       run,
       request,
       plan,
@@ -412,6 +419,8 @@ export class FrontdoorOrchestrator {
       nodeReview: run.nodeReview,
       activities: buildActivityTrace(events, run)
     }
+    inspection.goalAlignment = assessGoalAlignment(inspection)
+    return inspection
   }
 
   async getOpenQuestion(runId: string, questionId: string): Promise<FrontdoorQuestion> {

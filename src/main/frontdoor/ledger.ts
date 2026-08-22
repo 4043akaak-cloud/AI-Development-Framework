@@ -4,7 +4,7 @@ import type { DecompositionPlan, FrontdoorRequest, OrchestrationRun } from '../.
 import type { FrontdoorEventType, FrontdoorLedgerEvent } from '../../shared/frontdoorTypes'
 import { ensureDir, readJson, removeFile, writeJsonAtomic, writeJsonExclusive } from '../jobLoop/ledger'
 import { hashJson } from '../jobLoop/hash'
-import { appendFrontdoorEvent, readFrontdoorEvents, replayFrontdoorRun, validateFrontdoorEventChain } from './eventLedger'
+import { appendFrontdoorEvent, frontdoorRunProjection, readFrontdoorEvents, replayFrontdoorRun, validateFrontdoorEventChain } from './eventLedger'
 import { assertRuntimeRootSafe } from './pathIntegrity'
 
 export function runDirectory(runtimeRoot: string, runId: string): string {
@@ -59,6 +59,28 @@ export async function writeAggregate(runtimeRoot: string, runId: string, aggrega
 
 export async function readRun(runtimeRoot: string, runId: string): Promise<OrchestrationRun> {
   return readJson<OrchestrationRun>(path.join(runDirectory(runtimeRoot, runId), 'run.json'))
+}
+
+function projectionWithoutOwnerGate(run: OrchestrationRun): unknown {
+  const projection = frontdoorRunProjection(run) as Record<string, unknown>
+  const { ownerGate: _ownerGate, ...withoutOwnerGate } = projection
+  return withoutOwnerGate
+}
+
+/**
+ * Read the Ledger-derived Run projection and repair only the known rebuildable
+ * Owner Gate cache drift. Any node/result/state divergence remains fail-closed.
+ */
+export async function readProjectedRun(runtimeRoot: string, runId: string, options: { repair?: boolean } = {}): Promise<OrchestrationRun> {
+  const persisted = await readRun(runtimeRoot, runId)
+  const events = await readRunEvents(runtimeRoot, runId)
+  const projected = replayFrontdoorRun(events)
+  if (hashJson(frontdoorRunProjection(persisted)) === hashJson(frontdoorRunProjection(projected))) return projected
+  if (hashJson(projectionWithoutOwnerGate(persisted)) !== hashJson(projectionWithoutOwnerGate(projected))) {
+    throw new Error('Frontdoor event replay/projection integrity diverges beyond Owner Gate; stale or tampered Run projection rejected')
+  }
+  if (options.repair !== false) await writeRun(runtimeRoot, projected)
+  return projected
 }
 
 export async function readRequest(runtimeRoot: string, runId: string): Promise<FrontdoorRequest> {

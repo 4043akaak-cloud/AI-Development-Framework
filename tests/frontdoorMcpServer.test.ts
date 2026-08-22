@@ -178,7 +178,11 @@ describe('ADF-MCP-001 local Frontdoor MCP server', () => {
     const runId = JSON.parse((prepared?.result as { content: Array<{ text: string }> }).content[0].text).runId as string
     const run = await server.frontdoor.getRun(runId)
     await writeApprovedPacket(server.runtimeRoot, approvedPacket(requestId, run))
-    const decision = buildDecisionEnvelope(run, 'dispatch', 'dispatch', dispatchTargetHash(run, ['proposal']), 'Project Owner', '2026-08-14T00:00:00.000Z')
+    await server.frontdoor.approveIntake(runId)
+    await server.frontdoor.approveCompletionShape(runId)
+    await server.frontdoor.approveDecomposition(runId)
+    const dispatchReadyRun = await server.frontdoor.getRun(runId)
+    const decision = buildDecisionEnvelope(dispatchReadyRun, 'dispatch', 'dispatch', dispatchTargetHash(dispatchReadyRun, ['proposal']), 'Project Owner', '2026-08-14T00:00:00.000Z')
     await recordRunEvent(server.runtimeRoot, runId, 'frontdoor.owner-decision-recorded', { decision })
 
     const rejected = await call(server, 2, 'adf_frontdoor_dispatch_approved', { runId })

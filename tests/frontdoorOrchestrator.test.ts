@@ -88,6 +88,7 @@ describe('Frontdoor orchestrator', () => {
     expect(first.childResultRefs).toHaveLength(1)
     await expect(orchestrator.getRun(run.runId)).resolves.toMatchObject({ state: 'awaiting-owner', ownerGate: 'awaiting-owner:node-review', nodeReview: { nodeId: 'proposal', nextNodeIds: ['critic'] } })
     await orchestrator.reviewNode(run.runId, 'proposal', 'Project Owner', 'continue')
+    await orchestrator.approveDispatch(run.runId, planNodes.map((node_) => node_.nodeId))
     const result = await orchestrator.executeApprovedRun(run.runId, packets)
     expect(result.status).toBe('complete')
     expect(result.childResultRefs).toHaveLength(2)
@@ -392,6 +393,7 @@ describe('ADF-FRONTDOOR-REAL-ADAPTER-DISPATCH-001', () => {
     const first = await orchestrator.executeApprovedRun(run.runId, packets)
     expect(first.status).toBe('partial')
     await orchestrator.reviewNode(run.runId, 'proposal', 'Project Owner', 'continue')
+    await orchestrator.approveDispatch(run.runId, [proposal.nodeId, critic.nodeId])
     const result = await orchestrator.executeApprovedRun(run.runId, packets)
 
     expect(result.status).toBe('partial')

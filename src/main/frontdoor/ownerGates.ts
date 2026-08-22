@@ -5,7 +5,7 @@ import type { AggregateResult, FrontdoorQuestion, OwnerDecision, OwnerDecisionEn
 import type { ImplementationSourceBinding, CandidateSummary, CandidateInspectionResult, CandidateReviewStartedResult, CandidateReviewDecisionInput, CandidateReviewOwnerDecisionEnvelope, CandidateReviewState } from '../../shared/implementationTypes'
 import { hashJson } from '../jobLoop/hash'
 import { readJson } from '../jobLoop/ledger'
-import { claimRun, readPlan, readRequest, readRun, readRunEvents, recordRunEvent, releaseRun, writeRun } from './ledger'
+import { claimRun, readPlan, readProjectedRun, readRequest, readRun, readRunEvents, recordRunEvent, releaseRun, writeRun } from './ledger'
 import { getAdapterProfile } from '../jobLoop/adapterRegistry'
 import { assertRunEventConsistency, assertRunIntegrity } from './runIntegrity'
 import { validateImplementationCandidate } from './candidateArtifact'
@@ -54,12 +54,18 @@ function boundedArtifactText(value: unknown, limit: number): string | undefined 
     : undefined
 }
 
-export function dispatchTargetHash(run: Pick<OrchestrationRun, 'runId' | 'requestId' | 'planHash'>, nodeIds: readonly string[], packetHashes?: DispatchPacketHashes): string {
+type DispatchRun = Pick<OrchestrationRun, 'runId' | 'requestId' | 'planHash'> & Partial<Pick<OrchestrationRun, 'nodes'>>
+
+export function dispatchTargetHash(run: DispatchRun, nodeIds: readonly string[], packetHashes?: DispatchPacketHashes): string {
   return hashJson({
     runId: run.runId,
     requestId: run.requestId,
     planHash: run.planHash,
     nodeIds: [...nodeIds].sort(),
+    executionContext: (run.nodes ?? [])
+      .filter((record) => nodeIds.includes(record.node.nodeId))
+      .map((record) => ({ nodeId: record.node.nodeId, state: record.state, resultHash: record.resultHash ?? null, childInputHash: record.childInputHash ?? null }))
+      .sort((left, right) => left.nodeId.localeCompare(right.nodeId)),
     ...(packetHashes ? { packetHashes: sortedPacketHashes(packetHashes) } : {})
   })
 }
@@ -93,7 +99,7 @@ export function candidateReviewTargetHash(runId: string, candidateId: string, ca
 }
 
 
-export function canDispatch(run: Pick<OrchestrationRun, 'runId' | 'requestId' | 'planHash' | 'state'>, nodeIds: readonly string[], input: Omit<DecisionCheckInput, 'expectedTargetHash'>, packetHashes?: DispatchPacketHashes): boolean {
+export function canDispatch(run: DispatchRun & Pick<OrchestrationRun, 'state'>, nodeIds: readonly string[], input: Omit<DecisionCheckInput, 'expectedTargetHash'>, packetHashes?: DispatchPacketHashes): boolean {
   return run.state === 'ready-for-approval'
     && input.gate === 'dispatch'
     && canApprove({ ...input, expectedTargetHash: dispatchTargetHash(run, nodeIds, packetHashes) })
@@ -136,7 +142,7 @@ export function buildDecisionEnvelope(run: OrchestrationRun, gate: OwnerGate, de
 }
 
 async function assertDecisionBinding(runtimeRoot: string, envelope: OwnerDecisionEnvelope): Promise<OrchestrationRun> {
-  const run = await readRun(runtimeRoot, envelope.runId)
+  const run = await readProjectedRun(runtimeRoot, envelope.runId)
   const request = await readRequest(runtimeRoot, envelope.runId)
   if (request.requestId !== envelope.requestId || run.requestId !== envelope.requestId) throw new Error('Owner Decision request binding mismatch')
   if (!envelope.targetHash || envelope.targetHash.length !== 64) throw new Error('Owner Decision target hash is invalid')
@@ -209,8 +215,8 @@ async function readApprovedPacketHashes(runtimeRoot: string, run: OrchestrationR
   return hashes
 }
 
-export async function assertDispatchApproved(runtimeRoot: string, runId: string, nodeIds: readonly string[], packetHashes?: DispatchPacketHashes, requirePacketBinding = false): Promise<void> {
-  const run = await readRun(runtimeRoot, runId)
+export async function assertDispatchApproved(runtimeRoot: string, runId: string, nodeIds: readonly string[], packetHashes?: DispatchPacketHashes, requirePacketBinding = false): Promise<OwnerDecisionEnvelope> {
+  const run = await readProjectedRun(runtimeRoot, runId)
   const expectedPacketHashes = packetHashes ?? await readApprovedPacketHashes(runtimeRoot, run, nodeIds)
   const packetBoundTargetHash = dispatchTargetHash(run, nodeIds, expectedPacketHashes)
   const legacyTargetHash = dispatchTargetHash(run, nodeIds)
@@ -221,7 +227,9 @@ export async function assertDispatchApproved(runtimeRoot: string, runId: string,
     && allowedTargetHashes.includes((event.payload.decision as OwnerDecisionEnvelope | undefined)?.targetHash ?? '')
     && ['dispatch', 'approve-selected'].includes(String((event.payload.decision as OwnerDecisionEnvelope).decision)))
   if (!decision) throw new Error(requirePacketBinding ? 'Frontdoor local-http dispatch requires a Packet-bound Owner Decision' : 'Frontdoor dispatch requires a matching Owner Decision')
+  if (run.state !== 'ready-for-approval' || run.ownerGate !== 'awaiting-owner:dispatch') throw new Error('Frontdoor dispatch requires the current Dispatch Gate')
   const approvedTargetHash = (decision.payload.decision as OwnerDecisionEnvelope).targetHash
+  if (events.some((event) => event.type === 'frontdoor.approval-bound' && event.payload.targetHash === approvedTargetHash)) throw new Error('Frontdoor Dispatch Decision has already been consumed')
   const packetBindingEstablished = approvedTargetHash === packetBoundTargetHash
   const approvedNodes = new Set(events.filter((event) => {
     if (event.type !== 'frontdoor.node-approved' || event.payload.targetHash !== approvedTargetHash || typeof event.payload.nodeTargetHash !== 'string') return false
@@ -231,6 +239,7 @@ export async function assertDispatchApproved(runtimeRoot: string, runId: string,
       && (!packetBindingEstablished || event.payload.packetHash === expectedPacketHashes?.[String(event.payload.nodeId)]))
   }).map((event) => String(event.payload.nodeId)))
   if (nodeIds.some((nodeId) => !approvedNodes.has(nodeId))) throw new Error('Frontdoor dispatch has an unapproved Node')
+  return decision.payload.decision as OwnerDecisionEnvelope
 }
 
 export interface FrontdoorOwnerGateServiceOptions {
@@ -248,12 +257,30 @@ export class FrontdoorOwnerGateService {
   }
 
   private async recordDecision(runId: string, gate: OwnerGate, decision: OwnerDecision, targetHash: string, approvedBy: string, options: Pick<OwnerDecisionEnvelope, 'nodeId' | 'note' | 'answerRef'> = {}): Promise<OwnerDecisionEnvelope> {
-    const run = await readRun(this.runtimeRoot, runId)
-    const envelope = buildDecisionEnvelope(run, gate, decision, targetHash, approvedBy, this.clock().toISOString(), options)
-    if (!canApprove({ gate, decision, targetHash, expectedTargetHash: targetHash, approvedBy })) throw new Error(`Owner Decision is invalid for ${gate}`)
-    await assertDecisionBinding(this.runtimeRoot, envelope)
-    await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.owner-decision-recorded', { decision: envelope })
-    return envelope
+    const claim = await claimRun(this.runtimeRoot, runId, `owner-${gate}-${process.pid}`)
+    try {
+      const run = await readProjectedRun(this.runtimeRoot, runId)
+      const events = await readRunEvents(this.runtimeRoot, runId)
+      const expectedGate = run.ownerGate?.startsWith('awaiting-owner:') ? run.ownerGate.slice('awaiting-owner:'.length) : undefined
+      if (expectedGate !== gate) throw new Error(`Owner Decision gate mismatch: expected ${expectedGate ?? 'none'}, received ${gate}`)
+      const existing = [...events].reverse().find((event) => {
+        if (event.type !== 'frontdoor.owner-decision-recorded') return false
+        const stored = event.payload.decision as OwnerDecisionEnvelope | undefined
+        return stored?.gate === gate && stored.decision === decision && stored.targetHash === targetHash
+      })
+      if (existing) {
+        const stored = existing.payload.decision as OwnerDecisionEnvelope
+        if (stored.approvedBy !== approvedBy) throw new Error('Owner Decision already exists for this target with another Owner identity')
+        return stored
+      }
+      const envelope = buildDecisionEnvelope(run, gate, decision, targetHash, approvedBy, this.clock().toISOString(), options)
+      if (!canApprove({ gate, decision, targetHash, expectedTargetHash: targetHash, approvedBy })) throw new Error(`Owner Decision is invalid for ${gate}`)
+      await assertDecisionBinding(this.runtimeRoot, envelope)
+      await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.owner-decision-recorded', { decision: envelope })
+      return envelope
+    } finally {
+      await releaseRun(this.runtimeRoot, runId, claim.token)
+    }
   }
 
   async approveIntake(runId: string, approvedBy = 'Project Owner', note?: string): Promise<OwnerDecisionEnvelope> {
@@ -262,7 +289,7 @@ export class FrontdoorOwnerGateService {
   }
 
   async approveCompletionShape(runId: string, approvedBy = 'Project Owner', note?: string): Promise<OwnerDecisionEnvelope> {
-    const run = await readRun(this.runtimeRoot, runId)
+    const run = await readProjectedRun(this.runtimeRoot, runId)
     const request = await readRequest(this.runtimeRoot, runId)
     return this.recordDecision(runId, 'completion-shape', 'approve', completionShapeTargetHash(run, request.requestedOutput), approvedBy, { note })
   }
@@ -275,8 +302,9 @@ export class FrontdoorOwnerGateService {
   async approveDispatch(runId: string, nodeIds: readonly string[], approvedBy: string, note?: string): Promise<OwnerDecisionEnvelope> {
     const claim = await claimRun(this.runtimeRoot, runId, `owner-dispatch-${process.pid}`)
     try {
-      const run = await readRun(this.runtimeRoot, runId)
+      const run = await readProjectedRun(this.runtimeRoot, runId)
       const plan = await readPlan(this.runtimeRoot, runId)
+      if (run.ownerGate !== 'awaiting-owner:dispatch') throw new Error('Dispatch approval requires the current Dispatch Gate')
       const expectedNodeIds = plan.nodes.map((node) => node.nodeId).sort()
       const selectedNodeIds = [...new Set(nodeIds)].sort()
       if (selectedNodeIds.join('|') !== expectedNodeIds.join('|')) throw new Error('Dispatch approval must identify the exact Node set')
@@ -289,6 +317,12 @@ export class FrontdoorOwnerGateService {
       const targetHash = dispatchTargetHash(run, selectedNodeIds, packetHashes)
       const envelope = buildDecisionEnvelope(run, 'dispatch', 'dispatch', targetHash, approvedBy, this.clock().toISOString(), { note })
       if (!canDispatch(run, selectedNodeIds, envelope, packetHashes)) throw new Error('Dispatch approval is invalid or stale')
+      const existing = (await readRunEvents(this.runtimeRoot, runId)).find((event) => event.type === 'frontdoor.owner-decision-recorded' && (event.payload.decision as OwnerDecisionEnvelope | undefined)?.gate === 'dispatch' && (event.payload.decision as OwnerDecisionEnvelope | undefined)?.targetHash === targetHash)
+      if (existing) {
+        const stored = existing.payload.decision as OwnerDecisionEnvelope
+        if (stored.approvedBy !== approvedBy) throw new Error('Dispatch Decision already exists for this target with another Owner identity')
+        return stored
+      }
       await assertDecisionBinding(this.runtimeRoot, envelope)
       await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.owner-decision-recorded', { decision: envelope })
       for (const nodeId of selectedNodeIds) {
@@ -309,7 +343,7 @@ export class FrontdoorOwnerGateService {
   }
 
   async answerQuestion(runId: string, question: FrontdoorQuestion, approvedBy: string, answerRef?: string, note?: string): Promise<OwnerDecisionEnvelope> {
-    const run = await readRun(this.runtimeRoot, runId)
+    const run = await readProjectedRun(this.runtimeRoot, runId)
     if (!run.aggregateResultRef) throw new Error('Question answer requires a persisted aggregate')
     const aggregate = await readJson<AggregateResult>(path.join(this.runtimeRoot, run.aggregateResultRef))
     assertAggregateBelongsToRun(runId, aggregate)
@@ -338,7 +372,7 @@ export class FrontdoorOwnerGateService {
   }
 
   async reviewResult(runId: string, approvedBy: string, decision: 'accept' | 'follow-up' | 'reject' = 'accept', note?: string): Promise<OwnerDecisionEnvelope> {
-    const run = await readRun(this.runtimeRoot, runId)
+    const run = await readProjectedRun(this.runtimeRoot, runId)
     if (!run.aggregateResultRef) throw new Error('Result review requires a proposed aggregate')
     const aggregate = await readJson<AggregateResult>(path.join(this.runtimeRoot, run.aggregateResultRef))
     assertAggregateBelongsToRun(runId, aggregate)
@@ -367,7 +401,7 @@ export class FrontdoorOwnerGateService {
   async reviewNode(runId: string, nodeId: string, approvedBy: string, decision: 'continue' | 'stop' = 'continue', note?: string): Promise<OwnerDecisionEnvelope> {
     const claim = await claimRun(this.runtimeRoot, runId, `owner-node-review-${process.pid}`)
     try {
-      const run = await readRun(this.runtimeRoot, runId)
+      const run = await readProjectedRun(this.runtimeRoot, runId)
       const review = run.nodeReview
       if (run.state !== 'awaiting-owner' || run.ownerGate !== 'awaiting-owner:node-review' || !review || review.nodeId !== nodeId) throw new Error('Node review is not the current Owner Gate')
       const targetHash = nodeReviewTargetHash(run, review.nodeId, review.resultHash, review.nextNodeIds)
@@ -395,7 +429,7 @@ export class FrontdoorOwnerGateService {
   async completeRun(runId: string, approvedBy: string, note?: string): Promise<OrchestrationRun> {
     const claim = await claimRun(this.runtimeRoot, runId, `owner-completion-${process.pid}`)
     try {
-      const run = await readRun(this.runtimeRoot, runId)
+      const run = await readProjectedRun(this.runtimeRoot, runId)
       if (!run.aggregateResultRef) throw new Error('Completion requires a proposed aggregate')
       const aggregate = await readJson<AggregateResult>(path.join(this.runtimeRoot, run.aggregateResultRef))
       if (aggregate.openQuestions.length > 0) throw new Error('Completion requires all blocking questions to be resolved')
@@ -421,7 +455,7 @@ export class FrontdoorOwnerGateService {
   async exportWorkPlaneArtifact(runId: string, approvedBy: string, note?: string): Promise<WorkPlaneArtifactManifest> {
     const claim = await claimRun(this.runtimeRoot, runId, `owner-artifact-export-${process.pid}`)
     try {
-      const run = await readRun(this.runtimeRoot, runId)
+      const run = await readProjectedRun(this.runtimeRoot, runId)
       const request = await readRequest(this.runtimeRoot, runId)
       const plan = await readPlan(this.runtimeRoot, runId)
       await assertRunIntegrity(this.runtimeRoot, run, request, plan)

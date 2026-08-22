@@ -2,7 +2,7 @@ import type { DecompositionPlan, FrontdoorLedgerEvent, FrontdoorRequest, Orchest
 import { hashJson } from '../jobLoop/hash'
 import { validateDecompositionPlan } from './decomposition'
 import { assertBundleReady } from './ledger'
-import { replayFrontdoorRun } from './eventLedger'
+import { frontdoorRunProjection, replayFrontdoorRun } from './eventLedger'
 import { assertRuntimeRootSafe } from './pathIntegrity'
 
 function childTaskId(requestId: string, nodeId: string): string {
@@ -39,14 +39,10 @@ export async function assertRunIntegrity(runtimeRoot: string, run: Orchestration
   })) throw new Error('Frontdoor run node plan does not match the persisted plan')
 }
 
-function runProjection(run: OrchestrationRun): unknown {
-  return { runId: run.runId, requestId: run.requestId, requestHash: run.requestHash, planHash: run.planHash, state: run.state, ownerGate: run.ownerGate, nodes: run.nodes, approvalIds: run.approvalIds, openQuestionIds: run.openQuestionIds, aggregateResultRef: run.aggregateResultRef, nodeReview: run.nodeReview, runKind: run.runKind, implementationBinding: run.implementationBinding }
-}
-
 export function assertRunEventConsistency(run: OrchestrationRun, events: readonly FrontdoorLedgerEvent[]): void {
   if (events.length === 0) throw new Error('Frontdoor run has no ledger events')
   const replayed = replayFrontdoorRun(events)
-  if (hashJson(runProjection(replayed)) !== hashJson(runProjection(run))) throw new Error('Frontdoor event replay does not match run.json')
+  if (hashJson(frontdoorRunProjection(replayed)) !== hashJson(frontdoorRunProjection(run))) throw new Error('Frontdoor event replay does not match run.json')
   const lastResume = Math.max(-1, ...events.filter((event) => event.type === 'frontdoor.question-answered' || event.type === 'frontdoor.node-review-continued').map((event) => event.sequence))
   const progressed = events.some((event) => event.sequence > lastResume && ['frontdoor.approval-bound', 'frontdoor.node-started', 'frontdoor.node-completed', 'frontdoor.node-failed', 'frontdoor.run-completed', 'frontdoor.run-stopped'].includes(event.type))
   if (run.state === 'ready-for-approval' && progressed) throw new Error('Frontdoor ready state conflicts with persisted execution events')

@@ -144,6 +144,7 @@ async function inspectRun(orchestrator: FrontdoorOrchestrator, runId: string): P
     eventCount: inspection.eventCount,
     nodeTargetHashes: inspection.nodeTargetHashes,
     nodeReview: inspection.nodeReview,
+    goalAlignment: inspection.goalAlignment,
     activities: inspection.activities
   }
 }

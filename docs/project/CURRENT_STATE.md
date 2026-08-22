@@ -1,8 +1,20 @@
 # ADF Current State
 
 > 2026-08-21: `ADF-MCP-FRONTDOOR-2CYCLE-E2E-001` を開始。既存の `adf_frontdoor` MCP入口を使った窓口AIの2Cycle実証を、Fake Adapter・local-only・Owner Gate維持で進める。外部送信、資格情報、正本自動書込み、commit／pushは対象外。
+>
+> 2026-08-21: North Star Goal Alignment Monitorを実装。Frontdoor Inspect／Electron Owner Loop／CLI／MCPで、`Intake → Plan → Dispatch → AI実行 → Result Review → Completion → 次Request`の到達段階、Decision・Evidence・hash binding、Owner Gate投影不整合を読み取り表示する。Cycle 2 Run `run-47d82f0b99ebfb5f4cac`で`owner-gate-projection-stale`を実検知した。自動修復・自動承認は行わない。
+>
+> 2026-08-21: Cycle 2のCompletion Shape、local-only Proposal／Critic Packet、Packet-bound Dispatch承認まで完了。Run `run-47d82f0b99ebfb5f4cac`はNode実行前で保留し、Goal Alignment MonitorがDispatch後も古い`intake`投影を`drift`として検知している。
+>
+> 2026-08-22: Projection／Replay／Dispatch境界を再設計・実装。Ledger ReplayをOwner Gateの意味上の正本とし、`run.json`はOwner Gateだけの既知投影差分に限ってRuntime内で再構築し、Node／Result／State差分はfail-closedにした。Dispatch target hashへNode実行コンテキストを含め、Node Review後の旧Dispatch承認再利用、消費済みDispatch、未束縛`approval-bound`を拒否する。Cycle 2 RunはRuntime再読込後`aligned / dispatch`となったが、Node実行・Job／Thread／Result／Evidenceは未実施である。
+> 2026-08-22: Cycle 2実DispatchのPreflightでProposal／Critic Packetのscope mismatch（Packet側だけに`merge`）を検出し、Job／Thread／Result／Evidence生成前に停止した。Owner承認済みの修正設計に基づき、Planと完全一致するReplacement Packetへ修正し、修正前PacketはRuntime archiveへ保存。新PacketのDispatch target hashは`173ff0b4d2bcf35d686dcf954e0edf0bcab12673b82c0b03f66ebd6bd0ab41d7`で、Owner再承認待ち。外部送信、Canonical書込み、commit、pushは行っていない。
+> 2026-08-22: Replacement PacketのOwner再承認後、Cycle 2 Proposal Nodeを実Dispatch。Run `run-47d82f0b99ebfb5f4cac`は`awaiting-owner:node-review`、Proposal Job `job-c6bcbd38e4f96ce6`／Thread `thread-cf32d92a2a4d1a61`／Result hash `e6aefcf8fc44e97187293dcf66724054c076cb73f03aed443bbbba73ff32dd1c`／Evidence hash `de0f51fdbf998097859ff853d4b9825eab15521b843ce6a310623f142c673931`。Criticは未実行・queued、Aggregate未生成。外部送信、Canonical書込み、commit、pushは行っていない。
+> 2026-08-22: Proposal ResultのOwner Node Review `continue`（Decision `owner-decision-11e87f884c63657dc5f2`）を記録。実行コンテキスト変化後の旧Dispatch承認再利用を拒否し、Runを`awaiting-owner:dispatch`へ戻した。Critic起動用の新Dispatch target hashは`71133bcbf35e5376aac3943619b947021cd57ddf4ab9aba8d6e4914192e706fa`で、再承認待ち。Aggregate未生成、外部送信・Canonical書込み・commit・pushなし。
+> 2026-08-22: Critic Dispatchを再承認し、Critic Nodeを実行。Cycle 2 Aggregate `aggregate-a6208748ddb02c47fa8d`／hash `a1ba6d47d6f025af81a9f872ed717482782863f298abf7f6be4799f8adbdbe80`を生成した。Proposal／Criticともsuccess、CriticのProposal依存bindingは`prior-turn-reference: pass`。Runは`awaiting-owner:result-review`で、Result Review・Completion・次Requestは未実施。
+> 2026-08-22: Cycle 2 Aggregate／EvidenceをOwnerが`accept`（Decision `owner-decision-4500a45e453883f1a30d`）し、Runは`awaiting-owner:completion`へ進んだ。Completion最終承認、次Request、Canonical／Obsidian書込みは未実施。
+> 2026-08-22: Cycle 2 CompletionをOwner承認（Decision `owner-decision-125bfbe109c685778dab`）。Run `run-47d82f0b99ebfb5f4cac`は`complete / completed`、Goal Alignmentは`aligned / completed`、次のRequestが解放された。Canonical／Obsidian自動書込み、外部送信、commit、pushは行っていない。
 
-> Last updated: 2026-08-15（`ADF-FRONTDOOR-OLLAMA-WORKPLANE-E2E-001`のMCP経由実Ollama E2E・Work Plane Exportまで反映。次段のWork Plane Integrity Gateを設計中。過去の個別Task記述には旧時点の記録が残る）
+> Last updated: 2026-08-22（Projection／Replay／Dispatch境界の再設計とCycle 2 Runtime投影修復まで反映。過去の個別Task記述には旧時点の記録が残る）
 
 ## 現在地
 
