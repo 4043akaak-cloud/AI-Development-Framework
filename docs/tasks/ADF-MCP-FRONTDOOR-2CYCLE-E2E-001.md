@@ -224,3 +224,47 @@ Window AI
 ## 11. Handover
 
 実行後に、CycleごとのRequest／Plan／Run／Node／Job／Thread／Result／Evidence／Decision ID、hash、Ledger Replay、Owner Gate、画面確認、未検証事項、残存リスク、次の安全なTaskを追記する。
+
+### 2026-08-22 Accepted Candidateから次Requestへの完了記録
+
+Cycle 2の承認済みAggregateから生成したCandidateを根拠に、同じFrontdoor入口から次Requestを作成し、Owner Gateを通過させ、local-only Proposalを実行してCompletionまで記録した。これはRuntime Runの完了記録であり、本Task全体を自動的に`Done`へ変更するものではない。
+
+- Source Candidate: `artifact-423713c100377ab3a330`
+- Candidate hash: `36c9c09fcf97c86affab2823bcc6fe8165a26dde0fae19af182f72ac41aa29ff`
+- Candidate Review Decision: `owner-decision-64e90df43f3e6f0c624a`
+- Candidate binding hash: `623d8eee80ff7e3b50e22a859d0749799aef200cffca669230bddac9973c4f6b`
+- Next Request: `next-request-from-candidate-20260822-001`
+- Run: `run-7bfbb7d37731444a756f`
+- Request hash: `07b2f466fff5e0f1a2e591a2a866929c1f2ebeeeefcf821bb2c7cc8901a8e757`
+- Plan hash: `42eaa8b870cf85f04c6c336c51a57d92ed793a4da91ca628d54ba1725baacaab`
+- Owner Decisions: Intake `owner-decision-31541f26b15b0a359603`、Completion Shape `owner-decision-edaa5148529da0fd1b32`、Decomposition `owner-decision-e2f098811ec518e328ab`
+- Final Packet-bound Dispatch Decision: `owner-decision-9464a28926168b31429f`、target hash `adb0f681d57914886bda208fc52b5275fc02e9414a4b6949a9c78bf08c698eda`
+- Final Packet hash: `49ba178b17fedb555903e2a90875b99fd29531c4bcee171c46f76f107306c139`
+- Executed Node: `proposal` / Fake Adapter `fake-ai-a` / local-only / `success`
+- Job: `job-5c008e2c9e6f64b4`
+- Thread: `thread-0d9b871ed1c96518`
+- Result ref: `threads/thread-0d9b871ed1c96518/results/turn-0-91604e497b30.json`
+- Result hash: `ccdc823456476fe22539b85812cc5432d78902eb2edd4ebfbc8f2311410d6bbc`
+- Evidence hash: `005058e75b87cdb3852d2c9b4d4309f3e74339baf0dd0d8565d945b9e64fd392`
+- Aggregate ref: `frontdoor-runs/run-7bfbb7d37731444a756f/aggregate.json`
+- Aggregate hash: `14a94b428a71d698639b58583c89512d4be4d9f69d180024e45bdc6a2ce40cee`
+- Result Review Decision: `owner-decision-758b66396655bac9e8e5`、`accept`
+- Completion Decision: `owner-decision-495b03d70e2daf11255d`
+- Final Runtime state: `complete` / Owner Gate `completed` / Goal Alignment `completed`
+
+#### 検出した不整合と修正
+
+初回PacketはContextが親Requestの許可範囲を超えていたため、Dispatch前検証でfail-closedとなった。Job／Thread／Result／Evidenceは生成されていない。初回Packetは`scope-mismatch`証跡として保持し、親RequestのContext参照だけに一致する修正版Packetを作成し、Packet hashへ再束縛してOwner再承認後にDispatchした。
+
+この結果、承認前の実行、古いPacket hashの再利用、親Contextを超えた参照は許可されなかった。外部送信、資格情報、課金、Canonical GitHub／ObsidianへのRuntime自動書込みは発生していない。
+
+#### GitHub記録と検証
+
+- Live Artifact閲覧とGoal Alignment表示の実装・Task・テストをcommit `28eeffe`（`feat(adf): expose verified live artifacts and goal alignment`）へ記録し、`origin/codex/adf-mcp-frontdoor-2cycle-e2e`へpush済み。
+- 全Vitest `398/398`、Node／Web typecheck、対象Live Artifact／IPCテスト `49/49`、`git diff --check`をPassした。
+- 既存のFrontdoor Runtime Ledgerは、sequence `0`〜`18`、Run／Request／Plan／Decision／Result／Evidence bindingを保持している。
+
+#### 未完了・次の安全なTask
+
+- このTaskの受入条件のうち、窓口AIの実画面での同一入口操作、実MCP Client設定、複数Provider、外部送信、Canonical統合は未完了または未検証である。
+- 次は、窓口AIがこの完了RunのResult／Evidenceへ到達し、Ownerの次指示を同じMCP入口へ投入する実画面確認を、別の明示的なVerification範囲として行う。
