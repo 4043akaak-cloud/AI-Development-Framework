@@ -6,12 +6,13 @@ import { safeDevelopmentRendererUrl } from '../shared/rendererUrlPolicy'
 import { createLiveRelay } from './liveRelay'
 import type { ConversationRelay } from './jobLoop/relay'
 import { cancelExternal, continueThread, decideThread, externalSendState, getThread, inspectLiveArtifacts, listApprovedTaskIds, listExternalAdapters, listThreads, ollamaReadiness, preflightExternal, recoverThread, scanForRecovery, sendExternal, sendFirstTurn, startApprovedThread } from './relayService'
-import { approveFrontdoorRun, answerFrontdoorQuestion, completeFrontdoorRun, dispatchFrontdoorRun, exportFrontdoorArtifact, inspectCandidate, inspectFrontdoorRun, listFrontdoorRuns, listReviewableCandidates, prepareFrontdoorRun, proposeFrontdoorPlan, recoverFrontdoorRun, reviewCandidate, reviewFrontdoorNode, reviewFrontdoorResult, startCandidateReview, stopFrontdoorRun } from './frontdoor/frontdoorService'
+import { approveFrontdoorRun, answerFrontdoorQuestion, completeFrontdoorRun, dispatchFrontdoorRun, exportFrontdoorArtifact, inspectCandidate, inspectFrontdoorArtifact, inspectFrontdoorRun, listFrontdoorRuns, listReviewableCandidates, prepareFrontdoorRun, proposeFrontdoorPlan, recoverFrontdoorRun, reviewCandidate, reviewFrontdoorNode, reviewFrontdoorResult, startCandidateReview, stopFrontdoorRun } from './frontdoor/frontdoorService'
 
 import { FrontdoorOrchestrator } from './frontdoor/orchestrator'
 import { DeterministicFakePlanner } from './frontdoor/planner'
 
 let mainWindow: BrowserWindow | undefined
+const productName = 'ADF Task Board'
 
 const allowedSources: Record<string, CanonicalSourceDefinition> = Object.fromEntries(
   Object.entries(canonicalSources).map(([sourceId, source]) => [sourceId, { rootPath: rootFor(sourceId as keyof typeof canonicalSources), relativePath: source.relativePath }])
@@ -19,6 +20,7 @@ const allowedSources: Record<string, CanonicalSourceDefinition> = Object.fromEnt
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
+    title: productName,
     width: 1440,
     height: 920,
     minWidth: 1000,
@@ -32,6 +34,7 @@ function createWindow(): void {
       webviewTag: false
     }
   })
+  mainWindow.setTitle(productName)
 
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   mainWindow.webContents.on('will-navigate', (event) => event.preventDefault())
@@ -45,7 +48,15 @@ function createWindow(): void {
 }
 
 app.whenReady().then(async () => {
+  app.setName(productName)
   session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false))
+  const isDevelopmentRenderer = !app.isPackaged && Boolean(process.env.ELECTRON_RENDERER_URL)
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    const contentSecurityPolicy = isDevelopmentRenderer
+      ? "default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' http://localhost:* ws://localhost:*; object-src 'none'; base-uri 'none'; frame-src 'none'; form-action 'none'"
+      : "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; frame-src 'none'; form-action 'none'"
+    callback({ responseHeaders: { ...details.responseHeaders, 'Content-Security-Policy': [contentSecurityPolicy] } })
+  })
   ipcMain.handle('board:open-canonical-source', (_event, sourceId: unknown) => openResolvedCanonicalSource(sourceId, allowedSources, shell.openPath))
 
   // Constructed, not connected. Nothing here opens a socket or reads a credential — the transports
@@ -75,8 +86,9 @@ app.whenReady().then(async () => {
   ipcMain.handle('frontdoor:propose-plan', (_event, input: unknown) => proposeFrontdoorPlan(planner, input))
   ipcMain.handle('frontdoor:prepare', (_event, input: unknown) => prepareFrontdoorRun(frontdoor, input))
   ipcMain.handle('frontdoor:inspect', (_event, runId: unknown) => inspectFrontdoorRun(frontdoor, runId))
+  ipcMain.handle('frontdoor:inspect-artifact', (_event, runId: unknown) => inspectFrontdoorArtifact(frontdoor, runId))
   ipcMain.handle('frontdoor:approve', (_event, input: unknown) => approveFrontdoorRun(frontdoor, input as Parameters<typeof approveFrontdoorRun>[1]))
-  ipcMain.handle('frontdoor:dispatch', (_event, runId: unknown) => dispatchFrontdoorRun(frontdoor, runId))
+  ipcMain.handle('frontdoor:dispatch', (_event, runId: unknown) => dispatchFrontdoorRun(frontdoor, runId, { requirePacketBinding: true }))
   ipcMain.handle('frontdoor:review-node', (_event, input: unknown) => reviewFrontdoorNode(frontdoor, input as Parameters<typeof reviewFrontdoorNode>[1]))
   ipcMain.handle('frontdoor:answer', (_event, input: unknown) => answerFrontdoorQuestion(frontdoor, input as Parameters<typeof answerFrontdoorQuestion>[1]))
   ipcMain.handle('frontdoor:review-result', (_event, input: unknown) => reviewFrontdoorResult(frontdoor, input as Parameters<typeof reviewFrontdoorResult>[1]))

@@ -162,11 +162,17 @@ describe('ADF-MCP-001 local Frontdoor MCP server', () => {
     expect(exportedBody).toMatchObject({ manifest: { artifactId: manifest.artifactId } })
     expect(exportedBody.artifact).toBeDefined()
 
+    await server.frontdoor.completeRun(runId, 'Project Owner')
+    const inspected = await call(server, 5, 'adf_frontdoor_inspect', { runId })
+    const inspection = JSON.parse((inspected?.result as { content: Array<{ text: string }> }).content[0].text) as { nextAction: string; workPlaneArtifact: { artifactId: string } }
+    expect(inspection.nextAction).toContain('次のRequest')
+    expect(inspection.workPlaneArtifact.artifactId).toBe(manifest.artifactId)
+
     const artifactPath = path.join(server.runtimeRoot, manifest.relativePath)
     const stored = JSON.parse(await readFile(artifactPath, 'utf8')) as { manifest: Record<string, unknown>; content: Record<string, unknown> }
     stored.content.tampered = true
     await writeFile(artifactPath, `${JSON.stringify(stored)}\n`, 'utf8')
-    const tampered = await call(server, 5, 'adf_frontdoor_get_workplane_artifact', { runId })
+    const tampered = await call(server, 6, 'adf_frontdoor_get_workplane_artifact', { runId })
     expect(tampered?.result).toMatchObject({ isError: true })
     expect(JSON.parse((tampered?.result as { content: Array<{ text: string }> }).content[0].text).error).toContain('content hash mismatch')
   })

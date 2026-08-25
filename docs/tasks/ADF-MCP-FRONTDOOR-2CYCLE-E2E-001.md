@@ -268,3 +268,30 @@ Cycle 2の承認済みAggregateから生成したCandidateを根拠に、同じF
 
 - このTaskの受入条件のうち、窓口AIの実画面での同一入口操作、実MCP Client設定、複数Provider、外部送信、Canonical統合は未完了または未検証である。
 - 次は、窓口AIがこの完了RunのResult／Evidenceへ到達し、Ownerの次指示を同じMCP入口へ投入する実画面確認を、別の明示的なVerification範囲として行う。
+
+### 2026-08-25 最小MVP収束・Result境界強化
+
+Project Ownerの設計承認を受け、最終成果物から逆算した最小MVPの範囲で、次を実装・検証した。
+
+- Owner向けPrimary UIは1プロジェクトの`ADF Project Board`に統一し、Ownerの判断入力欄やTask単位の直接管理を追加しない。Ownerの判断は窓口AIへ伝え、ADFは状態・Result・Evidence・成果物への到達を表示する。
+- 特定Providerを窓口AIへ固定せず、既存のParticipant Registry／Role Assignment／Context Capsuleを将来の窓口交代に利用できる境界として維持した。窓口AIの意味理解・作業分解・担当判断・回答統合はADFの自動責務にしない。
+- Aggregateの各child Resultへ`resultHash`を保持し、Result Review時にResult参照、hash、Run／Task／Job／入力hashの一致を再検証する。永続Resultが改ざん・差替えされた場合はReview段階でfail-closedとなる否定系テストを追加した。
+- 実行中のOwner-facing IPC／follow-up DispatchはPacket-boundを必須化し、承認済みPacketと現在のDispatch対象が一致しない場合は実行しない。外部Provider送信、資格情報、課金、Canonical GitHub／Obsidian書込みは行っていない。
+- リポジトリ内の生成済みアプリは`release/mac-arm64/ADF Task Board.app`の1個だけに整理した。旧生成物は削除せず、`/tmp/adf-legacy-builds-20260825/`へ退避した。これは再現性確認のための可逆的な整理であり、ソース・Runtime Ledger・正本記録は変更していない。
+
+#### 検証結果
+
+- Node／Web／CLI TypeScript typecheck: Pass
+- Vitest: 39 files / 389 tests Pass
+- `electron-vite build`: Pass
+- `electron-builder --dir`: Pass（署名証明書なしのためコード署名は未実施）
+- `git diff --check`: Pass
+- 現行local stdio MCPの`initialize`／`inspect`、Fake／local-only Frontdoor往復: Pass
+
+#### まだ完了扱いにしない範囲
+
+- 実際の窓口AIクライアントが同一入口からPrepare → Owner承認 → Dispatch → Result取得 → 次Requestを行う実運用確認。
+- 現行単一パッケージ画面で完了Runを選択し、Result／Evidenceおよび「成果物を確認」まで実クリックする確認。
+- 複数Provider、外部送信、認証、Canonical統合、同時Ledger書込みの強化、Owner identity認証、参加者Evidenceの厳密なOwner binding。
+
+上記未検証範囲を理由に、Task Statusは`Implementing`のまま保持する。今回の作業は不要な機能追加ではなく、最小MVPの監視導線と安全なResult受入境界を完成形へ近づけるための収束作業である。

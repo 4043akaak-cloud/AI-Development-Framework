@@ -4,7 +4,7 @@ import type { ConversationThread, OwnerAction, RecoveryAction, RelayResult, Thre
 import type { LiveArtifactInspection } from '../shared/liveArtifactTypes'
 import type { ExternalPreflight, OllamaReadiness } from '../shared/externalAdapterTypes'
 import type { AdapterProfile } from '../shared/jobLoopTypes'
-import type { FrontdoorInspection, FrontdoorPlanProposal, FrontdoorPrepareInput, FrontdoorPrepareResult, FrontdoorRequestInput, FrontdoorReturn, FrontdoorRunSummary, OwnerDecisionEnvelope, OwnerGate, OrchestrationRun, WorkPlaneArtifactManifest } from '../shared/frontdoorTypes'
+import type { FrontdoorArtifactInspection, FrontdoorInspection, FrontdoorPlanProposal, FrontdoorPrepareInput, FrontdoorPrepareResult, FrontdoorRequestInput, FrontdoorReturn, FrontdoorRunSummary, OwnerDecisionEnvelope, OwnerGate, OrchestrationRun, WorkPlaneArtifactManifest } from '../shared/frontdoorTypes'
 
 contextBridge.exposeInMainWorld('adfBoard', {
   openCanonicalSource: (sourceId: string): Promise<OpenSourceResult> => ipcRenderer.invoke('board:open-canonical-source', sourceId)
@@ -35,6 +35,7 @@ contextBridge.exposeInMainWorld('adfFrontdoor', {
   proposePlan: (input: FrontdoorRequestInput): Promise<RelayResult<FrontdoorPlanProposal>> => ipcRenderer.invoke('frontdoor:propose-plan', input),
   prepare: (input: FrontdoorPrepareInput): Promise<RelayResult<FrontdoorPrepareResult>> => ipcRenderer.invoke('frontdoor:prepare', input),
   inspect: (runId: string): Promise<RelayResult<FrontdoorInspection>> => ipcRenderer.invoke('frontdoor:inspect', runId),
+  inspectArtifact: (runId: string): Promise<RelayResult<FrontdoorArtifactInspection>> => ipcRenderer.invoke('frontdoor:inspect-artifact', runId),
   approve: (input: { runId: string; gate: OwnerGate; approvedBy: string; note?: string; nodeIds?: string[] }): Promise<RelayResult<OwnerDecisionEnvelope>> => ipcRenderer.invoke('frontdoor:approve', input),
   dispatch: (runId: string): Promise<RelayResult<FrontdoorReturn>> => ipcRenderer.invoke('frontdoor:dispatch', runId),
   reviewNode: (input: { runId: string; nodeId: string; approvedBy: string; decision: 'continue' | 'stop'; note?: string }): Promise<RelayResult<{ decision: OwnerDecisionEnvelope; execution?: FrontdoorReturn }>> => ipcRenderer.invoke('frontdoor:review-node', input),

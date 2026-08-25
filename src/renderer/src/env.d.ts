@@ -3,7 +3,7 @@ import type { ConversationThread, OwnerAction, RecoveryAction, RelayResult, Thre
 import type { LiveArtifactInspection } from '../../shared/liveArtifactTypes'
 import type { ExternalPreflight, OllamaReadiness } from '../../shared/externalAdapterTypes'
 import type { AdapterProfile } from '../../shared/jobLoopTypes'
-import type { FrontdoorInspection, FrontdoorPlanProposal, FrontdoorPrepareInput, FrontdoorPrepareResult, FrontdoorRequestInput, FrontdoorReturn, FrontdoorRunSummary, OwnerDecisionEnvelope, OwnerGate, OrchestrationRun, WorkPlaneArtifactManifest } from '../../shared/frontdoorTypes'
+import type { FrontdoorArtifactInspection, FrontdoorInspection, FrontdoorPlanProposal, FrontdoorPrepareInput, FrontdoorPrepareResult, FrontdoorRequestInput, FrontdoorReturn, FrontdoorRunSummary, OwnerDecisionEnvelope, OwnerGate, OrchestrationRun, WorkPlaneArtifactManifest } from '../../shared/frontdoorTypes'
 
 declare global {
   interface Window {
@@ -33,6 +33,7 @@ declare global {
       proposePlan: (input: FrontdoorRequestInput) => Promise<RelayResult<FrontdoorPlanProposal>>
       prepare: (input: FrontdoorPrepareInput) => Promise<RelayResult<FrontdoorPrepareResult>>
       inspect: (runId: string) => Promise<RelayResult<FrontdoorInspection>>
+      inspectArtifact: (runId: string) => Promise<RelayResult<FrontdoorArtifactInspection>>
       approve: (input: { runId: string; gate: OwnerGate; approvedBy: string; note?: string; nodeIds?: string[] }) => Promise<RelayResult<OwnerDecisionEnvelope>>
       dispatch: (runId: string) => Promise<RelayResult<FrontdoorReturn>>
       reviewNode: (input: { runId: string; nodeId: string; approvedBy: string; decision: 'continue' | 'stop'; note?: string }) => Promise<RelayResult<{ decision: OwnerDecisionEnvelope; execution?: FrontdoorReturn }>>

@@ -1,7 +1,7 @@
 import { access, readdir } from 'node:fs/promises'
 import path from 'node:path'
 import type { ApprovedTaskPacket } from '../../shared/jobLoopTypes'
-import type { FrontdoorInspection, FrontdoorPlanProposal, FrontdoorPrepareResult, FrontdoorRequestInput, FrontdoorRunSummary, OwnerDecisionEnvelope, OwnerGate, OrchestrationRun, WorkPlaneArtifactManifest } from '../../shared/frontdoorTypes'
+import type { FrontdoorArtifactInspection, FrontdoorInspection, FrontdoorPlanProposal, FrontdoorPrepareResult, FrontdoorRequestInput, FrontdoorRunSummary, OwnerDecisionEnvelope, OwnerGate, OrchestrationRun, WorkPlaneArtifactManifest } from '../../shared/frontdoorTypes'
 import type { RelayResult } from '../../shared/threadTypes'
 import { readJson } from '../jobLoop/ledger'
 import { FrontdoorOrchestrator } from './orchestrator'
@@ -204,6 +204,10 @@ export function inspectFrontdoorRun(orchestrator: FrontdoorOrchestrator, runId: 
   return guard(() => orchestrator.inspectRun(identifier(runId, 'runId')))
 }
 
+export function inspectFrontdoorArtifact(orchestrator: FrontdoorOrchestrator, runId: unknown): Promise<RelayResult<FrontdoorArtifactInspection>> {
+  return guard(() => orchestrator.inspectWorkPlaneArtifact(identifier(runId, 'runId')))
+}
+
 export function proposeFrontdoorObsidianUpdate(orchestrator: FrontdoorOrchestrator, input: { runId: unknown; relativePath?: unknown }): Promise<RelayResult<ObsidianWriteProposal>> {
   return guard(async () => proposeObsidianUpdate(orchestrator.runtimeRoot, await orchestrator.inspectRun(identifier(input.runId, 'runId')), { relativePath: input.relativePath }))
 }
@@ -249,7 +253,7 @@ export function reviewFrontdoorNode(orchestrator: FrontdoorOrchestrator, input: 
     const nodeId = identifier(input.nodeId, 'nodeId')
     const decision = await orchestrator.reviewNode(runId, nodeId, owner(input.approvedBy), nodeReviewDecision(input.decision), note(input.note))
     if (decision.decision === 'stop') return { decision }
-    const execution = await dispatchFrontdoorRun(orchestrator, runId)
+    const execution = await dispatchFrontdoorRun(orchestrator, runId, { requirePacketBinding: true })
     if (!execution.ok) throw new Error(`Node review continued, but next Node dispatch failed: ${execution.error}`)
     return { decision, execution: execution.value }
   })

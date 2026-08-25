@@ -1,5 +1,6 @@
 import type { FrontdoorRequest, FrontdoorRequestInput } from '../../shared/frontdoorTypes'
 import { hashJson } from '../jobLoop/hash'
+import { validateParticipantAssignment } from './participantRegistry'
 
 export class FrontdoorRequestRejectedError extends Error {
   readonly code = 'FRONTDOOR_REQUEST_REJECTED'
@@ -19,7 +20,16 @@ export function validateFrontdoorRequest(input: FrontdoorRequestInput): void {
   if (!nonEmptyText(input?.userInput)) errors.push('userInput is required')
   if (!nonEmptyText(input?.projectRef)) errors.push('projectRef is required')
   if (!nonEmptyText(input?.requestedOutput)) errors.push('requestedOutput is required')
-  if (!['codex', 'chatgpt', 'owner', 'test'].includes(input?.source)) errors.push('source is invalid')
+  if (!['codex', 'chatgpt', 'owner', 'participant', 'test'].includes(input?.source)) errors.push('source is invalid')
+  if (input?.sourceParticipantId !== undefined && input.sourceParticipantRole === undefined) errors.push('sourceParticipantRole is required when sourceParticipantId is provided')
+  if (input?.sourceParticipantRole !== undefined && input.sourceParticipantId === undefined) errors.push('sourceParticipantId is required when sourceParticipantRole is provided')
+  if (input?.sourceParticipantId && input?.sourceParticipantRole) {
+    try {
+      validateParticipantAssignment(input.sourceParticipantId, input.sourceParticipantRole, input.constraints?.allowedCapabilities ?? [])
+    } catch (error) {
+      errors.push(`source participant assignment is invalid: ${(error as Error).message}`)
+    }
+  }
   if (!Array.isArray(input?.contextReferences)) errors.push('contextReferences must be an array')
   if (!Array.isArray(input?.scope?.inScope) || !Array.isArray(input?.scope?.outOfScope)) errors.push('scope is invalid')
   if (!input?.constraints || input.constraints.externalSend !== false) errors.push('externalSend must be false')

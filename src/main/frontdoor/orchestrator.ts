@@ -11,12 +11,14 @@ import { aggregateResults, buildFrontdoorReturn } from './returnEnvelope'
 import { questionsFromThread } from './questionAggregator'
 import { claimRun, readPlan, readProjectedRun, readRequest, readRun, readRunClaim, readRunEvents, recordRunEvent, releaseRun, replayRunFromEvents, writeAggregate, writeRun, writeRunBundleExclusive } from './ledger'
 import { readJson } from '../jobLoop/ledger'
+import { listParticipantEvidence } from './participantEvidence'
 import type { AdapterResultEnvelope } from '../jobLoop/resultEnvelope'
 import { assertDispatchApproved, buildDecisionEnvelope, FrontdoorOwnerGateService, nodeReviewTargetHash, nodeTargetHash } from './ownerGates'
 import { getAdapterProfile } from '../jobLoop/adapterRegistry'
 import { buildActivityTrace } from './activityTrace'
 import { assessGoalAlignment } from './goalAlignment'
 import { assertRunEventConsistency, assertRunIntegrity } from './runIntegrity'
+import { latestWorkPlaneArtifactManifest } from './workPlaneArtifact'
 
 export interface FrontdoorOrchestratorOptions {
   relay: ConversationRelay
@@ -115,6 +117,10 @@ export class FrontdoorOrchestrator {
 
   async exportWorkPlaneArtifact(runId: string, approvedBy = 'Project Owner', note?: string) {
     return this.ownerGates.exportWorkPlaneArtifact(runId, approvedBy, note)
+  }
+
+  async inspectWorkPlaneArtifact(runId: string) {
+    return this.ownerGates.inspectWorkPlaneArtifact(runId)
   }
 
   async createRun(requestInput: Parameters<typeof createFrontdoorRequest>[0], planInput: Parameters<typeof createDecompositionPlan>[1]): Promise<OrchestrationRun> {
@@ -394,6 +400,7 @@ export class FrontdoorOrchestrator {
   async inspectRun(runId: string): Promise<FrontdoorInspection> {
     const run = await this.getRun(runId)
     const [request, plan, events] = await Promise.all([readRequest(this.runtimeRoot, runId), readPlan(this.runtimeRoot, runId), readRunEvents(this.runtimeRoot, runId)])
+    const participantEvidence = await listParticipantEvidence(this.runtimeRoot, runId)
     let aggregate: AggregateResult | undefined
     if (run.aggregateResultRef) {
       if (!run.aggregateResultRef.startsWith('frontdoor-runs/') || run.aggregateResultRef.includes('..') || path.isAbsolute(run.aggregateResultRef)) throw new Error('Frontdoor Aggregate reference is outside the Runtime boundary')
@@ -412,6 +419,8 @@ export class FrontdoorOrchestrator {
       decisions,
       aggregate,
       aggregateHash: aggregate ? hashJson(aggregate) : undefined,
+      workPlaneArtifact: latestWorkPlaneArtifactManifest(events),
+      participantEvidence,
       evidenceRefs: aggregate?.evidenceRefs ?? [],
       openQuestions: aggregate?.openQuestions ?? [],
       nextAction: aggregate?.nextAction ?? (run.ownerGate ?? 'awaiting-owner'),
@@ -421,6 +430,7 @@ export class FrontdoorOrchestrator {
       activities: buildActivityTrace(events, run)
     }
     inspection.goalAlignment = assessGoalAlignment(inspection)
+    inspection.nextAction = inspection.goalAlignment.nextAction
     return inspection
   }
 

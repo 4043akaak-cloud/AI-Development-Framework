@@ -72,3 +72,56 @@ Project Owner → Cursor（窓口AI候補） → ADF Frontdoor MCP → Owner Gat
 ## 7. Remaining Review
 
 Project OwnerがCursor上でADF MCP Toolを実際に選択し、`adf_frontdoor_list_runs`または読み取り専用の`inspect`を一度確認すれば、接続のOwner受入が完了する。`prepare`以降のPilotは別の実行承認として扱う。
+
+## 8. 2026-08-23 Current Contract Correction: Provider-neutral Role Assignment
+
+このTaskの初期記述にある「Cursorを窓口AI候補」とする表現は、Ownerの最新方針により履歴として残し、現行契約からは除外する。Cursorは固定窓口ではない。
+
+### Current role assignment
+
+- 現在のADF運用：CodexがこのPhaseのFrontdoor参加者、Cursorは専門参加者候補。
+- この割当はPhase／Task単位のOwner承認済み設定であり、製品の恒久的な役割ではない。
+- 将来はCursor、Claude Code、その他の登録済み参加者をFrontdoor、specialist、reviewer、integratorのいずれにも割り当てられる。
+- `adf_frontdoor`は特定Provider名を意味しない汎用Frontdoor契約であり、`adf_participant`は割り当てられた専門参加者が使う制限付き汎用契約である。
+
+### Implemented boundary
+
+- `ParticipantProfile`／`ParticipantAssignmentProposal`を追加し、参加者ID、能力、接続、データ方針と、Phase／Task単位の役割割当を分離した。
+- Requestの`sourceParticipantId`／`sourceParticipantRole`とPlan Nodeの`participantAssignment`を検証する。
+- CursorのユーザーMCP設定は、旧`adf_frontdoor`設定を`mcp.json.adf-frontdoor-legacy-20260823`へ退避したうえで、初期割当を`adf_participant`／`cursor`／`specialist`へ変更した。
+- `adf_participant`は割当一覧、割当取得、OwnerのPacket-bound Dispatch後のlocal-only Result提出だけを公開する。FrontdoorのPrepare、Owner Decision作成、Dispatch、Canonical repo／Obsidian書込み、外部送信は公開しない。
+- Result提出はRuntimeの`participant-submissions`へ保存するだけで、Frontdoor Aggregate／Completionを自動変更しない。Frontdoor側の受入・Result Review接続は未完了として扱う。
+
+### Remaining work
+
+- Participant SubmissionをFrontdoorのResult／EvidenceへOwner承認付きで取り込む境界を別Taskとして設計する。
+- Cursorを専門参加者として実Adapter実行するE2Eは、接続方式、認証、外部送信、Work Plane書込みを分離した別承認とする。
+- CursorをFrontdoorへ切り替える場合は、別のPhase／Taskで`adf_frontdoor`の割当をOwner承認し、専門参加者用設定と混同しない。
+
+## 9. 2026-08-23 Participant Evidence Projection
+
+Owner承認済みの最小縦切りとして、参加者SubmissionをFrontdoorから確認できるEvidence候補へ投影した。
+
+### Implemented
+
+- `participantEvidence.ts`で、SubmissionのParticipant／Assignment／Request／Plan／Node target hash、Event Ledger、Packet-bound Dispatchを再検証する。
+- 検証済みSubmissionを`awaiting-owner-review`のEvidence候補として`FrontdoorInspection`へ追加した。
+- Frontdoor MCPの`inspect`とAggregate取得結果に、正式Resultとは別の`participantEvidence`を含めた。
+- ElectronのProject-first Result／Evidence欄に、Evidence ID、Submission参照、hash、内容、Verification、Riskの確認導線を追加した。
+- Submissionの検証失敗はEvidenceとして採用せず、fail-closedで停止する。
+
+### Explicitly not implemented
+
+- Participant Evidenceの正式Aggregateへの自動統合
+- Owner Decision／Completionの自動生成・自動更新
+- GitHub／Obsidianへの書込み
+- 外部送信、資格情報、課金、実Cursorモデル実行
+
+### Verification
+
+- node／web／cli TypeScript：Pass
+- Vitest：40 files／406 tests Pass
+- CLI build：Pass
+- Electron production build：Pass
+- `git diff --check`：Pass
+- Evidence positive projection、tampered binding拒否、Run filter、未Dispatch Submission拒否：Pass

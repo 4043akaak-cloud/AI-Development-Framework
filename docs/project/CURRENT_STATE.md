@@ -1,5 +1,7 @@
 # ADF Current State
 
+> 2026-08-25: 最小MVP収束作業を実施。Owner向けPrimary UIは1プロジェクトの`ADF Project Board`に統一し、判断入力とTask単位管理は窓口AI経由へ寄せた。Aggregate child ResultへResult hashを保持し、Result Review時にResult／Run／Task／Job／入力hashを再検証するfail-closed境界を追加。現行Owner-facing IPC／follow-up DispatchはPacket-boundを必須化した。typecheck 3系統、Vitest 39 files / 389 tests、production build、package、diff checkをPass。リポジトリの生成済みアプリは現行パッケージ1個に整理し、旧生成物は削除せず`/tmp/adf-legacy-builds-20260825/`へ退避。実窓口AIクライアントの同一入口2Cycle操作と現行パッケージでの成果物ボタン実クリックは未検証のため、製品全体を完了扱いにしない。
+
 > 2026-08-21: `ADF-MCP-FRONTDOOR-2CYCLE-E2E-001` を開始。既存の `adf_frontdoor` MCP入口を使った窓口AIの2Cycle実証を、Fake Adapter・local-only・Owner Gate維持で進める。外部送信、資格情報、正本自動書込み、commit／pushは対象外。
 >
 > 2026-08-21: North Star Goal Alignment Monitorを実装。Frontdoor Inspect／Electron Owner Loop／CLI／MCPで、`Intake → Plan → Dispatch → AI実行 → Result Review → Completion → 次Request`の到達段階、Decision・Evidence・hash binding、Owner Gate投影不整合を読み取り表示する。Cycle 2 Run `run-47d82f0b99ebfb5f4cac`で`owner-gate-projection-stale`を実検知した。自動修復・自動承認は行わない。

@@ -429,6 +429,7 @@ describe('ADF-EXTERNAL-ADAPTER-001 Electron wiring', () => {
       'frontdoor:propose-plan',
       'frontdoor:prepare',
       'frontdoor:inspect',
+      'frontdoor:inspect-artifact',
       'frontdoor:approve',
       'frontdoor:dispatch',
       'frontdoor:review-node',

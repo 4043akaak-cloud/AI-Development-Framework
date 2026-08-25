@@ -6,7 +6,12 @@ export function aggregateResults(runId: string, nodes: readonly OrchestrationNod
   const completedNodes = nodes.filter((node) => node.state === 'completed').map((node) => node.node.nodeId)
   const failedNodes = nodes.filter((node) => node.state === 'failed').map((node) => node.node.nodeId)
   const partialNodes = nodes.filter((node) => node.resultStatus === 'partial').map((node) => node.node.nodeId)
-  const childResults = nodes.filter((node) => node.resultStatus).map((node) => ({ nodeId: node.node.nodeId, status: node.resultStatus!, resultRef: node.resultRef }))
+  const childResults = nodes.filter((node) => node.resultStatus).map((node) => ({
+    nodeId: node.node.nodeId,
+    status: node.resultStatus!,
+    resultRef: node.resultRef,
+    resultHash: node.resultHash
+  }))
   const blocking = openBlockingQuestions(questions)
   const hasCancelled = nodes.some((node) => node.state === 'cancelled')
   const status = blocking.length > 0

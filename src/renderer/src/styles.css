@@ -115,3 +115,57 @@ h1, h2, h3, p { margin-top: 0; } h1 { margin-bottom: 8px; font-size: 32px; } h2 
 .activity-content { min-width:0; padding:0 0 10px; border-bottom:1px solid rgba(73,103,142,.35); }.activity-meta { display:flex; flex-wrap:wrap; align-items:baseline; gap:8px; color:#8fa8c9; font-size:11px; }.activity-meta strong { color:#a8c6f2; }.activity-meta span { color:#9df0dd; }.activity-meta time { margin-left:auto; }.activity-content h4 { margin:5px 0 3px; color:#eaf1f8; font-size:13px; }.activity-content p { margin:0; color:#b9c9e3; font-size:12px; line-height:1.45; }.activity-tags { display:flex; flex-wrap:wrap; gap:5px; margin-top:7px; }.activity-tags span { padding:3px 6px; border:1px solid #49678e; border-radius:99px; color:#bdeaff; font-size:10px; }.activity-disclosure { margin:14px 0 0; padding-top:10px; border-top:1px solid #31486d; }
 @media (max-width: 1150px) { .frontdoor-layout { grid-template-columns: 1fr; } .frontdoor-run-list { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 760px) { .frontdoor-intake-grid { grid-template-columns: 1fr; } .frontdoor-plan-field, .frontdoor-intake-actions { grid-column: auto; } }
+
+/* ADF collaboration-and-monitoring MVP surface. Internal projections remain
+   available through the runtime, but are not part of the Owner's primary view. */
+.mvp-shell { max-width: 1500px; margin: 0 auto; padding: 32px; }
+.mvp-header { display:flex; justify-content:space-between; align-items:flex-start; gap:24px; margin-bottom:20px; }
+.mvp-header h1 { margin-bottom:8px; font-size:36px; }
+.mvp-header p:not(.eyebrow) { max-width:760px; margin-bottom:0; color:#b6c4d1; font-size:15px; line-height:1.55; }
+.mvp-purpose { min-width:190px; display:grid; gap:5px; padding:16px; border:1px solid #7ed1c3; border-radius:12px; background:#0e2929; color:#c8f3e8; }
+.mvp-purpose strong { font-size:20px; }.mvp-purpose span { color:#9df0dd; font-size:13px; }
+.mvp-shell .frontdoor-panel { margin-top:0; }
+.mvp-shell .frontdoor-panel > .thread-heading { display:none; }
+.mvp-project-summary { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:20px; align-items:center; margin-bottom:16px; padding:20px; border:1px solid #3f7a6d; border-radius:12px; background:linear-gradient(135deg,#102d37,#0f242d); }
+.mvp-project-summary h2 { margin-bottom:8px; color:#eaf1f8; font-size:24px; }
+.mvp-project-summary p:not(.eyebrow) { max-width:760px; margin-bottom:0; color:#b9d1d7; line-height:1.55; }
+.mvp-project-metrics { display:grid; grid-template-columns:repeat(4,minmax(90px,1fr)); gap:8px; margin:0; }
+.mvp-project-metrics div { min-width:100px; padding:10px 12px; border:1px solid #2d5d61; border-radius:9px; background:#0b2028; text-align:center; }
+.mvp-project-metrics dt { color:#8fcfc4; font-size:11px; font-weight:700; }
+.mvp-project-metrics dd { margin:5px 0 0; color:#eaf1f8; font-size:24px; font-weight:800; }
+.mvp-project-metrics span { color:#90aaa3; font-size:10px; }
+.mvp-window-ai-bridge { margin-bottom:16px; border-color:#4d8c86; background:#102c2d; }
+.mvp-window-ai-bridge h3 { color:#c8f3e8; font-size:18px; }
+.mvp-window-ai-bridge p:not(.eyebrow) { margin-bottom:0; color:#b3ccc4; line-height:1.55; }
+.mvp-window-ai-note { margin:0; padding:9px 10px; border-left:3px solid #7ed1c3; border-radius:5px; background:#102c2d; color:#b3ccc4; }
+.mvp-shell .frontdoor-layout { grid-template-columns:1fr; }
+.mvp-shell .frontdoor-run-list { grid-template-columns:repeat(3,minmax(0,1fr)); }
+.mvp-shell .frontdoor-run-list h3 { grid-column:1 / -1; }
+.mvp-shell .frontdoor-detail { max-width:none; }
+.mvp-shell .frontdoor-run-list .task-card { min-height:120px; }
+.mvp-shell .frontdoor-card[aria-label="RequestとPlan"] .detail-grid { display:none; }
+.mvp-shell .frontdoor-card[aria-label="RequestとPlan"] .frontdoor-node-list small { display:none; }
+.mvp-shell .frontdoor-card[aria-label="Result Evidence"] .frontdoor-json { display:none; }
+.mvp-shell .frontdoor-card[aria-label="Result Evidence"] .frontdoor-decision-list small { display:none; }
+.mvp-intake-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px 14px; }
+.mvp-intake-grid .frontdoor-intake-actions { grid-column:1 / -1; }
+.mvp-shell .frontdoor-activity-panel { margin-top:0; }
+.frontdoor-artifact-access { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:12px; padding:10px 12px; border:1px solid #4d8c86; border-radius:8px; background:#102c2d; color:#c8f3e8; font-size:12px; }
+.frontdoor-artifact-panel .frontdoor-json { max-height:520px; }
+.participant-evidence-list { display:grid; gap:8px; padding:10px 0; border-top:1px solid #31486d; }
+.participant-evidence-list h4 { margin:0; color:#c8f3e8; }
+.participant-evidence-item { border:1px solid #4d8c86; border-radius:8px; padding:9px 10px; background:#102c2d; color:#d6eee9; }
+.participant-evidence-item summary { cursor:pointer; }
+.participant-evidence-item .detail-grid { margin-top:10px; }
+.participant-evidence-content { max-height:220px; }
+
+@media (max-width: 760px) {
+  .mvp-shell { padding:20px; }
+  .mvp-header { display:grid; }
+  .mvp-purpose { min-width:0; }
+  .mvp-project-summary { grid-template-columns:1fr; }
+  .mvp-project-metrics { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .mvp-intake-grid { grid-template-columns:1fr; }
+  .mvp-intake-grid .frontdoor-intake-actions { grid-column:auto; }
+  .mvp-shell .frontdoor-run-list { grid-template-columns:1fr; }
+}

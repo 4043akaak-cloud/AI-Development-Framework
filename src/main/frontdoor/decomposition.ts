@@ -1,5 +1,6 @@
 import type { DecompositionNode, DecompositionPlan, DecompositionPlanInput, FrontdoorRequest, NodeReviewPolicy } from '../../shared/frontdoorTypes'
 import { hashJson } from '../jobLoop/hash'
+import { validateParticipantAssignment } from './participantRegistry'
 
 export class DecompositionRejectedError extends Error {
   readonly code = 'DECOMPOSITION_REJECTED'
@@ -25,6 +26,17 @@ function validateNode(node: DecompositionNode, request: FrontdoorRequest, ids: S
   if (ids.has(node.nodeId)) errors.push(`duplicate nodeId: ${node.nodeId}`)
   if (!node.objective.trim()) errors.push(`node objective is required: ${node.nodeId}`)
   if (!node.adapterId || !node.role) errors.push(`node adapter and role are required: ${node.nodeId}`)
+  if (node.participantAssignment) {
+    if (!node.participantAssignment.participantId || !node.participantAssignment.role) errors.push(`participant assignment is incomplete: ${node.nodeId}`)
+    else {
+      try {
+        validateParticipantAssignment(node.participantAssignment.participantId, node.participantAssignment.role, node.participantAssignment.capabilities)
+      } catch (error) {
+        errors.push(`participant assignment is invalid for ${node.nodeId}: ${(error as Error).message}`)
+      }
+      if (!node.participantAssignment.capabilities.every((capability) => node.capabilities.includes(capability))) errors.push(`participant assignment exceeds node capability grant: ${node.nodeId}`)
+    }
+  }
   if (!subset(node.scope.inScope, request.scope.inScope)) errors.push(`node scope exceeds parent scope: ${node.nodeId}`)
   if (!subset(node.contextReferences, request.contextReferences)) errors.push(`node context exceeds parent context: ${node.nodeId}`)
   if (!request.scope.outOfScope.every((item) => node.scope.outOfScope.includes(item))) errors.push(`node removes a parent out-of-scope boundary: ${node.nodeId}`)

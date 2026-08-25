@@ -89,7 +89,7 @@ describe('Frontdoor Electron service boundary', () => {
     expect(inspected.ok).toBe(true)
     if (!inspected.ok) return
     expect(inspected.value.run.runId).toBe(fixture.run.runId)
-    expect(inspected.value.nextAction).toContain('intake')
+    expect(inspected.value.nextAction).toContain('Intake')
     expect((await approveFrontdoorRun(fixture.orchestrator, { runId: fixture.run.runId, gate: 'intake', approvedBy: '' })).ok).toBe(false)
     expect((await approveFrontdoorRun(fixture.orchestrator, { runId: fixture.run.runId, gate: 'unknown', approvedBy: 'Project Owner' })).ok).toBe(false)
   })

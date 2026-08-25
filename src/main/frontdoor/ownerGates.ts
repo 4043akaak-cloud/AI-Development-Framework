@@ -1,7 +1,7 @@
 import { link, mkdir, readdir, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import type { ApprovedTaskPacket, JobRequest } from '../../shared/jobLoopTypes'
-import type { AggregateResult, FrontdoorQuestion, OwnerDecision, OwnerDecisionEnvelope, OwnerGate, OrchestrationNodeRecord, OrchestrationRun, WorkPlaneArtifactManifest } from '../../shared/frontdoorTypes'
+import type { AggregateResult, FrontdoorArtifactInspection, FrontdoorQuestion, OwnerDecision, OwnerDecisionEnvelope, OwnerGate, OrchestrationNodeRecord, OrchestrationRun, WorkPlaneArtifactManifest } from '../../shared/frontdoorTypes'
 import type { ImplementationSourceBinding, CandidateSummary, CandidateInspectionResult, CandidateReviewStartedResult, CandidateReviewDecisionInput, CandidateReviewOwnerDecisionEnvelope, CandidateReviewState } from '../../shared/implementationTypes'
 import { hashJson } from '../jobLoop/hash'
 import { readJson } from '../jobLoop/ledger'
@@ -11,7 +11,7 @@ import { assertRunEventConsistency, assertRunIntegrity } from './runIntegrity'
 import { validateImplementationCandidate } from './candidateArtifact'
 import { assertImplementationSourceArtifacts } from './implementationBinding'
 import { assertNoSymlinkComponents, safeRuntimePath } from './pathIntegrity'
-import { readVerifiedWorkPlaneArtifact } from './workPlaneArtifact'
+import { latestWorkPlaneArtifactManifest, readVerifiedWorkPlaneArtifact } from './workPlaneArtifact'
 
 const decisionByGate: Record<OwnerGate, readonly OwnerDecision[]> = {
   intake: ['clarify', 'edit', 'reject', 'proceed', 'stop'],
@@ -152,6 +152,19 @@ async function assertDecisionBinding(runtimeRoot: string, envelope: OwnerDecisio
 function assertAggregateBelongsToRun(runId: string, aggregate: AggregateResult): void {
   if (aggregate.runId !== runId) throw new Error('Aggregate Result belongs to another Run')
   if (aggregate.openQuestions.some((question) => question.runId !== runId)) throw new Error('Aggregate Question belongs to another Run')
+}
+
+async function assertAggregateResultsCurrent(runtimeRoot: string, runId: string, run: OrchestrationRun, aggregate: AggregateResult): Promise<void> {
+  for (const child of aggregate.childResults) {
+    const record = run.nodes.find((candidate) => candidate.node.nodeId === child.nodeId)
+    if (!record || !record.resultRef || !record.resultHash) throw new Error(`Result Review requires a bound Result: ${child.nodeId}`)
+    if (record.resultRef !== child.resultRef || record.resultHash !== child.resultHash) throw new Error(`Result Review Result binding is stale: ${child.nodeId}`)
+    const result = await readJson<Record<string, unknown>>(await safeRuntimePath(runtimeRoot, record.resultRef))
+    if (hashJson(result) !== record.resultHash) throw new Error(`Result Review Result hash mismatch: ${child.nodeId}`)
+    if (result.orchestrationRunId !== runId || result.taskId !== record.childTaskId || result.jobId !== record.childJobId || result.inputHash !== record.childInputHash) {
+      throw new Error(`Result Review Result identity mismatch: ${child.nodeId}`)
+    }
+  }
 }
 
 function hasDecision(events: Awaited<ReturnType<typeof readRunEvents>>, gate: OwnerGate, decisions: readonly OwnerDecision[], targetHash: string): boolean {
@@ -387,6 +400,7 @@ export class FrontdoorOwnerGateService {
         validateImplementationCandidate(result.artifact, record.node.scope.inScope)
       }
     }
+    await assertAggregateResultsCurrent(this.runtimeRoot, runId, run, aggregate)
     const targetHash = resultReviewTargetHash(runId, run.aggregateResultRef, aggregate)
     const decidedAt = this.clock().toISOString()
     const envelope = buildDecisionEnvelope(run, 'result-review', decision, targetHash, approvedBy, decidedAt, { note, expiresAt: new Date(this.clock().getTime() + 60 * 60 * 1000).toISOString() })
@@ -536,6 +550,19 @@ export class FrontdoorOwnerGateService {
     } finally {
       await releaseRun(this.runtimeRoot, runId, claim.token)
     }
+  }
+
+  async inspectWorkPlaneArtifact(runId: string): Promise<FrontdoorArtifactInspection> {
+    const run = await readProjectedRun(this.runtimeRoot, runId)
+    const request = await readRequest(this.runtimeRoot, runId)
+    const plan = await readPlan(this.runtimeRoot, runId)
+    await assertRunIntegrity(this.runtimeRoot, run, request, plan)
+    const events = await readRunEvents(this.runtimeRoot, runId)
+    assertRunEventConsistency(run, events)
+    const manifest = latestWorkPlaneArtifactManifest(events)
+    if (!manifest) throw new Error('Frontdoor Run has no exported Work Plane artifact')
+    const verified = await readVerifiedWorkPlaneArtifact(this.runtimeRoot, runId, manifest)
+    return { runId, manifest: verified.manifest, content: verified.content }
   }
 
   async listReviewableCandidates(): Promise<CandidateSummary[]> {

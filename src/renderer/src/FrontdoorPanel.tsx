@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type JSX } from 'react'
-import type { FrontdoorActivity, FrontdoorInspection, FrontdoorPlanProposal, FrontdoorPrepareInput, FrontdoorRequestInput, FrontdoorRunSummary, OwnerGate, OwnerGateState } from '../../shared/frontdoorTypes'
+import type { FrontdoorActivity, FrontdoorArtifactInspection, FrontdoorInspection, FrontdoorPlanProposal, FrontdoorPrepareInput, FrontdoorRequestInput, FrontdoorRunSummary, OwnerGate, OwnerGateState } from '../../shared/frontdoorTypes'
 
 const gateLabels: Record<OwnerGate, string> = {
   intake: 'Intake',
@@ -68,13 +68,26 @@ const defaultPlanJson = JSON.stringify({
     capabilities: ['read', 'propose'],
     dependsOn: [],
     depth: 1
+  }, {
+    nodeId: 'critic',
+    objective: 'Proposalをレビューし、次の判断を返す',
+    role: 'critic',
+    adapterId: 'fake-ai-b',
+    scope: { inScope: ['frontdoor-request', 'proposal-review'], outOfScope: ['external-send', 'write-canonical'] },
+    contextReferences: ['fixture://owner-request'],
+    acceptance: ['Critic Resultを返す'],
+    stopConditions: ['Scope外要求'],
+    capabilities: ['read', 'review'],
+    dependsOn: ['proposal'],
+    depth: 2
   }]
 }, null, 2)
 
-export default function FrontdoorPanel(): JSX.Element {
+export default function FrontdoorPanel({ minimal = false }: { minimal?: boolean }): JSX.Element {
   const [runs, setRuns] = useState<FrontdoorRunSummary[]>([])
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
   const [inspection, setInspection] = useState<FrontdoorInspection | null>(null)
+  const [artifactInspection, setArtifactInspection] = useState<FrontdoorArtifactInspection | null>(null)
   const [approvedBy, setApprovedBy] = useState('')
   const [note, setNote] = useState('')
   const [answer, setAnswer] = useState('')
@@ -92,6 +105,7 @@ export default function FrontdoorPanel(): JSX.Element {
   const [intakeRequestId, setIntakeRequestId] = useState<string | null>(null)
   const [plannerProposal, setPlannerProposal] = useState<FrontdoorPlanProposal | null>(null)
   const [activityVisible, setActivityVisible] = useState(() => {
+    if (minimal) return true
     try {
       return window.localStorage.getItem('adf.activity-trace.visible') === 'true'
     } catch {
@@ -108,6 +122,7 @@ export default function FrontdoorPanel(): JSX.Element {
     if (result.ok) {
       setSelectedRunId(runId)
       setInspection(result.value)
+      setArtifactInspection(null)
       setMessage(null)
     } else setMessage(result.error)
   }, [])
@@ -143,6 +158,18 @@ export default function FrontdoorPanel(): JSX.Element {
       setInspection(null)
     }
   }, [inspect, refreshCandidates, selectedRunId])
+
+  const inspectArtifact = useCallback(async (runId: string): Promise<void> => {
+    setBusy(true)
+    setArtifactInspection(null)
+    try {
+      const result = await window.adfFrontdoor.inspectArtifact(runId)
+      if (result.ok) setArtifactInspection(result.value)
+      else setMessage(`成果物を読み込めませんでした: ${result.error}`)
+    } finally {
+      setBusy(false)
+    }
+  }, [])
 
 
   useEffect(() => {
@@ -233,6 +260,11 @@ export default function FrontdoorPanel(): JSX.Element {
   const latestActivity = activities.at(-1)
   const waitingActivity = [...activities].reverse().find((activity) => activity.status === 'waiting')
   const terminal = run ? ['complete', 'partial', 'failed', 'cancelled'].includes(run.state) : false
+  const relatedCandidates = run ? candidates.filter((candidate) => candidate.parentRunId === run.runId || candidate.childRunId === run.runId) : []
+  const visibleCandidates = minimal ? relatedCandidates : candidates
+  const runningCount = runs.filter((entry) => entry.state === 'running').length
+  const ownerWaitingCount = runs.filter((entry) => entry.ownerGate !== null && entry.ownerGate !== undefined).length
+  const completedCount = runs.filter((entry) => entry.state === 'complete').length
 
   const toggleActivity = (visible: boolean): void => {
     setActivityVisible(visible)
@@ -250,7 +282,7 @@ export default function FrontdoorPanel(): JSX.Element {
   }
 
   return (
-    <section className="frontdoor-panel" aria-label="Frontdoor Owner Loop">
+    <section className="frontdoor-panel" aria-label={minimal ? 'ADF Project Board' : 'Frontdoor Owner Loop'}>
       <div className="thread-heading">
         <div>
           <p className="eyebrow">FRONTDOOR · OWNER CONTROL PLANE</p>
@@ -262,7 +294,29 @@ export default function FrontdoorPanel(): JSX.Element {
 
       {message && <p className="frontdoor-message" role="status">{message}</p>}
 
-      <section className="frontdoor-card frontdoor-intake" aria-label="Frontdoor Request Intake">
+      {minimal && (
+        <section className="mvp-project-summary" aria-label="ADF Project Control">
+          <div>
+            <p className="eyebrow">PROJECT CONTROL · ONE PROJECT VIEW</p>
+            <h2>AI Development Framework</h2>
+            <p>Ownerの判断は窓口AIへ伝えます。ADFはProject全体の協業状態、進捗、成果物、次のActionを記録・表示します。</p>
+          </div>
+          <dl className="mvp-project-metrics">
+            <div><dt>協業履歴</dt><dd>{runs.length}</dd><span>内部Run</span></div>
+            <div><dt>進行中</dt><dd>{runningCount}</dd><span>AI協業</span></div>
+            <div><dt>判断・確認待ち</dt><dd>{ownerWaitingCount}</dd><span>窓口AIへ</span></div>
+            <div><dt>完了Run</dt><dd>{completedCount}</dd><span>成果物確認</span></div>
+          </dl>
+        </section>
+      )}
+
+      {minimal ? (
+        <section className="frontdoor-card mvp-window-ai-bridge" aria-label="窓口AI経由">
+          <p className="eyebrow">WINDOW AI · OWNER CONTACT</p>
+          <h3>Ownerの判断は窓口AIへ</h3>
+          <p>ADFに別のOwner入力欄は設けません。指示・判断・方向修正は窓口AIへ伝え、ADFはその結果とProject全体の状態を表示します。</p>
+        </section>
+      ) : <section className="frontdoor-card frontdoor-intake" aria-label="Frontdoor Request Intake">
         <div className="frontdoor-summary">
           <div>
             <p className="eyebrow">REQUEST INTAKE · NO DISPATCH</p>
@@ -271,7 +325,7 @@ export default function FrontdoorPanel(): JSX.Element {
           </div>
           <button type="button" className="text-button" disabled={busy} onClick={() => setIntakeOpen((open) => !open)}>{intakeOpen ? '入力を閉じる' : '新規Request'}</button>
         </div>
-        {intakeOpen && (
+        {intakeOpen && !minimal && (
           <div className="frontdoor-intake-grid">
             <label className="frontdoor-field">目的（必須）<input value={intakeObjective} onChange={(event) => setIntakeObjective(event.target.value)} disabled={busy} /></label>
             <label className="frontdoor-field">窓口からの依頼（必須）<textarea value={intakeUserInput} onChange={(event) => setIntakeUserInput(event.target.value)} rows={3} disabled={busy} /></label>
@@ -296,19 +350,19 @@ export default function FrontdoorPanel(): JSX.Element {
             </div>
           </div>
         )}
-      </section>
+      </section>}
 
       <div className="frontdoor-layout">
         <aside className="frontdoor-run-list" aria-label="Frontdoor Run一覧">
-          <h3>Run一覧</h3>
+          <h3>{minimal ? 'プロジェクト内の協業履歴' : 'Run一覧'}</h3>
           {runs.length === 0 && <p className="lane-empty">Frontdoor Runがありません。CLIのprepareまたは後続の窓口入力Taskで作成します。</p>}
           {runs.map((entry) => (
             <button key={entry.runId} type="button" className={`task-card ${entry.runId === selectedRunId ? 'selected' : ''}`} disabled={busy} onClick={() => void inspect(entry.runId)}>
-              <span className="card-id">{entry.runId}</span>
+              {!minimal && <span className="card-id">{entry.runId}</span>}
               <span className="card-objective">{entry.objective}</span>
               <span className="card-status">{entry.state} · {entry.ownerGate ?? 'gateなし'}</span>
-              <span className="card-status">Node {entry.nodeCount} · Question {entry.openQuestionCount}</span>
-              <span className={`freshness ${entry.packetsReady ? 'current' : 'stale'}`}>{entry.packetsReady ? 'Packet準備済み' : 'Packet待ち'}</span>
+              {!minimal && <span className="card-status">Node {entry.nodeCount} · Question {entry.openQuestionCount}</span>}
+              {!minimal && <span className={`freshness ${entry.packetsReady ? 'current' : 'stale'}`}>{entry.packetsReady ? 'Packet準備済み' : 'Packet待ち'}</span>}
             </button>
           ))}
         </aside>
@@ -336,12 +390,18 @@ export default function FrontdoorPanel(): JSX.Element {
                 <div><dt>Evidence</dt><dd>{inspection.evidenceRefs.length}件</dd></div>
                 <div><dt>Event</dt><dd>{inspection.eventCount}件</dd></div>
               </dl>
+              {inspection.workPlaneArtifact && (
+                <div className="frontdoor-artifact-access">
+                  <span>検証済みWork Plane成果物: {inspection.workPlaneArtifact.artifactId}</span>
+                  <button type="button" className="text-button" disabled={busy} onClick={() => void inspectArtifact(run.runId)}>成果物を確認</button>
+                </div>
+              )}
               <ul className="frontdoor-node-list">
                 {inspection.plan.nodes.map((node) => <li key={node.nodeId}><strong>{node.nodeId}</strong> · {node.role} / {node.adapterId} · {node.dependsOn.length ? `依存: ${node.dependsOn.join(', ')}` : '依存なし'}<br /><small>target hash: {inspection.nodeTargetHashes[node.nodeId]}</small></li>)}
               </ul>
             </section>
 
-            {inspection.goalAlignment && (
+            {!minimal && inspection.goalAlignment && (
               <section className="frontdoor-card" aria-label="North Star Goal Alignment">
                 <h3>North Star進捗監視</h3>
                 <dl className="detail-grid">
@@ -361,7 +421,7 @@ export default function FrontdoorPanel(): JSX.Element {
               </section>
             )}
 
-            <section className="frontdoor-card frontdoor-activity-toggle" aria-label="AI Activity表示設定">
+            {!minimal && <section className="frontdoor-card frontdoor-activity-toggle" aria-label="AI Activity表示設定">
               <div>
                 <h3>AI Activity（おまけ）</h3>
                 <p className="turn-refs">Event Ledgerから、ADFが観測できるAI Node・Owner Gate・Verificationの進行を表示します。</p>
@@ -370,9 +430,9 @@ export default function FrontdoorPanel(): JSX.Element {
                 <input type="checkbox" checked={activityVisible} onChange={(event) => toggleActivity(event.target.checked)} />
                 <span>Activityを表示</span>
               </label>
-            </section>
+            </section>}
 
-            {activityVisible && (
+            {(minimal || activityVisible) && (
               <section className="frontdoor-card frontdoor-activity-panel" aria-label="AI Activity Timeline">
                 <div className="activity-summary">
                   <div>
@@ -406,7 +466,7 @@ export default function FrontdoorPanel(): JSX.Element {
               </section>
             )}
 
-            <section className="frontdoor-card" aria-label="Owner Decision">
+            {!minimal && <section className="frontdoor-card" aria-label="Owner Decision">
               <h3>Owner Decision</h3>
               <label className="frontdoor-field">Owner identity（必須）<input value={approvedBy} onChange={(event) => setApprovedBy(event.target.value)} placeholder="例: Project Owner" disabled={busy} /></label>
               <label className="frontdoor-field">Note（任意）<textarea value={note} onChange={(event) => setNote(event.target.value)} maxLength={400} rows={2} disabled={busy} /></label>
@@ -440,7 +500,7 @@ export default function FrontdoorPanel(): JSX.Element {
                 {!terminal && <button type="button" className="text-button" disabled={!canOwnerAct} onClick={() => void runAction(() => window.adfFrontdoor.stop({ runId: run.runId, approvedBy: approvedBy.trim(), note: note || undefined }))}>Runを停止</button>}
                 {run.state === 'running' && <button type="button" className="text-button" disabled={busy} onClick={() => void runAction(() => window.adfFrontdoor.recover(run.runId))}>Recovery状態を確認</button>}
               </div>
-            </section>
+            </section>}
 
             {currentGate === 'node-review' && nodeReview && (
               <section className="frontdoor-card" aria-label="Node Result Review">
@@ -464,8 +524,14 @@ export default function FrontdoorPanel(): JSX.Element {
                   <div key={question.questionId} className="frontdoor-question">
                     <p><strong>{question.questionId}</strong> · {question.kind} · {question.blocking ? 'Block' : 'Non-blocking'}</p>
                     <p className="turn-content">{question.text}</p>
-                    <label className="frontdoor-field">Owner answer（必須）<textarea value={answer} onChange={(event) => setAnswer(event.target.value)} rows={3} disabled={busy} /></label>
-                    <button type="button" className="text-button" disabled={!canOwnerAct || !answer.trim()} onClick={() => void runAction(async () => { const result = await window.adfFrontdoor.answer({ runId: run.runId, questionId: question.questionId, approvedBy: approvedBy.trim(), note: answer.trim() }); if (result.ok) setAnswer(''); return result })}>回答を記録</button>
+                    {minimal ? (
+                      <p className="turn-refs mvp-window-ai-note">この質問は窓口AIへ伝え、回答後にADFへ記録します。</p>
+                    ) : (
+                      <>
+                        <label className="frontdoor-field">Owner answer（必須）<textarea value={answer} onChange={(event) => setAnswer(event.target.value)} rows={3} disabled={busy} /></label>
+                        <button type="button" className="text-button" disabled={!canOwnerAct || !answer.trim()} onClick={() => void runAction(async () => { const result = await window.adfFrontdoor.answer({ runId: run.runId, questionId: question.questionId, approvedBy: approvedBy.trim(), note: answer.trim() }); if (result.ok) setAnswer(''); return result })}>回答を記録</button>
+                      </>
+                    )}
                   </div>
                 ))}
               </section>
@@ -474,19 +540,60 @@ export default function FrontdoorPanel(): JSX.Element {
             <section className="frontdoor-card" aria-label="Result Evidence">
               <h3>Result / Evidence / Decisions</h3>
               {inspection.aggregate ? <pre className="frontdoor-json">{formatValue(inspection.aggregate)}</pre> : <p className="lane-empty">Aggregateはまだありません。</p>}
+              {(inspection.participantEvidence?.length ?? 0) > 0 && (
+                <div className="participant-evidence-list" aria-label="Participant Evidence Review">
+                  <h4>Participant Evidence（窓口AI／Owner Review待ち）</h4>
+                  <p className="turn-refs">Packet-bound DispatchとRequest／Plan／Node hashを検証済みですが、正式Resultへの自動統合は行っていません。</p>
+                  {inspection.participantEvidence?.map((evidence) => (
+                    <details key={evidence.evidenceId} className="participant-evidence-item">
+                      <summary><strong>{evidence.nodeId}</strong> · {evidence.participantId}／{evidence.participantRole} · {evidence.status}</summary>
+                      <dl className="detail-grid">
+                        <div><dt>Evidence ID</dt><dd>{evidence.evidenceId}</dd></div>
+                        <div><dt>Submission</dt><dd>{evidence.submissionRef}</dd></div>
+                        <div><dt>Evidence hash</dt><dd><small>{evidence.evidenceHash}</small></dd></div>
+                        <div><dt>Target hash</dt><dd><small>{evidence.targetHash}</small></dd></div>
+                      </dl>
+                      <p><strong>{evidence.summary}</strong></p>
+                      <pre className="frontdoor-json participant-evidence-content">{evidence.content}</pre>
+                      {evidence.verification.length > 0 && <pre className="frontdoor-json participant-evidence-content">{formatValue(evidence.verification)}</pre>}
+                      {evidence.risks.length > 0 && <p className="turn-refs">Risks: {evidence.risks.join(' / ')}</p>}
+                    </details>
+                  ))}
+                </div>
+              )}
               <ul className="frontdoor-decision-list">
                 {inspection.decisions.map((decision) => <li key={decision.decisionId}><strong>{decision.gate}</strong> · {decision.decision} · {decision.approvedBy}<br /><small>target: {decision.targetHash}</small></li>)}
               </ul>
             </section>
 
-            <section className="frontdoor-card" aria-label="Candidate Review">
+            {artifactInspection && artifactInspection.runId === run.runId && (
+              <section className="frontdoor-card frontdoor-artifact-panel" aria-label="検証済み成果物">
+                <div className="frontdoor-summary">
+                  <div>
+                    <p className="eyebrow">EVIDENCE PLANE · READ ONLY</p>
+                    <h3>成果物を確認</h3>
+                    <p className="turn-refs">Run／Artifact／content hashをMain側で検証済みです。ここからCanonical書込み・外部送信・自動編集は行いません。</p>
+                  </div>
+                  <button type="button" className="text-button" onClick={() => setArtifactInspection(null)}>閉じる</button>
+                </div>
+                <dl className="detail-grid">
+                  <div><dt>Artifact ID</dt><dd>{artifactInspection.manifest.artifactId}</dd></div>
+                  <div><dt>Content hash</dt><dd><small>{artifactInspection.manifest.contentHash}</small></dd></div>
+                  <div><dt>Result hash</dt><dd><small>{artifactInspection.manifest.resultHash}</small></dd></div>
+                  <div><dt>Binding</dt><dd>{artifactInspection.manifest.candidateKind ?? 'Result／Evidence'}</dd></div>
+                </dl>
+                <pre className="frontdoor-json">{formatValue(artifactInspection.content)}</pre>
+              </section>
+            )}
+
+            {(!minimal || visibleCandidates.length > 0) && <section className="frontdoor-card" aria-label="Candidate Review">
               <h3>Candidate Review (候補成果物レビュー)</h3>
-              {candidates.length === 0 ? (
+              {visibleCandidates.length === 0 ? (
                 <p className="lane-empty">レビュー対象のCandidateはまだありません。</p>
               ) : (
                 <div>
                   <div className="frontdoor-run-list">
-                    {candidates.map((cand) => (
+                    {visibleCandidates.map((cand) => (
                       <button
                         key={cand.candidateId}
                         type="button"
@@ -517,7 +624,11 @@ export default function FrontdoorPanel(): JSX.Element {
                         </div>
                       ))}
 
-                      {candidateInspection.state === 'owner-review' && (
+                      {candidateInspection.state === 'owner-review' && minimal && (
+                        <p className="turn-refs mvp-window-ai-note">候補の採否や修正方針は窓口AIへ伝えます。ADFはCandidateとEvidenceを記録・表示します。</p>
+                      )}
+
+                      {candidateInspection.state === 'owner-review' && !minimal && (
                         <div className="frontdoor-action-group" style={{ marginTop: '12px' }}>
                           <button
                             type="button"
@@ -585,7 +696,7 @@ export default function FrontdoorPanel(): JSX.Element {
                   )}
                 </div>
               )}
-            </section>
+            </section>}
           </div>
         )}
 

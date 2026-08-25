@@ -144,7 +144,7 @@ describe('Frontdoor Owner Loop CLI', () => {
     expect(view.run.requestHash).toBe(prepared.run.requestHash)
     expect(view.plan.planHash).toBe(prepared.run.planHash)
     expect(view.evidence).toEqual([])
-    expect(view.nextAction).toContain('intake')
+    expect(view.nextAction).toContain('Intake')
     expect(await readFile(runPath, 'utf8')).toBe(before)
   })
 

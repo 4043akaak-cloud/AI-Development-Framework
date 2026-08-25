@@ -93,6 +93,27 @@ describe('Frontdoor Owner Gates', () => {
     await expect(orchestrator.exportWorkPlaneArtifact(run.runId, 'Project Owner')).rejects.toThrow(/recovery-needed/)
   })
 
+  it('exposes a verified artifact button target and aligns the current action after completion', async () => {
+    const { orchestrator, run } = await createFixture()
+    await approveInitialGates(orchestrator, run.runId)
+    await orchestrator.approveDispatch(run.runId, [proposal.nodeId])
+    await orchestrator.executeApprovedRun(run.runId, { proposal: packet(run) })
+    await orchestrator.reviewResult(run.runId, 'Project Owner', 'accept')
+    const manifest = await orchestrator.exportWorkPlaneArtifact(run.runId, 'Project Owner')
+    await orchestrator.completeRun(run.runId, 'Project Owner')
+
+    const inspection = await orchestrator.inspectRun(run.runId)
+    expect(inspection.run.state).toBe('complete')
+    expect(inspection.nextAction).toBe(inspection.goalAlignment?.nextAction)
+    expect(inspection.nextAction).toContain('次のRequest')
+    expect(inspection.aggregate?.nextAction).toContain('Evidenceを確認')
+    expect(inspection.workPlaneArtifact).toMatchObject({ artifactId: manifest.artifactId, runId: run.runId, contentHash: manifest.contentHash })
+
+    const artifact = await orchestrator.inspectWorkPlaneArtifact(run.runId)
+    expect(artifact.manifest).toMatchObject({ artifactId: manifest.artifactId, contentHash: manifest.contentHash })
+    expect(artifact.content).toBeDefined()
+  })
+
   it('rejects export when a later Result Review is follow-up after an earlier accept', async () => {
     const { orchestrator, run } = await createFixture()
     await approveInitialGates(orchestrator, run.runId)
@@ -116,6 +137,20 @@ describe('Frontdoor Owner Gates', () => {
     result.content = 'tampered'
     await writeFile(resultPath, `${JSON.stringify(result)}\n`, 'utf8')
     await expect(orchestrator.exportWorkPlaneArtifact(run.runId, 'Project Owner')).rejects.toThrow(/Result hash mismatch/)
+  })
+
+  it('rejects Result Review when a persisted Result is tampered', async () => {
+    const { runtimeRoot, orchestrator, run } = await createFixture()
+    await approveInitialGates(orchestrator, run.runId)
+    await orchestrator.approveDispatch(run.runId, [proposal.nodeId])
+    const executed = await orchestrator.executeApprovedRun(run.runId, { proposal: packet(run) })
+    const resultRef = executed.childResultRefs[0]
+    if (!resultRef) throw new Error('test Result reference missing')
+    const resultPath = path.join(runtimeRoot, resultRef)
+    const result = JSON.parse(await readFile(resultPath, 'utf8')) as Record<string, unknown>
+    result.content = 'tampered before review'
+    await writeFile(resultPath, `${JSON.stringify(result)}\n`, 'utf8')
+    await expect(orchestrator.reviewResult(run.runId, 'Project Owner', 'accept')).rejects.toThrow(/Result hash mismatch/)
   })
 
   it('rejects Work Plane export when the Job request binding is tampered', async () => {

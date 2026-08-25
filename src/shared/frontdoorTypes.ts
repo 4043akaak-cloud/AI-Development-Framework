@@ -1,5 +1,6 @@
 import type { AdapterRole, Capability, JobScope, ResultStatus } from './jobLoopTypes'
 import type { AcceptedCandidateSourceBinding, ImplementationSourceBinding } from './implementationTypes'
+import type { ParticipantAssignmentProposal, ParticipantEvidenceCandidate, ParticipantRole } from './participantTypes'
 
 export type FrontdoorRequestState = 'received' | 'needs-clarification' | 'ready-for-decomposition' | 'rejected'
 export type OrchestrationState = 'ready-for-approval' | 'running' | 'awaiting-owner' | 'complete' | 'partial' | 'blocked-by-question' | 'failed' | 'cancelled'
@@ -38,7 +39,10 @@ export interface FrontdoorConstraints {
 
 export interface FrontdoorRequestInput {
   requestId: string
-  source: 'codex' | 'chatgpt' | 'owner' | 'test'
+  source: 'codex' | 'chatgpt' | 'owner' | 'participant' | 'test'
+  /** Runtime participant identity; it is an assignment, not a permanent Frontdoor provider. */
+  sourceParticipantId?: string
+  sourceParticipantRole?: ParticipantRole
   objective: string
   userInput: string
   projectRef: string
@@ -93,6 +97,8 @@ export interface DecompositionNode {
   capabilities: Capability[]
   dependsOn: string[]
   depth: number
+  /** Optional per-Task participant assignment. Omitted for legacy plans. */
+  participantAssignment?: ParticipantAssignmentProposal
 }
 
 /** Node間のOwner確認を、承認済みPlan内で安全条件付きに自動継続するか。 */
@@ -181,7 +187,7 @@ export interface AggregateResult {
   completedNodes: string[]
   failedNodes: string[]
   partialNodes: string[]
-  childResults: Array<{ nodeId: string; status: ResultStatus; resultRef?: string }>
+  childResults: Array<{ nodeId: string; status: ResultStatus; resultRef?: string; resultHash?: string }>
   openQuestions: FrontdoorQuestion[]
   conflicts: string[]
   evidenceRefs: string[]
@@ -236,6 +242,8 @@ export interface FrontdoorInspection {
   decisions: OwnerDecisionEnvelope[]
   aggregate?: AggregateResult
   aggregateHash?: string
+  workPlaneArtifact?: WorkPlaneArtifactManifest
+  participantEvidence?: ParticipantEvidenceCandidate[]
   evidenceRefs: string[]
   openQuestions: FrontdoorQuestion[]
   nextAction: string
@@ -244,6 +252,12 @@ export interface FrontdoorInspection {
   nodeReview?: FrontdoorNodeReview
   activities: FrontdoorActivity[]
   goalAlignment?: GoalAlignmentReport
+}
+
+export interface FrontdoorArtifactInspection {
+  runId: string
+  manifest: WorkPlaneArtifactManifest
+  content: unknown
 }
 
 export interface WorkPlaneArtifactManifest {
