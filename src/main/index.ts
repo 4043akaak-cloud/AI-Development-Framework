@@ -12,7 +12,32 @@ import { FrontdoorOrchestrator } from './frontdoor/orchestrator'
 import { DeterministicFakePlanner } from './frontdoor/planner'
 
 let mainWindow: BrowserWindow | undefined
-const productName = 'ADF Task Board'
+
+/** The app's name. Cosmetic only — see `runtimeRootPath` for why it cannot move the data. */
+const productName = 'ADF'
+
+/**
+ * Where the Ledger, Runs, and Evidence live.
+ *
+ * Pinned to a literal directory name instead of being derived from the app's name. It used to be
+ * `app.getPath('userData')`, which happened to resolve to the package name rather than the display
+ * name only because `app.setName` runs after Electron has already fixed the path. That made the
+ * data location depend on Electron's start-up ordering, so renaming the app could silently orphan
+ * every Run — and the MCP server, which is handed `--runtime-root` explicitly, would still be
+ * reading the old directory. Pinning it keeps both entrances pointed at the same place.
+ *
+ * `ADF_RUNTIME_ROOT` overrides it for tests and for running against an isolated runtime.
+ */
+function runtimeRootPath(): string {
+  const override = process.env.ADF_RUNTIME_ROOT?.trim()
+  if (override) return path.resolve(override)
+  return path.join(app.getPath('appData'), 'adf-task-board', 'adf-runtime')
+}
+
+/** Marks the development window so it can never be mistaken for the packaged app again. */
+function windowTitle(): string {
+  return app.isPackaged ? productName : `${productName}（開発版）`
+}
 
 const allowedSources: Record<string, CanonicalSourceDefinition> = Object.fromEntries(
   Object.entries(canonicalSources).map(([sourceId, source]) => [sourceId, { rootPath: rootFor(sourceId as keyof typeof canonicalSources), relativePath: source.relativePath }])
@@ -20,7 +45,7 @@ const allowedSources: Record<string, CanonicalSourceDefinition> = Object.fromEnt
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
-    title: productName,
+    title: windowTitle(),
     width: 1440,
     height: 920,
     minWidth: 1000,
@@ -34,7 +59,7 @@ function createWindow(): void {
       webviewTag: false
     }
   })
-  mainWindow.setTitle(productName)
+  mainWindow.setTitle(windowTitle())
 
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   mainWindow.webContents.on('will-navigate', (event) => event.preventDefault())
@@ -62,7 +87,7 @@ app.whenReady().then(async () => {
   // Constructed, not connected. Nothing here opens a socket or reads a credential — the transports
   // only touch the network inside `send` (external) or an explicit local readiness check, both
   // gated behind an Owner action. Neither is contacted just by building this Relay.
-  const runtimeRoot = path.join(app.getPath('userData'), 'adf-runtime')
+  const runtimeRoot = runtimeRootPath()
   const relay: ConversationRelay = createLiveRelay(runtimeRoot)
   const frontdoor = new FrontdoorOrchestrator({ relay })
   const planner = new DeterministicFakePlanner()

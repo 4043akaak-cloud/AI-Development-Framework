@@ -5,11 +5,12 @@
   "description": "Local read-only Task Board for AI Development Framework",
   "main": "./out/main/index.js",
   "scripts": {
-    "dev": "electron-vite dev",
+    "dev": "node scripts/preflight.mjs dev && electron-vite dev",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test": "vitest run",
-    "build": "electron-vite build && electron-builder --dir",
-    "build:cli": "tsc -p tsconfig.cli.json"
+    "build": "node scripts/preflight.mjs build && node scripts/backup-release.mjs && electron-vite build && electron-builder --dir",
+    "build:cli": "tsc -p tsconfig.cli.json",
+    "preflight": "node scripts/preflight.mjs"
   },
   "dependencies": {
     "@vitejs/plugin-react": "latest",

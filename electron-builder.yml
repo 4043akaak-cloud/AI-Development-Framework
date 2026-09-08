@@ -1,5 +1,5 @@
 appId: com.adf.taskboard
-productName: ADF Task Board
+productName: ADF
 electronDist: ./node_modules/electron/dist
 # electron-builder 26.15.3 on this environment can materialize the cached
 # default_app.asar inconsistently during its Electron ASAR integrity pass.
