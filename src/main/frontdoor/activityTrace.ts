@@ -1,8 +1,9 @@
 import type { FrontdoorActivity, FrontdoorActivityKind, FrontdoorActivityStatus, FrontdoorEventType, FrontdoorLedgerEvent, OrchestrationRun } from '../../shared/frontdoorTypes'
+import { maskSecrets } from '../../shared/secretSentinel'
 
 function text(value: unknown, fallback: string): string {
   return typeof value === 'string' && value.trim().length > 0
-    ? value.slice(0, 240).replace(/(sk-|api[_-]?key|token|secret|password)\s*[:=]\s*[^\s,}]+/gi, '$1=<redacted>')
+    ? maskSecrets(value.slice(0, 240))
     : fallback
 }
 

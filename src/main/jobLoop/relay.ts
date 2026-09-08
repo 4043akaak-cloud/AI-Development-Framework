@@ -14,6 +14,7 @@ import type { ExternalAdapterHooks } from './externalAdapter'
 import type { ExternalTransport } from './externalTransport'
 import { assertPacketBoundary, buildSyntheticPacket } from './syntheticPacket'
 import { validateResultEnvelope, type AdapterResultEnvelope } from './resultEnvelope'
+import { maskSecrets } from '../../shared/secretSentinel'
 import { JobRuntime } from './runtime'
 import { appendRecoveryTurn, appendTurn, applyOwnerDecision, createThread, defaultMaxTurns, enterRecovery, lastTurn, leaveRecovery, summarize, ThreadRejectedError, turnHash, withState } from './thread'
 
@@ -23,9 +24,15 @@ const maxPriorTurnsForDispatch = 3
 const maxCharsPerPriorTurn = 1200
 const maxCharsPerDependency = 1000
 
-/** Keeps adapter-supplied error text short and free of stack traces or payloads. */
+/**
+ * Keeps adapter-supplied error text short and free of stack traces or payloads.
+ *
+ * Masks rather than rejects, unlike every other inbound guard. This text is persisted on the
+ * failure path (`recovery.detected` events and the error file), so refusing it would mean losing
+ * the record of a failure at the exact moment one occurred. Redacting keeps the record.
+ */
 function safeErrorText(error: unknown): string {
-  return String((error as Error)?.message ?? error).slice(0, 200)
+  return maskSecrets(String((error as Error)?.message ?? error)).slice(0, 200)
 }
 
 function boundedText(value: string, limit: number): string {

@@ -3,6 +3,8 @@ import path from 'node:path'
 import type { ApprovedTaskPacket, JobRequest } from '../../shared/jobLoopTypes'
 import type { AggregateResult, FrontdoorArtifactInspection, FrontdoorQuestion, OwnerDecision, OwnerDecisionEnvelope, OwnerGate, OrchestrationNodeRecord, OrchestrationRun, WorkPlaneArtifactManifest } from '../../shared/frontdoorTypes'
 import type { ImplementationSourceBinding, CandidateSummary, CandidateInspectionResult, CandidateReviewStartedResult, CandidateReviewDecisionInput, CandidateReviewOwnerDecisionEnvelope, CandidateReviewState } from '../../shared/implementationTypes'
+import { maskSecrets } from '../../shared/secretSentinel'
+import { validateResultEnvelope, type AdapterResultEnvelope } from '../jobLoop/resultEnvelope'
 import { hashJson } from '../jobLoop/hash'
 import { readJson } from '../jobLoop/ledger'
 import { claimRun, readPlan, readProjectedRun, readRequest, readRun, readRunEvents, recordRunEvent, releaseRun, writeRun } from './ledger'
@@ -49,9 +51,7 @@ function sortedPacketHashes(packetHashes: DispatchPacketHashes): Record<string, 
 }
 
 function boundedArtifactText(value: unknown, limit: number): string | undefined {
-  return typeof value === 'string'
-    ? value.slice(0, limit).replace(/(sk-|api[_-]?key|token|secret|password)\s*[:=]\s*[^\s,}]+/gi, '$1=<redacted>')
-    : undefined
+  return typeof value === 'string' ? maskSecrets(value.slice(0, limit)) : undefined
 }
 
 type DispatchRun = Pick<OrchestrationRun, 'runId' | 'requestId' | 'planHash'> & Partial<Pick<OrchestrationRun, 'nodes'>>
@@ -164,6 +164,10 @@ async function assertAggregateResultsCurrent(runtimeRoot: string, runId: string,
     if (result.orchestrationRunId !== runId || result.taskId !== record.childTaskId || result.jobId !== record.childJobId || result.inputHash !== record.childInputHash) {
       throw new Error(`Result Review Result identity mismatch: ${child.nodeId}`)
     }
+    // Identity and hash prove the Result is the one that was bound; they say nothing about what it
+    // carries. An Envelope written before the credential guard existed, or produced by a route that
+    // skipped it, is still adoptable without this. Re-validating here closes adoption and export.
+    validateResultEnvelope(result as unknown as AdapterResultEnvelope, { taskId: record.childTaskId!, jobId: record.childJobId!, inputHash: record.childInputHash! })
   }
 }
 

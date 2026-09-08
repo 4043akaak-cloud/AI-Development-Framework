@@ -68,3 +68,23 @@ export interface ParticipantEvidenceCandidate {
   ownerNodeApproved: boolean
   ownerPacketDispatchApproved: boolean
 }
+
+/**
+ * The participant-authored free text in one submission, as `{ field: value }` for the shared
+ * credential guard.
+ *
+ * Both ends of the participant path call this — the MCP server before it writes the file, and the
+ * Frontdoor ingestion before it adopts one. Deriving the field set in a single place is the point:
+ * when the two ends disagree about what to scan, the weaker end becomes the boundary.
+ */
+export function submissionScanFields(submission: Pick<ParticipantSubmission, 'summary' | 'content' | 'verification' | 'risks'>): Record<string, unknown> {
+  const fields: Record<string, unknown> = { summary: submission.summary, content: submission.content }
+  submission.verification?.forEach((entry, index) => {
+    fields[`verification[${index}].name`] = entry?.name
+    if (entry?.reason !== undefined) fields[`verification[${index}].reason`] = entry.reason
+  })
+  submission.risks?.forEach((risk, index) => {
+    fields[`risks[${index}]`] = risk
+  })
+  return fields
+}

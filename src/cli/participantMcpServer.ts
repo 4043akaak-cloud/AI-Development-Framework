@@ -1,6 +1,8 @@
 import { createInterface, type Interface } from 'node:readline'
 import { readdir } from 'node:fs/promises'
 import path from 'node:path'
+import { assertNoCredentialShapedText, maskSecrets } from '../shared/secretSentinel'
+import { submissionScanFields } from '../shared/participantTypes'
 import { ensureDir, readJson, writeJsonExclusive } from '../main/jobLoop/ledger'
 import { hashJson } from '../main/jobLoop/hash'
 import { readPlan, readProjectedRun, readRequest, readRunEvents } from '../main/frontdoor/ledger'
@@ -130,9 +132,7 @@ function toolResult(value: unknown, isError = false): McpToolCallResult {
 }
 
 function safeToolError(error: unknown, runtimeRoot: string): string {
-  return String((error as Error)?.message ?? error)
-    .replaceAll(runtimeRoot, '<runtime-root>')
-    .replace(/(sk-|api[_-]?key|token|secret|password)\s*[:=]\s*[^\s,}]+/gi, '$1=<redacted>')
+  return maskSecrets(String((error as Error)?.message ?? error).replaceAll(runtimeRoot, '<runtime-root>'))
     .replace(/\s+/g, ' ')
     .slice(0, 500)
 }
@@ -303,6 +303,9 @@ export class ParticipantMcpServer {
           risks: args.risks.map((risk) => String(risk).slice(0, 500)),
           createdAt: new Date().toISOString()
         }
+        // Ingress guard, before the submission reaches disk. `validateResultEnvelope` closes the
+        // Adapter answer path; this is the same contract for the participant path.
+        assertNoCredentialShapedText('participant submission', submissionScanFields(submission))
         const safeRoot = await assertRuntimeRootSafe(this.runtimeRoot)
         const directory = path.join(safeRoot, 'participant-submissions', this.participantId)
         const submissionPath = path.join(directory, `${id}.json`)

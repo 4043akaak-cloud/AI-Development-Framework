@@ -1,7 +1,9 @@
 # ADF-MCP-FRONTDOOR-2CYCLE-E2E-001
 
-Status: Implementing
+Status: Verifying — 実装と自動検証は完了。受入条件12件すべてに証跡を対応付けた。残るのはProject Ownerの完了承認と、Cycle 1 Completion Gateの扱いの判断（2026-09-08）。
 Owner: Codex
+Implementation: Codex
+Independent Verification: Claude Code（2026-09-08、実窓口AIクライアントとして実施。実装者と分離）
 Type: Integration + E2E Verification
 
 ## 1. Objective
@@ -89,18 +91,22 @@ Window AI
 
 ## 7. Acceptance Criteria
 
-- [ ] 窓口AIから同じMCP入口の `initialize` と `tools/list` が確認できる。
-- [ ] `prepare` がRequest／Planを作成するが、Owner Decision／Dispatch／Job／Threadを自動生成しない。
-- [ ] Cycle 1でOwnerのIntake、Completion Shape、Decomposition、Dispatch境界が確認できる。
-- [ ] Cycle 1でFake Proposal／Criticの複数Nodeを実行し、Result／Evidenceを取得できる。
-- [ ] Node Reviewの `continue` 前に依存Criticが実行されない。
-- [ ] 窓口AIがCycle 1のResultを統合し、同じMCP入口からCycle 2のRequestを投入できる。
-- [ ] Cycle 2がCycle 1と異なるRequest／Plan／Run／Decisionとして識別できる。
-- [ ] Cycle 1／2のResult、Evidence、Job、Thread、Ledger bindingとhashが検証できる。
-- [ ] Ledger Replayが両Cycleで成立し、旧Evidenceが変更されていない。
-- [ ] Owner承認前Dispatch、古いDecision再利用、別Run Result混入がfail-closedになる。
-- [ ] 外部送信、資格情報、課金、Canonical repo／Obsidian書込みが発生しない。
-- [ ] 自動検証、手動／実画面確認、未実施確認を分けて記録する。
+証跡は 2026-09-08 の実窓口AIクライアント検証（本文末尾）で対応付けた。
+
+- [x] 窓口AIから同じMCP入口の `initialize` と `tools/list` が確認できる。 — `ADF-MCP-CLIENT-E2E-001`で明示検証済み。2026-09-08にClaude CodeがMCP接続を確立しTool呼び出しに成功。
+- [x] `prepare` がRequest／Planを作成するが、Owner Decision／Dispatch／Job／Threadを自動生成しない。 — Phase 0.5記録。Run `run-7987794137baa1041b91` 作成時点でDecision 0件、Node／Job／Thread未生成。
+- [x] Cycle 1でOwnerのIntake、Completion Shape、Decomposition、Dispatch境界が確認できる。 — 2026-09-08の`inspect`でDecision 7件を確認。
+- [x] Cycle 1でFake Proposal／Criticの複数Nodeを実行し、Result／Evidenceを取得できる。 — 両Node `completed`／`success`、Result hash `9f3c4c92…`／`b3241788…`。
+- [x] Node Reviewの `continue` 前に依存Criticが実行されない。 — Ledger順序で `node-review-continued`(03:56:48.200) → `node-started: critic`(03:56:48.220) を確認。
+- [x] 窓口AIがCycle 1のResultを統合し、同じMCP入口からCycle 2のRequestを投入できる。 — Aggregate `aggregate-b856fc8ab9ee53edb7de` 生成後、Cycle 2 `run-47d82f0b99ebfb5f4cac` を同一入口から投入。
+- [x] Cycle 2がCycle 1と異なるRequest／Plan／Run／Decisionとして識別できる。 — Request hash `4bc4cc4d…` / Plan hash `db661342…` はCycle 1と別値。
+- [x] Cycle 1／2のResult、Evidence、Job、Thread、Ledger bindingとhashが検証できる。 — 2026-09-08に`get_result`で確認。Criticの`dependencyResults`がProposal Result hashへ束縛されている。
+- [x] Ledger Replayが両Cycleで成立し、旧Evidenceが変更されていない。 — `readProjectedRun`はReplay差分をfail-closedにする。両Runの`inspect`が成功したこと自体がReplay成立の証跡。旧Evidence refとhashは 2026-08-21／08-22 記録値と一致。
+- [x] Owner承認前Dispatch、古いDecision再利用、別Run Result混入がfail-closedになる。 — Packet scope mismatch停止（§205-211）、Node Review後の旧Dispatch承認拒否（§217）、Result hash再検証の否定系テストで実証済み。
+- [x] 外部送信、資格情報、課金、Canonical repo／Obsidian書込みが発生しない。 — 全RunがFake Adapter／local-only。2026-09-08検証は読み取り専用。
+- [x] 自動検証、手動／実画面確認、未実施確認を分けて記録する。 — 2026-09-08節で3区分に分離して記録。
+
+**残る唯一のOwner操作**: Cycle 1 `run-7987794137baa1041b91` のCompletion Gate（受入条件上の必須項目ではない。詳細は本文末尾）。
 
 ## 8. Verification Plan
 
@@ -316,3 +322,80 @@ Project Ownerの追加承認に基づき、AI協業の第一目的を「会話�
 - Node／Web／CLI typecheck、`electron-vite build`、`electron-builder --dir`、`git diff --check`: Pass
 
 この実装は「AI同士が全文を読み合うチャット」ではなく、「窓口AIが必要な相手へ最小文脈で相談し、その協業結果をProject単位で監視できる通信面」である。実窓口AIクライアントによる同一入口の実運用と実Providerの実請求Token比較は未検証のため、Taskは完了扱いにしない。
+
+### 2026-09-08 実窓口AIクライアントによる同一入口検証（Claude Code）
+
+Project Ownerの「2CYCLE-E2Eの完了をさせて下さい」という明示指示を受け、Claude Codeが**実際の窓口AIクライアント**として、登録済み `adf_frontdoor` MCP入口から読み取り専用の検証を実施した。実装担当はCodex、本検証はClaude Codeであり、実装者と検証者は分離している。
+
+本検証でOwner Decisionは1件も作成していない。作成できないのではなく、作成しない設計境界を守った（後述）。
+
+#### 自動検証（現作業ツリー）
+
+| 種別 | 実施内容 | 結果 |
+| --- | --- | --- |
+| 自動 | `tsc --noEmit -p tsconfig.node.json` | Pass |
+| 自動 | `tsc --noEmit -p tsconfig.web.json` | Pass |
+| 自動 | `tsc -p tsconfig.cli.json` | Pass |
+| 自動 | `vitest run` | **Pass 44 files / 439 tests** |
+| 自動 | `electron-vite build` | Pass |
+| 自動 | `git diff --check` | Pass |
+
+#### 窓口AIクライアントからの同一入口確認（読み取り専用）
+
+登録済みMCP入口（runtime root `~/Library/Application Support/adf-task-board/adf-runtime`）に対し、`list_runs` / `inspect` / `get_result` を実行した。
+
+- `list_runs`: 6 Runを取得。過去記録にあった初回起動時の大幅な遅延（`list_runs`約312秒）は**再現しなかった**。応答は即時である。
+- Cycle 1 `run-7987794137baa1041b91`: Request hash `be857d9e…`、Plan hash `4833fc22…`、Owner Decision 7件、eventCount 23、Node 2件ともcompleted／success、Aggregate `aggregate-b856fc8ab9ee53edb7de` / hash `75d6da11…` を窓口AIから直接読み取れた。
+- `get_result`でProposal Result hash `9f3c4c92…`、Critic Result hash `b3241788…`、Criticの`dependencyResults`にProposal Result hashが束縛されていることを確認した。verificationは`scope-boundary: pass`／`prior-turn-reference: pass`、risksなし。
+- Cycle 2 `run-47d82f0b99ebfb5f4cac`: `complete` / `completed`。
+- 同じ状態を Frontdoor CLI `inspect` からも取得し、**MCPとCLIの2入口が同一のstate／ownerGate／decision件数／eventCountを返すこと**を交差確認した。
+
+これにより「実際の窓口AIクライアントが同一入口からResult／Evidenceへ到達する」未検証項目は充足した。
+
+#### 未記録だった既存証跡の発見
+
+Runtime Ledgerには、Task本文に記録されていない2件のRunが存在した。いずれもRequest sourceが`owner`、requestIdが`frontdoor-ui-*`であり、**Electron実画面から作成されたもの**である。
+
+- `run-791ac671f11ac3cf4363`「窓口AI実画面のlocal-only 2Cycle確認」: 2026-08-22 12:25:38 にUIからRequest作成後、intake `owner-decision-9baa5795c109bd42ee58` → completion-shape `owner-decision-072154a56b34ba45aed1` → decomposition `owner-decision-45a253243f2f7eb21985` → dispatch `owner-decision-a28f7e256a017ff5127e` → Node実行 → result-review `owner-decision-b385cc9a2995aad7fd9f` → completion `owner-decision-a1e113e1300d10697411` と進み、12:31:16 に `frontdoor.run-completed` を記録して `complete` / `completed` に到達している。各Decisionの間隔は4〜15秒で、人手のUI操作と整合する。Goal Alignmentは`aligned` / `completed` / `nextUnlockedStep: next-request`。
+- `run-113f864f003c8caaf2cb`「次Requestの再受付確認」: 上記完了の約74秒後（12:32:30）にUIから作成され、`awaiting-owner:intake` で保持されている。協業メッセージ本文は「完了Runから次のOwner指示を同じADF入口へ投入する。local-onlyでIntake待ちにする」であり、**放置ではなく意図的な停止**である。
+
+この2件により、§291-296 に「まだ完了扱いにしない範囲」として挙げていた「現行単一パッケージ画面で完了Runを選択し、Result／Evidenceまで確認する」「窓口AIが同一入口からPrepare → 承認 → Dispatch → Result取得 → 次Request」は、**2026-08-22 の時点で実画面上は実施済み**であったと判断できる。記録されていなかっただけである。
+
+#### 検出した不整合
+
+1. **Cycle 1が未完了のまま残っている。** `run-7987794137baa1041b91` は `awaiting-owner:completion` で停止している。intake／decomposition／completion-shape／dispatch×2／node-review／result-review はすべて承認済みで、Aggregateも生成済みだが、**Completion Decisionだけが記録されていない**。Goal Alignmentは`awaiting-owner` / `completion`、drift signalなし。Cycle 2は`completed`に到達しているため、Cycle 1だけが取り残された状態である。
+2. **本文とLedgerが乖離している。** §168-169 は「Cycle 1は`awaiting-owner:result-review`。Result Review、Completion、Cycle 2 Requestは未実施」と記録しているが、Ledgerには 2026-08-21 04:17:23 の Result Review `accept`（`owner-decision-60edbd64430335c185b8`、target hash `1a13d66d…`）が存在する。本文がその後更新されずCycle 2の記録へ移っている。
+3. 上記2件のUI由来Runが本文に未記録である（前節に追記した）。
+
+いずれもデータ損失・権限迂回・外部送信・秘密情報漏えい・正本破壊には該当しない。記録の欠落であり、Ledger側の証跡は一貫している。
+
+#### Cycle 1のCompletionを本検証で記録しなかった理由
+
+Ownerの指示は「2CYCLE-E2Eの完了」であり、Cycle 1のCompletion Gateが開いたままであることはOwnerが認識していない状態で検出された。ここでClaude Codeが`approvedBy: Project Owner`としてCompletion Decisionを記録すると、Ownerが見ていないAggregateに対する承認を代行することになる。
+
+これは[Control Plane設計 §2](../design/ADF_MULTI_AI_CONTROL_PLANE.md)がControl Planeの禁止事項として挙げる「承認の自動生成」に該当し、[AI Delegation Charter](../workflow/AI_DELEGATION_CHARTER.md)のRoles定義にも反する。MCP側も「MCPはOwner Decisionを作成しない」を契約としている。
+
+したがって本検証はCompletion手前で停止し、Ownerが判断するための材料（Aggregate内容、両Result本文、hash、verification結果）を提示するに留めた。
+
+#### 残る単一のOwner操作
+
+Cycle 1のCompletionは、Ownerが次のコマンドで記録できる。読み取り専用の`inspect`で同コマンド経路が動作することは確認済みである。
+
+```text
+adf frontdoor complete
+  --runtime-root "~/Library/Application Support/adf-task-board/adf-runtime"
+  --run-id run-7987794137baa1041b91
+  --approved-by "Project Owner"
+```
+
+Electron画面から同じ判断を行っても等価である。
+
+なお、本Taskの受入条件（§7）はCycle 1が`completed`状態へ到達することを明示的には要求していない。Cycle 1に求めているのは「複数Nodeを実行しResult／Evidenceを取得できる」「窓口AIがCycle 1のResultを統合し、次のRequestを投入できる」であり、これらはAggregate生成とCycle 2の存在により充足している。したがってCycle 1のCompletionは、受入条件上の必須項目ではなく、**Ledger上に開いたままのOwner Gateを閉じるか、意図的に開いたままとして記録するか**というOwnerの選択である。
+
+#### 本検証で実施していないこと
+
+- Owner Decisionの作成（1件も行っていない）。
+- 外部送信、APIキー、資格情報、課金、実Provider送信。
+- Runtime Ledgerへの書き込み、Canonical repo／Obsidianへの自動書込み。
+- commit、push、merge。
+- Electronネイティブウィンドウの新規目視操作（本環境に操作手段がないため。2026-08-22のUI由来Runを証跡として採用した）。

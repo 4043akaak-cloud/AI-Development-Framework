@@ -3,7 +3,8 @@ import path from 'node:path'
 import { hashJson } from '../jobLoop/hash'
 import { readJson } from '../jobLoop/ledger'
 import type { DecompositionNode, OrchestrationRun } from '../../shared/frontdoorTypes'
-import type { ParticipantEvidenceCandidate, ParticipantSubmission } from '../../shared/participantTypes'
+import { submissionScanFields, type ParticipantEvidenceCandidate, type ParticipantSubmission } from '../../shared/participantTypes'
+import { assertNoCredentialShapedText } from '../../shared/secretSentinel'
 import { participantAssignmentId, validateParticipantAssignment } from './participantRegistry'
 import { nodeTargetHash } from './ownerGates'
 import { readPlan, readProjectedRun, readRequest, readRunEvents } from './ledger'
@@ -70,6 +71,10 @@ function validateSubmissionShape(value: unknown, participantId: string, assignme
   if (!Array.isArray(submission.verification) || submission.verification.length > 20 || !submission.verification.every((entry) => isRecord(entry) && typeof entry.name === 'string' && entry.name.length <= 500 && ['pass', 'fail', 'not-run'].includes(String(entry.status)))) throw new Error('participant submission verification is invalid')
   if (!Array.isArray(submission.risks) || submission.risks.length > 20 || !submission.risks.every((risk) => typeof risk === 'string' && risk.length <= 500)) throw new Error('participant submission risks are invalid')
   if (typeof submission.createdAt !== 'string' || Number.isNaN(Date.parse(submission.createdAt))) throw new Error('participant submission createdAt is invalid')
+  // Adoption-side half of the participant ingress guard. The MCP server already refuses to write
+  // one, but a submission file can also predate that guard or arrive by another route, so the
+  // boundary is closed here too — the same doubling `validateResultEnvelope` already has.
+  assertNoCredentialShapedText('participant submission', submissionScanFields(submission))
   return submission
 }
 

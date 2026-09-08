@@ -1,5 +1,6 @@
 import path from 'node:path'
 import type { CandidateFile, ImplementationCandidate } from '../../shared/implementationTypes'
+import { containsSecret } from '../../shared/secretSentinel'
 import { hashJson } from '../jobLoop/hash'
 
 export const MAX_CANDIDATE_FILES = 8
@@ -16,8 +17,12 @@ function candidatePath(value: unknown): value is string {
   return normalized === value.replaceAll('\\', '/') && normalized !== '.' && !normalized.split('/').includes('..')
 }
 
+/**
+ * The pattern set moved to `secretSentinel.ts`. It is a superset of the one that lived here, so
+ * everything this rejected before is still rejected.
+ */
 function containsSecretSentinel(content: string): boolean {
-  return /(ANTHROPIC_API_KEY|OPENAI_API_KEY|api[_-]?key\s*[:=]|sk-[A-Za-z0-9_-]{12,}|Bearer\s+[A-Za-z0-9._-]{12,})/i.test(content)
+  return containsSecret(content)
 }
 
 export function candidateHash(candidate: Pick<ImplementationCandidate, 'kind' | 'baseSnapshotHash' | 'files'>): string {
