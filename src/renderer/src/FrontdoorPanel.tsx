@@ -327,7 +327,11 @@ export default function FrontdoorPanel({ minimal = false }: { minimal?: boolean 
   const relatedCandidates = run ? candidates.filter((candidate) => candidate.parentRunId === run.runId || candidate.childRunId === run.runId) : []
   const visibleCandidates = minimal ? relatedCandidates : candidates
   const runningCount = runs.filter((entry) => entry.state === 'running').length
-  const ownerWaitingCount = runs.filter((entry) => entry.ownerGate !== null && entry.ownerGate !== undefined).length
+  // Was `ownerGate != null`, which is true for every Run including completed ones — the Board
+  // reported all six Runs as awaiting a decision, so the number never moved and stopped being read.
+  const waitingRuns = runs.filter((entry) => entry.ownerGate?.startsWith('awaiting-owner:'))
+  const ownerWaitingCount = waitingRuns.length
+  const longestWaitDays = waitingRuns.reduce((longest, entry) => Math.max(longest, entry.ownerGateWait?.waitingDays ?? 0), 0)
   const completedCount = runs.filter((entry) => entry.state === 'complete').length
 
   const toggleActivity = (visible: boolean): void => {
@@ -368,7 +372,7 @@ export default function FrontdoorPanel({ minimal = false }: { minimal?: boolean 
           <dl className="mvp-project-metrics">
             <div><dt>協業履歴</dt><dd>{runs.length}</dd><span>内部Run</span></div>
             <div><dt>進行中</dt><dd>{runningCount}</dd><span>AI協業</span></div>
-            <div><dt>判断・確認待ち</dt><dd>{ownerWaitingCount}</dd><span>窓口AIへ</span></div>
+            <div><dt>判断・確認待ち</dt><dd>{ownerWaitingCount}</dd><span>{longestWaitDays > 0 ? `最長${longestWaitDays}日` : '窓口AIへ'}</span></div>
             <div><dt>完了Run</dt><dd>{completedCount}</dd><span>成果物確認</span></div>
           </dl>
         </section>

@@ -193,7 +193,8 @@ export function listFrontdoorRuns(orchestrator: FrontdoorOrchestrator): Promise<
         updatedAt: inspection.run.updatedAt,
         nodeCount: inspection.run.nodes.length,
         openQuestionCount: inspection.openQuestions.length,
-        packetsReady: await packetsReady(orchestrator, inspection.run)
+        packetsReady: await packetsReady(orchestrator, inspection.run),
+        ...(inspection.ownerGateWait ? { ownerGateWait: inspection.ownerGateWait } : {})
       })
     }
     return summaries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))

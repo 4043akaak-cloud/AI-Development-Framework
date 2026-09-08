@@ -18,6 +18,7 @@ import { getAdapterProfile } from '../jobLoop/adapterRegistry'
 import { buildActivityTrace } from './activityTrace'
 import { buildCollaborationTrace } from './collaborationTrace'
 import { assessGoalAlignment } from './goalAlignment'
+import { assessOwnerGateWait } from './ownerGateWait'
 import { assertRunEventConsistency, assertRunIntegrity } from './runIntegrity'
 import { latestWorkPlaneArtifactManifest } from './workPlaneArtifact'
 
@@ -433,6 +434,8 @@ export class FrontdoorOrchestrator {
     }
     inspection.goalAlignment = assessGoalAlignment(inspection)
     inspection.nextAction = inspection.goalAlignment.nextAction
+    // After nextAction settles, so the wait report carries the same instruction the Owner reads.
+    inspection.ownerGateWait = assessOwnerGateWait({ runId, ownerGate: run.ownerGate, events, nextAction: inspection.nextAction })
     return inspection
   }
 

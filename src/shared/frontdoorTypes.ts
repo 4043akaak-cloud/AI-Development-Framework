@@ -235,6 +235,20 @@ export interface FrontdoorReturn {
   nextAction: string
 }
 
+export type OwnerGateWaitSeverity = 'fresh' | 'aging' | 'stale'
+
+/** How long a Run has been waiting on the Owner, derived from the Ledger rather than `updatedAt`. */
+export interface OwnerGateWaitReport {
+  runId: string
+  gate: OwnerGate
+  /** When the current gate opened. From `frontdoor.owner-gate-opened`, so it is replayable. */
+  openedAt: string
+  waitingMs: number
+  waitingDays: number
+  nextAction: string
+  severity: OwnerGateWaitSeverity
+}
+
 export interface FrontdoorInspection {
   run: OrchestrationRun
   request: FrontdoorRequest
@@ -253,6 +267,8 @@ export interface FrontdoorInspection {
   activities: FrontdoorActivity[]
   collaborationMessages?: CollaborationMessage[]
   goalAlignment?: GoalAlignmentReport
+  /** Present only while the Run waits on an Owner decision. */
+  ownerGateWait?: OwnerGateWaitReport
 }
 
 export type CollaborationMessageKind = 'request' | 'proposal' | 'question' | 'review' | 'answer' | 'handoff' | 'result'
@@ -351,6 +367,8 @@ export interface FrontdoorRunSummary {
   nodeCount: number
   openQuestionCount: number
   packetsReady: boolean
+  /** Present only while this Run waits on an Owner decision. */
+  ownerGateWait?: OwnerGateWaitReport
 }
 
 export type FrontdoorEventType =
