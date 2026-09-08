@@ -3,6 +3,7 @@ import { defaultFrontdoorCliIO, runFrontdoorCli } from './frontdoorOwnerLoop'
 import { runFrontdoorOllamaE2eProbe } from './frontdoorOllamaE2eProbe'
 import { parseMcpRuntimeRoot, runFrontdoorMcpStdio } from './frontdoorMcpServer'
 import { runFrontdoorMcpClientProbeCli } from './frontdoorMcpClientProbe'
+import { runTaskLedgerDriftCli } from './taskLedgerDrift'
 import { parseParticipantMcpArgs, runParticipantMcpStdio } from './participantMcpServer'
 
 const args = process.argv.slice(2)
@@ -10,6 +11,8 @@ const runner = args[0] === 'mcp'
   ? runFrontdoorMcpStdio(parseMcpRuntimeRoot(args.slice(1))).then(() => 0)
   : args[0] === 'participant-mcp'
     ? runParticipantMcpStdio(parseParticipantMcpArgs(args.slice(1))).then(() => 0)
+  : args[0] === 'task-ledger-drift'
+  ? runTaskLedgerDriftCli(args.slice(1))
   : args[0] === 'frontdoor'
   ? runFrontdoorCli(args.slice(1), defaultFrontdoorCliIO)
   : args[0] === 'frontdoor-ollama-e2e'
