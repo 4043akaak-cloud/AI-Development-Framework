@@ -295,3 +295,24 @@ Project Ownerの設計承認を受け、最終成果物から逆算した最小M
 - 複数Provider、外部送信、認証、Canonical統合、同時Ledger書込みの強化、Owner identity認証、参加者Evidenceの厳密なOwner binding。
 
 上記未検証範囲を理由に、Task Statusは`Implementing`のまま保持する。今回の作業は不要な機能追加ではなく、最小MVPの監視導線と安全なResult受入境界を完成形へ近づけるための収束作業である。
+
+### 2026-08-25 AI協業ルーム・Token Economy実装
+
+Project Ownerの追加承認に基づき、AI協業の第一目的を「会話量を増やすこと」ではなく「窓口AIの意図を保ちながら、低コスト参加者へ必要最小限の文脈だけを渡し、重複推論とToken消費を減らすこと」と明記した。
+
+- 既存のFrontdoor Run／Thread／Turn／Result／Evidenceを正本として維持し、別チャットDBや別アプリを作らず、`AI協業ルーム`を読み取り専用のProject投影として追加した。
+- 窓口AIは高能力・Owner意図保持を優先するが、特定Providerへ固定しない。その他の参加者は低コスト／local-onlyを優先し、役割はPhase／Task／能力／速度／費用／接続状態に応じて変更可能とする。
+- 協業メッセージは、送信元、宛先、Role、種別、親Result、Run／Thread参照、Result hash、Context referenceを持ち、Proposal → Criticのbounded引継ぎをOwner画面とFrontdoor MCP Inspectから確認できる。
+- Adapterへ渡す過去文脈は最大3 Turn、1 Turn最大1200文字、依存Result本文最大1000文字に制限した。これは意味のある担当判断をADFが行うためではなく、通信 payload の上限を守るためのtransport境界である。
+- Dispatchごとにprior Turn／dependency Resultの文字数と概算Token数を`ContextBudget`としてThread／Turnへ記録する。概算はprovider-neutralな目安であり、実Providerの請求Token数を自動的に主張しない。
+- 全文履歴の一斉配布、無目的な全AI通知、自動要約による結論変更、自動担当決定、自動Aggregate採用は行わない。窓口AIが相談相手と渡す文脈を選び、ADFは上限・binding・履歴・可視化を担う。
+
+#### 検証
+
+- 協業ログ投影: Proposal／Critic／bounded handoff／Resultの方向・参照を確認
+- 長文Resultの1600文字表示上限とcredential-shaped textのマスキングを確認
+- Adapter送信側のbounded prior Turn／dependency contextとContextBudgetを確認
+- Vitest: 40 files / 392 tests Pass
+- Node／Web／CLI typecheck、`electron-vite build`、`electron-builder --dir`、`git diff --check`: Pass
+
+この実装は「AI同士が全文を読み合うチャット」ではなく、「窓口AIが必要な相手へ最小文脈で相談し、その協業結果をProject単位で監視できる通信面」である。実窓口AIクライアントによる同一入口の実運用と実Providerの実請求Token比較は未検証のため、Taskは完了扱いにしない。

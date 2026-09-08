@@ -1,5 +1,5 @@
 import type { AdapterRole } from '../../shared/jobLoopTypes'
-import type { AdapterDependencyResult, AdapterRunState, ConversationTurn, RelayTurnPayload } from '../../shared/threadTypes'
+import type { AdapterDependencyResult, AdapterRunState, ContextBudget, ConversationTurn, RelayTurnPayload } from '../../shared/threadTypes'
 import { hashJson } from './hash'
 
 export type { AdapterDependencyResult } from '../../shared/threadTypes'
@@ -24,6 +24,7 @@ export interface AdapterRequest {
   orchestrationRunId?: string
   /** Evidence references from completed dependency Nodes; content is never injected implicitly. */
   dependencyResults?: readonly AdapterDependencyResult[]
+  contextBudget?: ContextBudget
 }
 
 

@@ -422,7 +422,8 @@ describe('ADF-EXTERNAL-ADAPTER-001 Electron wiring', () => {
       'relay:cancel-external',
       'relay:external-state',
       'relay:external-adapters',
-      'relay:ollama-readiness'
+      'relay:ollama-readiness',
+      'relay:local-readiness'
     ])
     expect(channels.filter((channel) => channel.startsWith('frontdoor:'))).toEqual([
       'frontdoor:list',

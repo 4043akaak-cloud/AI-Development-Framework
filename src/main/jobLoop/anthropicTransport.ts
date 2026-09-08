@@ -1,6 +1,6 @@
 import type { AdapterConnection } from '../../shared/jobLoopTypes'
 import type { ExternalSendOutcome, SyntheticPacket } from '../../shared/externalAdapterTypes'
-import type { CredentialStatus, ExternalTransport, TransportOptions } from './externalTransport'
+import { MissingCredentialError, type CredentialStatus, type ExternalTransport, type TransportOptions } from './externalTransport'
 import { truncateAnswer } from './externalTransport'
 
 /**
@@ -16,12 +16,7 @@ export const defaultModel = 'claude-opus-5'
 
 export type FetchLike = (input: string, init: RequestInit) => Promise<Response>
 
-export class MissingCredentialError extends Error {
-  readonly code = 'MISSING_CREDENTIAL'
-  constructor(variable: string) {
-    super(`${variable} is not set in this process environment; ADF does not store credentials`)
-  }
-}
+export { MissingCredentialError } from './externalTransport'
 
 interface AnthropicTextBlock {
   type: string

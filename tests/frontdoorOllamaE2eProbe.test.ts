@@ -62,7 +62,9 @@ describe('ADF-FRONTDOOR-OLLAMA-TWO-NODE-E2E-001 probe contract', () => {
   it('uses the same live Relay registration for Electron Main and the Frontdoor CLI', () => {
     const relay = createLiveRelay('/tmp/adf-frontdoor-ollama-probe-test-runtime')
     expect(relay.listExternalAdapterProfiles()).toEqual(expect.arrayContaining([
-      expect.objectContaining({ adapterId: 'ollama-local', roles: ['proposal', 'critic'], status: 'available' })
+      expect.objectContaining({ adapterId: 'ollama-local', roles: ['proposal', 'critic'], status: 'available' }),
+      expect.objectContaining({ adapterId: 'lmstudio-local', provider: 'lmstudio', connection: 'local-http', status: 'available' }),
+      expect.objectContaining({ adapterId: 'openrouter-free', provider: 'openrouter', connection: 'api', authMode: 'environment-secret', status: 'available' })
     ]))
   })
 

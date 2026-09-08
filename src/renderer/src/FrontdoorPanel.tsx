@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type JSX } from 'react'
-import type { FrontdoorActivity, FrontdoorArtifactInspection, FrontdoorInspection, FrontdoorPlanProposal, FrontdoorPrepareInput, FrontdoorRequestInput, FrontdoorRunSummary, OwnerGate, OwnerGateState } from '../../shared/frontdoorTypes'
+import type { CollaborationMessage, FrontdoorActivity, FrontdoorArtifactInspection, FrontdoorInspection, FrontdoorPlanProposal, FrontdoorPrepareInput, FrontdoorRequestInput, FrontdoorRunSummary, OwnerGate, OwnerGateState } from '../../shared/frontdoorTypes'
+import type { ConversationThread, ThreadSummary } from '../../shared/threadTypes'
 
 const gateLabels: Record<OwnerGate, string> = {
   intake: 'Intake',
@@ -51,6 +52,33 @@ function activityTime(value: string): string {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 }
 
+const threadStateLabels: Record<ConversationThread['state'], string> = {
+  open: '送信可能',
+  'awaiting-owner': '窓口AI／Owner確認待ち',
+  'recovery-needed': '復旧確認待ち',
+  stopped: '停止',
+  approved: '承認済み',
+  completed: '完了',
+  failed: '失敗'
+}
+
+const collaborationKindLabels: Record<CollaborationMessage['kind'], string> = {
+  request: '依頼',
+  proposal: '提案',
+  question: '質問',
+  review: 'レビュー',
+  answer: '回答',
+  handoff: 'bounded引継ぎ',
+  result: 'Result'
+}
+
+const collaborationStatusLabels: Record<CollaborationMessage['status'], string> = {
+  posted: '投稿',
+  waiting: '応答待ち',
+  completed: '完了',
+  blocked: '停止／Block'
+}
+
 const defaultPlanJson = JSON.stringify({
   planId: 'frontdoor-ui-plan',
   requestId: '__REQUEST_ID__',
@@ -85,6 +113,9 @@ const defaultPlanJson = JSON.stringify({
 
 export default function FrontdoorPanel({ minimal = false }: { minimal?: boolean }): JSX.Element {
   const [runs, setRuns] = useState<FrontdoorRunSummary[]>([])
+  const [threadSummaries, setThreadSummaries] = useState<ThreadSummary[]>([])
+  const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null)
+  const [selectedThread, setSelectedThread] = useState<ConversationThread | null>(null)
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
   const [inspection, setInspection] = useState<FrontdoorInspection | null>(null)
   const [artifactInspection, setArtifactInspection] = useState<FrontdoorArtifactInspection | null>(null)
@@ -127,6 +158,36 @@ export default function FrontdoorPanel({ minimal = false }: { minimal?: boolean 
     } else setMessage(result.error)
   }, [])
 
+  const inspectCollaborationThread = useCallback(async (threadId: string): Promise<void> => {
+    const result = await window.adfRelay.getThread(threadId)
+    if (result.ok) {
+      setSelectedThreadId(threadId)
+      setSelectedThread(result.value)
+      setMessage(null)
+    } else setMessage(`協業Threadを読み込めませんでした: ${result.error}`)
+  }, [])
+
+  const refreshCollaboration = useCallback(async (preferredThreadId?: string | null): Promise<void> => {
+    const result = await window.adfRelay.listThreads()
+    if (!result.ok) {
+      setMessage(`協業履歴を読み込めませんでした: ${result.error}`)
+      return
+    }
+    setThreadSummaries(result.value)
+    const nextId = preferredThreadId && result.value.some((thread) => thread.threadId === preferredThreadId)
+      ? preferredThreadId
+      : result.value[0]?.threadId ?? null
+    if (!nextId) {
+      setSelectedThreadId(null)
+      setSelectedThread(null)
+      return
+    }
+    if (nextId !== selectedThreadId) setSelectedThreadId(nextId)
+    const detail = await window.adfRelay.getThread(nextId)
+    if (detail.ok) setSelectedThread(detail.value)
+    else setMessage(`協業Threadを読み込めませんでした: ${detail.error}`)
+  }, [selectedThreadId])
+
   const refreshCandidates = useCallback(async (): Promise<void> => {
     const result = await window.adfFrontdoor.listCandidates()
     if (result.ok) setCandidates(result.value)
@@ -150,6 +211,7 @@ export default function FrontdoorPanel({ minimal = false }: { minimal?: boolean 
       return
     }
     setRuns(result.value)
+    void refreshCollaboration(selectedThreadId)
     void refreshCandidates()
     const nextId = selectedRunId && result.value.some((run) => run.runId === selectedRunId) ? selectedRunId : result.value[0]?.runId
     if (nextId) await inspect(nextId)
@@ -157,7 +219,7 @@ export default function FrontdoorPanel({ minimal = false }: { minimal?: boolean 
       setSelectedRunId(null)
       setInspection(null)
     }
-  }, [inspect, refreshCandidates, selectedRunId])
+  }, [inspect, refreshCandidates, refreshCollaboration, selectedRunId, selectedThreadId])
 
   const inspectArtifact = useCallback(async (runId: string): Promise<void> => {
     setBusy(true)
@@ -257,6 +319,8 @@ export default function FrontdoorPanel({ minimal = false }: { minimal?: boolean 
   const openQuestions = inspection?.openQuestions.filter((question) => question.status === 'open') ?? []
   const nodeReview = inspection?.nodeReview
   const activities = inspection?.activities ?? []
+  const collaborationMessages = inspection?.collaborationMessages ?? []
+  const latestThreadTurn = selectedThread?.turns.at(-1)
   const latestActivity = activities.at(-1)
   const waitingActivity = [...activities].reverse().find((activity) => activity.status === 'waiting')
   const terminal = run ? ['complete', 'partial', 'failed', 'cancelled'].includes(run.state) : false
@@ -351,6 +415,72 @@ export default function FrontdoorPanel({ minimal = false }: { minimal?: boolean 
           </div>
         )}
       </section>}
+
+      {minimal && (
+        <section className="frontdoor-card mvp-collaboration-snapshot" aria-label="Project collaboration snapshot">
+          <div className="activity-summary">
+            <div>
+              <p className="eyebrow">AI COLLABORATION · READ ONLY</p>
+              <h3>協業の実行とResult</h3>
+              <p className="turn-refs">窓口AIがADFを通してAI参加者へ依頼し、ADFは回答・状態・Evidenceを最小限記録します。</p>
+            </div>
+            <span className="activity-state complete">{threadSummaries.length} Thread</span>
+          </div>
+          {threadSummaries.length === 0 ? (
+            <p className="lane-empty">協業Threadはまだありません。</p>
+          ) : (
+            <div className="mvp-collaboration-grid">
+              <div className="mvp-collaboration-list" aria-label="協業Thread一覧">
+                {threadSummaries.map((thread) => (
+                  <button
+                    key={thread.threadId}
+                    type="button"
+                    className={`task-card mvp-collaboration-card ${thread.threadId === selectedThreadId ? 'selected' : ''}`}
+                    onClick={() => void inspectCollaborationThread(thread.threadId)}
+                  >
+                    <span className="card-id">{thread.taskId}</span>
+                    <span className="card-objective">{thread.title}</span>
+                    <span className="card-status">{thread.lastAdapterId ?? '未実行'} · {thread.lastTurnStatus ?? 'Turnなし'}</span>
+                    <span className={`freshness ${thread.recoveryRequired ? 'broken' : thread.ownerActionRequired ? 'stale' : 'current'}`}>
+                      {thread.recoveryRequired ? '復旧確認待ち' : thread.ownerActionRequired ? '窓口AI確認待ち' : threadStateLabels[thread.state]}
+                    </span>
+                  </button>
+                ))}
+              </div>
+              <div className="mvp-collaboration-detail" aria-label="選択した協業ThreadのResult">
+                {!selectedThread && <p className="lane-empty">Threadを選択すると、回答とEvidenceを確認できます。</p>}
+                {selectedThread && (
+                  <>
+                    <div className="activity-summary">
+                      <div>
+                        <p className="eyebrow">SELECTED COLLABORATION</p>
+                        <h4>{selectedThread.title}</h4>
+                      </div>
+                      <span className="activity-state">{threadStateLabels[selectedThread.state]}</span>
+                    </div>
+                    <dl className="detail-grid">
+                      <div><dt>参加AI</dt><dd>{latestThreadTurn?.adapterId ?? '未実行'}</dd></div>
+                      <div><dt>役割</dt><dd>{latestThreadTurn?.role ?? '未実行'}</dd></div>
+                      <div><dt>Result</dt><dd>{latestThreadTurn?.status ?? '未生成'}</dd></div>
+                      <div><dt>Evidence</dt><dd>{latestThreadTurn?.resultEnvelopeRef ? 'あり' : '未生成'}</dd></div>
+                      <div><dt>Thread</dt><dd>{selectedThread.threadId}</dd></div>
+                      <div><dt>Job</dt><dd>{selectedThread.jobId}</dd></div>
+                    </dl>
+                    {latestThreadTurn?.content && (
+                      <div className="mvp-collaboration-result">
+                        <h4>最新Result</h4>
+                        <pre className="mvp-result-content">{latestThreadTurn.content}</pre>
+                      </div>
+                    )}
+                    <p className="turn-refs">次のAction: {selectedThread.state === 'awaiting-owner' ? '窓口AIがResultを確認し、必要なら次の依頼を作成します。' : threadStateLabels[selectedThread.state]}</p>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+          <p className="turn-refs activity-disclosure">通常の作業では窓口AIがResultを読みます。Ownerは必要なときだけ、この画面で協業状態と根拠を確認できます。</p>
+        </section>
+      )}
 
       <div className="frontdoor-layout">
         <aside className="frontdoor-run-list" aria-label="Frontdoor Run一覧">
@@ -465,6 +595,35 @@ export default function FrontdoorPanel({ minimal = false }: { minimal?: boolean 
                 <p className="turn-refs activity-disclosure">Codex内部のSkill／サブエージェントはADFから自動観測できません。明示的に記録されたSkill IDだけを表示し、未記録は推測しません。</p>
               </section>
             )}
+
+            <section className="frontdoor-card collaboration-room" aria-label="AI協業ルーム">
+              <div className="activity-summary">
+                <div>
+                  <h3>AI協業ルーム</h3>
+                  <p className="turn-refs">窓口AIが必要な参加者へbounded文脈だけを渡し、提案・レビュー・引継ぎを記録します。</p>
+                </div>
+                <span className="activity-state complete">{collaborationMessages.length}件</span>
+              </div>
+              {collaborationMessages.length === 0 ? (
+                <p className="lane-empty">まだAI間メッセージはありません。</p>
+              ) : (
+                <ol className="collaboration-timeline">
+                  {collaborationMessages.map((item) => (
+                    <li key={item.messageId} className={`collaboration-item ${item.status}`}>
+                      <div className="collaboration-meta">
+                        <strong>{item.senderParticipantId} → {item.recipientParticipantIds.join(', ') || '未指定'}</strong>
+                        <span>{collaborationKindLabels[item.kind]} · {collaborationStatusLabels[item.status]}</span>
+                        <time dateTime={item.createdAt}>{activityTime(item.createdAt)}</time>
+                      </div>
+                      <h4>{item.summary}</h4>
+                      <p className="turn-content">{item.content || '内容はResult／Evidence参照に束縛されています。'}</p>
+                      <p className="turn-refs">文脈: {item.context.mode} · 約{item.context.estimatedTokens} tokens · {item.context.referenceCount} refs{item.nodeId ? ` · Node: ${item.nodeId}` : ''}</p>
+                    </li>
+                  ))}
+                </ol>
+              )}
+              <p className="turn-refs activity-disclosure">ADFは担当や結論を決めません。窓口AIが相手と渡す文脈を選び、参加者の会話結果だけをProjectへ記録します。</p>
+            </section>
 
             {!minimal && <section className="frontdoor-card" aria-label="Owner Decision">
               <h3>Owner Decision</h3>

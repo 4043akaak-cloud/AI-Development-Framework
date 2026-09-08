@@ -2,7 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type { OpenSourceResult } from '../shared/boardTypes'
 import type { ConversationThread, OwnerAction, RecoveryAction, RelayResult, ThreadSummary } from '../shared/threadTypes'
 import type { LiveArtifactInspection } from '../shared/liveArtifactTypes'
-import type { ExternalPreflight, OllamaReadiness } from '../shared/externalAdapterTypes'
+import type { ExternalPreflight, LocalModelReadiness, OllamaReadiness } from '../shared/externalAdapterTypes'
 import type { AdapterProfile } from '../shared/jobLoopTypes'
 import type { FrontdoorArtifactInspection, FrontdoorInspection, FrontdoorPlanProposal, FrontdoorPrepareInput, FrontdoorPrepareResult, FrontdoorRequestInput, FrontdoorReturn, FrontdoorRunSummary, OwnerDecisionEnvelope, OwnerGate, OrchestrationRun, WorkPlaneArtifactManifest } from '../shared/frontdoorTypes'
 
@@ -27,7 +27,8 @@ contextBridge.exposeInMainWorld('adfRelay', {
   externalSendState: (threadId: string): Promise<RelayResult<{ inFlight: boolean }>> => ipcRenderer.invoke('relay:external-state', threadId),
   listExternalAdapters: (): Promise<RelayResult<AdapterProfile[]>> => ipcRenderer.invoke('relay:external-adapters'),
   // Owner-explicit only: the renderer must call this only from a direct click handler.
-  ollamaReadiness: (): Promise<RelayResult<OllamaReadiness>> => ipcRenderer.invoke('relay:ollama-readiness')
+  ollamaReadiness: (): Promise<RelayResult<OllamaReadiness>> => ipcRenderer.invoke('relay:ollama-readiness'),
+  localReadiness: (adapterId: string): Promise<RelayResult<LocalModelReadiness>> => ipcRenderer.invoke('relay:local-readiness', adapterId)
 })
 
 contextBridge.exposeInMainWorld('adfFrontdoor', {

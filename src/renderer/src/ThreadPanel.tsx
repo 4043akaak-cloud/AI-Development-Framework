@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type JSX } from 'react'
 import type { ConversationThread, OwnerAction, RecoveryAction, RecoveryReason, ThreadState, ThreadSummary } from '../../shared/threadTypes'
-import type { ExternalPreflight, OllamaReadiness } from '../../shared/externalAdapterTypes'
+import type { ExternalPreflight, LocalModelReadiness } from '../../shared/externalAdapterTypes'
 import type { AdapterProfile } from '../../shared/jobLoopTypes'
 import { isSendEnabled } from './externalSendGate'
 
@@ -59,7 +59,7 @@ export default function ThreadPanel(): JSX.Element {
   // instance did not actually register (see `listExternalAdapterProfiles` on the main side).
   const [externalAdapters, setExternalAdapters] = useState<AdapterProfile[]>([])
   const [selectedAdapterId, setSelectedAdapterId] = useState<string | null>(null)
-  const [ollamaReadiness, setOllamaReadiness] = useState<OllamaReadiness | null>(null)
+  const [localReadiness, setLocalReadiness] = useState<LocalModelReadiness | null>(null)
   const [readinessBusy, setReadinessBusy] = useState(false)
 
   const refresh = useCallback(async (): Promise<void> => {
@@ -80,7 +80,7 @@ export default function ThreadPanel(): JSX.Element {
   // A stale Pass must never survive a switch to a different Adapter or Thread.
   useEffect(() => {
     setPreflight(null)
-    setOllamaReadiness(null)
+    setLocalReadiness(null)
   }, [selectedAdapterId, thread?.threadId])
 
   const run = async (call: RelayCall<ConversationThread>): Promise<void> => {
@@ -115,8 +115,10 @@ export default function ThreadPanel(): JSX.Element {
   const runReadinessCheck = async (): Promise<void> => {
     setReadinessBusy(true)
     setMessage(null)
-    const result = await window.adfRelay.ollamaReadiness()
-    setOllamaReadiness(result.ok ? result.value : null)
+    const result = selectedProfile?.adapterId === 'ollama-local'
+      ? await window.adfRelay.ollamaReadiness()
+      : await window.adfRelay.localReadiness(selectedAdapterId ?? '')
+    setLocalReadiness(result.ok ? result.value : null)
     if (!result.ok) setMessage(result.error)
     setReadinessBusy(false)
   }
@@ -273,14 +275,14 @@ export default function ThreadPanel(): JSX.Element {
                 </dl>
 
                 {selectedProfile?.connection === 'local-http' && (
-                  <dl className="detail-grid" aria-label="Ollama readiness">
-                    <div><dt>Model</dt><dd>{ollamaReadiness?.model ?? '未確認'}</dd></div>
-                    <div><dt>Endpoint</dt><dd>{ollamaReadiness?.baseUrl ?? '未確認'}</dd></div>
+                  <dl className="detail-grid" aria-label="Local model readiness">
+                    <div><dt>Model</dt><dd>{localReadiness?.model ?? '未確認'}</dd></div>
+                    <div><dt>Endpoint</dt><dd>{localReadiness?.baseUrl ?? '未確認'}</dd></div>
                     <div>
                       <dt>readiness</dt>
                       <dd>
-                        {ollamaReadiness ? `${ollamaReadiness.reachable ? '到達可能' : '到達不可'} / ${ollamaReadiness.modelPresent ? 'モデルあり' : 'モデルなし'} — ${ollamaReadiness.detail}` : '未確認'}
-                        <button type="button" className="text-button" disabled={readinessBusy} onClick={() => void runReadinessCheck()}>Ollama到達性を確認</button>
+                        {localReadiness ? `${localReadiness.reachable ? '到達可能' : '到達不可'} / ${localReadiness.modelPresent ? 'モデルあり' : 'モデルなし'} — ${localReadiness.detail}` : '未確認'}
+                        <button type="button" className="text-button" disabled={readinessBusy} onClick={() => void runReadinessCheck()}>ローカルAI到達性を確認</button>
                       </dd>
                     </div>
                   </dl>
@@ -318,12 +320,12 @@ export default function ThreadPanel(): JSX.Element {
                   <button
                     type="button"
                     className="text-button"
-                    disabled={!isSendEnabled(preflight, ollamaReadiness, selectedProfile?.connection, busy, inFlight)}
+                    disabled={!isSendEnabled(preflight, localReadiness, selectedProfile?.connection, busy, inFlight)}
                     title={
                       !preflight?.ok
                         ? 'preflightがPassするまで送信できません'
-                        : selectedProfile?.connection === 'local-http' && !(ollamaReadiness?.reachable && ollamaReadiness?.modelPresent)
-                          ? 'Ollama到達性の確認がPassするまで送信できません'
+                        : selectedProfile?.connection === 'local-http' && !(localReadiness?.reachable && localReadiness?.modelPresent)
+                          ? 'ローカルAI到達性の確認がPassするまで送信できません'
                           : undefined
                     }
                     onClick={() => void runExternalSend()}

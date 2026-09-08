@@ -251,7 +251,41 @@ export interface FrontdoorInspection {
   nodeTargetHashes: Record<string, string>
   nodeReview?: FrontdoorNodeReview
   activities: FrontdoorActivity[]
+  collaborationMessages?: CollaborationMessage[]
   goalAlignment?: GoalAlignmentReport
+}
+
+export type CollaborationMessageKind = 'request' | 'proposal' | 'question' | 'review' | 'answer' | 'handoff' | 'result'
+export type CollaborationMessageStatus = 'posted' | 'waiting' | 'completed' | 'blocked'
+
+/**
+ * Read-only Project Collaboration Room projection. It deliberately references the existing
+ * Frontdoor Run/Thread/Result instead of creating a second conversation source of truth.
+ */
+export interface CollaborationMessage {
+  messageId: string
+  projectRef: string
+  conversationId: string
+  runId: string
+  senderParticipantId: string
+  senderRole: string
+  recipientParticipantIds: string[]
+  kind: CollaborationMessageKind
+  status: CollaborationMessageStatus
+  summary: string
+  content: string
+  parentMessageId?: string
+  nodeId?: string
+  executionThreadId?: string
+  resultRef?: string
+  resultHash?: string
+  context: {
+    mode: 'bounded'
+    chars: number
+    estimatedTokens: number
+    referenceCount: number
+  }
+  createdAt: string
 }
 
 export interface FrontdoorArtifactInspection {

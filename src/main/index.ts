@@ -5,7 +5,7 @@ import { openResolvedCanonicalSource, type CanonicalSourceDefinition } from './c
 import { safeDevelopmentRendererUrl } from '../shared/rendererUrlPolicy'
 import { createLiveRelay } from './liveRelay'
 import type { ConversationRelay } from './jobLoop/relay'
-import { cancelExternal, continueThread, decideThread, externalSendState, getThread, inspectLiveArtifacts, listApprovedTaskIds, listExternalAdapters, listThreads, ollamaReadiness, preflightExternal, recoverThread, scanForRecovery, sendExternal, sendFirstTurn, startApprovedThread } from './relayService'
+import { cancelExternal, continueThread, decideThread, externalSendState, getThread, inspectLiveArtifacts, listApprovedTaskIds, listExternalAdapters, listThreads, localReadiness, ollamaReadiness, preflightExternal, recoverThread, scanForRecovery, sendExternal, sendFirstTurn, startApprovedThread } from './relayService'
 import { approveFrontdoorRun, answerFrontdoorQuestion, completeFrontdoorRun, dispatchFrontdoorRun, exportFrontdoorArtifact, inspectCandidate, inspectFrontdoorArtifact, inspectFrontdoorRun, listFrontdoorRuns, listReviewableCandidates, prepareFrontdoorRun, proposeFrontdoorPlan, recoverFrontdoorRun, reviewCandidate, reviewFrontdoorNode, reviewFrontdoorResult, startCandidateReview, stopFrontdoorRun } from './frontdoor/frontdoorService'
 
 import { FrontdoorOrchestrator } from './frontdoor/orchestrator'
@@ -60,7 +60,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('board:open-canonical-source', (_event, sourceId: unknown) => openResolvedCanonicalSource(sourceId, allowedSources, shell.openPath))
 
   // Constructed, not connected. Nothing here opens a socket or reads a credential — the transports
-  // only touch the network inside `send` (Anthropic) or an explicit readiness check (Ollama), both
+  // only touch the network inside `send` (external) or an explicit local readiness check, both
   // gated behind an Owner action. Neither is contacted just by building this Relay.
   const runtimeRoot = path.join(app.getPath('userData'), 'adf-runtime')
   const relay: ConversationRelay = createLiveRelay(runtimeRoot)
@@ -82,6 +82,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('relay:external-adapters', () => listExternalAdapters(relay))
   // Owner-explicit only: never invoked from startup, Thread selection, or any polling loop.
   ipcMain.handle('relay:ollama-readiness', () => ollamaReadiness())
+  ipcMain.handle('relay:local-readiness', (_event, adapterId: unknown) => localReadiness(relay, adapterId))
   ipcMain.handle('frontdoor:list', () => listFrontdoorRuns(frontdoor))
   ipcMain.handle('frontdoor:propose-plan', (_event, input: unknown) => proposeFrontdoorPlan(planner, input))
   ipcMain.handle('frontdoor:prepare', (_event, input: unknown) => prepareFrontdoorRun(frontdoor, input))

@@ -522,6 +522,21 @@ class ThrowingGetStateAdapter extends FakeProposalConversationAdapter {
   }
 }
 
+class LongProposalAdapter extends FakeProposalConversationAdapter {
+  protected override compose(): RelayTurnPayload {
+    return { content: 'x'.repeat(3000), status: 'success', summary: 'long proposal', verification: [{ name: 'fixture', status: 'pass' }], risks: [] }
+  }
+}
+
+class CapturingCriticAdapter extends FakeCriticConversationAdapter {
+  lastRequest?: AdapterRequest
+
+  override async send(request: AdapterRequest): Promise<AdapterAcceptance> {
+    this.lastRequest = request
+    return super.send(request)
+  }
+}
+
 class PlannedLocalHttpAdapter implements ConversationAdapter {
   readonly adapterId = 'ollama-local'
   readonly role = 'proposal' as const
@@ -540,6 +555,20 @@ class PlannedLocalHttpAdapter implements ConversationAdapter {
 }
 
 describe('ADF-ADAPTER-PROVIDER-NEUTRAL-001 automatic routing boundary', () => {
+  it('bounds prior conversation context before handing it to a low-cost participant', async () => {
+    const critic = new CapturingCriticAdapter()
+    const current = await relay({ adapters: [new LongProposalAdapter(), critic] })
+    const thread = await current.startThread(approvedPacket())
+    await current.continueJob(thread.threadId)
+    await current.recordOwnerDecision(thread.threadId, 'continue')
+    const continued = await current.continueJob(thread.threadId)
+
+    expect(critic.lastRequest?.priorTurns).toHaveLength(1)
+    expect(critic.lastRequest?.priorTurns[0].content).toHaveLength(1200)
+    expect(critic.lastRequest?.contextBudget).toMatchObject({ mode: 'bounded', priorTurnCount: 1, priorTurnChars: 1200, estimatedTokens: 300 })
+    expect(continued.turns[1].contextBudget).toMatchObject({ mode: 'bounded', priorTurnChars: 1200, estimatedTokens: 300 })
+  })
+
   it('does not auto-route a planned local-http Adapter when an explicit local fake is available', async () => {
     const current = await relay({ adapters: [new PlannedLocalHttpAdapter(), new FakeProposalConversationAdapter(), new FakeCriticConversationAdapter()] })
     const threadId = await startedThread(current)

@@ -16,6 +16,7 @@ import type { AdapterResultEnvelope } from '../jobLoop/resultEnvelope'
 import { assertDispatchApproved, buildDecisionEnvelope, FrontdoorOwnerGateService, nodeReviewTargetHash, nodeTargetHash } from './ownerGates'
 import { getAdapterProfile } from '../jobLoop/adapterRegistry'
 import { buildActivityTrace } from './activityTrace'
+import { buildCollaborationTrace } from './collaborationTrace'
 import { assessGoalAlignment } from './goalAlignment'
 import { assertRunEventConsistency, assertRunIntegrity } from './runIntegrity'
 import { latestWorkPlaneArtifactManifest } from './workPlaneArtifact'
@@ -427,7 +428,8 @@ export class FrontdoorOrchestrator {
       eventCount: events.length,
       nodeTargetHashes: Object.fromEntries(run.nodes.map((record) => [record.node.nodeId, nodeTargetHash(run, record)])),
       nodeReview: run.nodeReview,
-      activities: buildActivityTrace(events, run)
+      activities: buildActivityTrace(events, run),
+      collaborationMessages: await buildCollaborationTrace(this.runtimeRoot, run, request)
     }
     inspection.goalAlignment = assessGoalAlignment(inspection)
     inspection.nextAction = inspection.goalAlignment.nextAction

@@ -1,14 +1,14 @@
 import path from 'node:path'
 import { readdir } from 'node:fs/promises'
 import type { AdapterProfile, AdapterRole, ApprovedTaskPacket, JobEvent, JobState } from '../../shared/jobLoopTypes'
-import type { ConversationThread, ConversationTurn, OwnerAction, RecoveryInfo, RelayDispatchHandle, RelayTurnPayload, ThreadSummary } from '../../shared/threadTypes'
+import type { AdapterDependencyResult as ThreadDependencyResult, ContextBudget, ConversationThread, ConversationTurn, OwnerAction, RecoveryInfo, RelayDispatchHandle, RelayTurnPayload, ThreadSummary } from '../../shared/threadTypes'
 import { checkAdapterPlanMembership, getAdapterProfile } from './adapterRegistry'
 import { canTransition, validateApprovedTask } from './contracts'
 import type { AdapterAcceptance, AdapterDependencyResult, ConversationAdapter } from './conversationAdapters'
 import { adapterSupportsRole, FakeCriticConversationAdapter, FakeProposalConversationAdapter } from './conversationAdapters'
 import { hashJson } from './hash'
 import { appendEvent, ensureDir, readEvents, readJson, removeFile, writeJsonAtomic, writeJsonExclusive } from './ledger'
-import type { ExternalPreflight } from '../../shared/externalAdapterTypes'
+import type { ExternalPreflight, LocalModelReadiness } from '../../shared/externalAdapterTypes'
 import { assertExternalSendAllowed, preflightExternalSend, readExternalApproval } from './externalApproval'
 import type { ExternalAdapterHooks } from './externalAdapter'
 import type { ExternalTransport } from './externalTransport'
@@ -19,10 +19,35 @@ import { appendRecoveryTurn, appendTurn, applyOwnerDecision, createThread, defau
 
 /** Display-only deadline for a pending dispatch. Passing it never triggers an automatic action. */
 export const defaultPendingTtlMs = 15 * 60 * 1000
+const maxPriorTurnsForDispatch = 3
+const maxCharsPerPriorTurn = 1200
+const maxCharsPerDependency = 1000
 
 /** Keeps adapter-supplied error text short and free of stack traces or payloads. */
 function safeErrorText(error: unknown): string {
   return String((error as Error)?.message ?? error).slice(0, 200)
+}
+
+function boundedText(value: string, limit: number): string {
+  return value.slice(0, limit)
+}
+
+function buildBoundedPriorTurns(turns: readonly ConversationTurn[]): ConversationTurn[] {
+  return turns.slice(-maxPriorTurnsForDispatch).map((turn) => ({
+    ...turn,
+    content: boundedText(turn.content, maxCharsPerPriorTurn),
+    ...(turn.dependencyResults ? { dependencyResults: turn.dependencyResults.map((dependency) => ({ ...dependency, ...(dependency.content ? { content: boundedText(dependency.content, maxCharsPerDependency) } : {}) })) } : {})
+  }))
+}
+
+function boundedDependencies(dependencies: readonly ThreadDependencyResult[] | undefined): ThreadDependencyResult[] | undefined {
+  return dependencies?.map((dependency) => ({ ...dependency, ...(dependency.content ? { content: boundedText(dependency.content, maxCharsPerDependency) } : {}) }))
+}
+
+function contextBudget(priorTurns: readonly ConversationTurn[], dependencies: readonly ThreadDependencyResult[] | undefined): ContextBudget {
+  const priorTurnChars = priorTurns.reduce((total, turn) => total + turn.content.length, 0)
+  const dependencyChars = (dependencies ?? []).reduce((total, dependency) => total + (dependency.content?.length ?? 0), 0)
+  return { mode: 'bounded', priorTurnCount: priorTurns.length, priorTurnChars, dependencyCount: dependencies?.length ?? 0, dependencyChars, estimatedTokens: Math.max(1, Math.ceil((priorTurnChars + dependencyChars) / 4)) }
 }
 
 export interface ConversationRelayOptions {
@@ -122,6 +147,15 @@ export class ConversationRelay {
     if (!transport.checkReadiness) throw new ThreadRejectedError([`local-http adapter has no readiness check: ${adapterId}`])
     const readiness = await transport.checkReadiness()
     if (!readiness.ready) throw new ThreadRejectedError([`adapter readiness failed for ${adapterId}: ${readiness.detail}`])
+  }
+
+  /** Owner-explicit, detailed readiness for a registered local model Adapter. */
+  async localReadiness(adapterId: string): Promise<LocalModelReadiness> {
+    const profile = getAdapterProfile(adapterId)
+    if (profile.connection !== 'local-http') throw new ThreadRejectedError([`adapter is not a local-http Adapter: ${adapterId}`])
+    const transport = this.requireTransport(adapterId)
+    if (!transport.localReadiness) throw new ThreadRejectedError([`local-http Adapter has no detailed readiness check: ${adapterId}`])
+    return transport.localReadiness()
   }
 
   /**
@@ -341,6 +375,9 @@ export class ConversationRelay {
       throw new ThreadRejectedError([`dispatchId ${dispatchId} was already used on this thread; refusing to reuse it`])
     }
 
+    const boundedPriorTurns = buildBoundedPriorTurns(thread.turns)
+    const boundedDependencyResults = boundedDependencies(dependencyResults)
+    const budget = contextBudget(boundedPriorTurns, boundedDependencyResults)
     const sentAt = this.now()
     const handle: RelayDispatchHandle = {
       dispatchId,
@@ -354,7 +391,8 @@ export class ConversationRelay {
       ...(parent ? { respondsToTurnId: parent.turnId, respondsToHash: turnHash(parent) } : {}),
       sentAt,
       expiresAt: new Date(new Date(sentAt).getTime() + this.pendingTtlMs).toISOString(),
-      ...(dependencyResults?.length ? { dependencyResults: [...dependencyResults] } : {}),
+      ...(boundedDependencyResults?.length ? { dependencyResults: boundedDependencyResults } : {}),
+      contextBudget: budget,
       ...(orchestrationRunId ? { orchestrationRunId } : {})
     }
 
@@ -372,14 +410,15 @@ export class ConversationRelay {
         title: thread.title,
         role: expectedRole,
         sequence,
-        priorTurns: thread.turns,
+        priorTurns: boundedPriorTurns,
         attempt,
         inputHash: thread.inputHash,
         scopeHash: thread.scopeHash,
         contextHash: thread.contextHash,
         ...(thread.approvedFileSet ? { approvedFileSet: thread.approvedFileSet } : {}),
         ...(orchestrationRunId ? { orchestrationRunId } : {}),
-        ...(dependencyResults?.length ? { dependencyResults } : {})
+        ...(boundedDependencyResults?.length ? { dependencyResults: boundedDependencyResults } : {}),
+        contextBudget: budget
       })
     } catch (error) {
       // A throw does not prove nothing was sent, so the intent stays unresolved on purpose.
@@ -442,6 +481,7 @@ export class ConversationRelay {
       status: answer.status,
       ...(answer.questions ? { questions: answer.questions } : {}),
       ...(stored.dependencyResults?.length ? { dependencyResults: stored.dependencyResults } : {}),
+      ...(stored.contextBudget ? { contextBudget: stored.contextBudget } : {}),
       ...(stored.orchestrationRunId ? { orchestrationRunId: stored.orchestrationRunId } : {}),
       resultEnvelopeRef: `threads/${stored.threadId}/results/${turnId}.json`,
       resultEnvelopeHash: hashJson(envelope),
@@ -485,6 +525,7 @@ export class ConversationRelay {
       risks: answer.risks ?? [],
       ...(answer.questions ? { questions: answer.questions } : {}),
       ...(stored.dependencyResults?.length ? { dependencyResults: stored.dependencyResults } : {}),
+      ...(stored.contextBudget ? { contextBudget: stored.contextBudget } : {}),
       ...(stored.orchestrationRunId ? { orchestrationRunId: stored.orchestrationRunId } : {}),
       ownerDecisionRequired: true,
       nextOwnerDecision: answer.status === 'success' || answer.status === 'partial' ? 'このTurnを確認し、継続・停止・承認を判断する' : 'Turnの失敗理由を確認し、停止または再設計を判断する',

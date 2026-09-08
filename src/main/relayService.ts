@@ -1,7 +1,7 @@
 import path from 'node:path'
 import { readdir } from 'node:fs/promises'
 import type { AdapterProfile, ApprovedTaskPacket } from '../shared/jobLoopTypes'
-import type { ExternalPreflight, OllamaReadiness } from '../shared/externalAdapterTypes'
+import type { ExternalPreflight, LocalModelReadiness, OllamaReadiness } from '../shared/externalAdapterTypes'
 import type { ConversationThread, OwnerAction, RecoveryAction, RelayResult, ThreadSummary } from '../shared/threadTypes'
 import type { LiveArtifactInspection } from '../shared/liveArtifactTypes'
 import { readJson } from './jobLoop/ledger'
@@ -168,6 +168,11 @@ export function listExternalAdapters(relay: ConversationRelay): Promise<RelayRes
  */
 export function ollamaReadiness(): Promise<RelayResult<OllamaReadiness>> {
   return guard(() => checkOllamaReadiness())
+}
+
+/** Owner-explicit only. Checks the selected registered local model Adapter; never polls. */
+export function localReadiness(relay: ConversationRelay, adapterId: unknown): Promise<RelayResult<LocalModelReadiness>> {
+  return guard(() => relay.localReadiness(asIdentifier(adapterId, 'adapterId')))
 }
 
 export function decideThread(relay: ConversationRelay, threadId: unknown, action: unknown, note: unknown): Promise<RelayResult<ConversationThread>> {

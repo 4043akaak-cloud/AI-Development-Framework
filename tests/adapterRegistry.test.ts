@@ -44,6 +44,18 @@ describe('multi-AI adapter foundation', () => {
     expect(ollama).toMatchObject({ provider: 'ollama', connection: 'local-http', authMode: 'none', status: 'available', dataPolicy: 'local-only' })
   })
 
+  it('registers lmstudio-local as an explicit local OpenAI-compatible Adapter', () => {
+    expect(adapterProfiles.find((profile) => profile.adapterId === 'lmstudio-local')).toMatchObject({
+      adapterId: 'lmstudio-local',
+      provider: 'lmstudio',
+      connection: 'local-http',
+      authMode: 'none',
+      status: 'available',
+      costTier: 'free',
+      dataPolicy: 'local-only'
+    })
+  })
+
   it('still never auto-routes ollama-local now that it is available (the real Registry entry, not a hypothetical one)', () => {
     const plan = routeAdapters('ADF-OLLAMA-LIVE-CONNECTION-001', ['proposal', 'critic'], ['read', 'propose'])
     expect(plan.selections.map((selection) => selection.adapterId)).toEqual(['fake-ai-a', 'fake-ai-b'])
@@ -89,6 +101,32 @@ describe('multi-AI adapter foundation', () => {
   it('registers claude-code-cli as planned/cli/environment-secret/external-send (ADF-CLAUDE-CODE-CLI-ADAPTER-001)', () => {
     const profile = adapterProfiles.find((candidate) => candidate.adapterId === 'claude-code-cli')
     expect(profile).toMatchObject({ provider: 'anthropic', connection: 'cli', authMode: 'environment-secret', status: 'planned', dataPolicy: 'external-send' })
+  })
+
+  it('registers the first OpenAI-compatible providers as explicit external candidates', () => {
+    for (const [adapterId, provider] of [['deepseek-external', 'deepseek'], ['zai-external', 'zai'], ['qwen-external', 'qwen']] as const) {
+      expect(adapterProfiles.find((candidate) => candidate.adapterId === adapterId)).toMatchObject({
+        adapterId,
+        provider,
+        connection: 'api',
+        authMode: 'environment-secret',
+        status: 'available',
+        costTier: 'low',
+        dataPolicy: 'external-send'
+      })
+    }
+  })
+
+  it('registers OpenRouter as an explicit fixed-model external candidate', () => {
+    expect(adapterProfiles.find((candidate) => candidate.adapterId === 'openrouter-free')).toMatchObject({
+      adapterId: 'openrouter-free',
+      provider: 'openrouter',
+      connection: 'api',
+      authMode: 'environment-secret',
+      status: 'available',
+      costTier: 'low',
+      dataPolicy: 'external-send'
+    })
   })
 
   it('never selects claude-code-cli via routeAdapters while it is planned', () => {

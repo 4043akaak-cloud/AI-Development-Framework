@@ -1,6 +1,16 @@
 # ADF Current State
 
+> 2026-08-27: LM Studio local Adapterを実装。`LocalOpenAICompatibleTransport`でループバック限定の`/v1/models` readinessと`/v1/chat/completions`送信を追加し、`lmstudio-local`をRegistry／Live Relayへ登録した。モデルは`LM_STUDIO_MODEL`でOwnerが明示選択し、未選択・非ループバック・readiness未通過では停止する。型検査・全体テスト43 files / 410 tests・build・canonical app relaunchはPass。読み取り専用の`127.0.0.1:1234/v1/models`確認はLM Studio Server未起動で到達不可。MCP設定、モデルの自動download/load、実LM Studio送信、commit／pushは未実施。詳細は`ADF-LM-STUDIO-LOCAL-ADAPTER-001`とObsidian `47_ADF_参加者接続容易性と低コストAdapter計画_2026-08-25`を参照。
+
+> 2026-08-27: OpenRouter準備を完了。既存の`OpenAICompatibleTransport`を再利用し、`openrouter-free`をRegistry／Live Relayへ登録した。既定Endpointは`https://openrouter.ai/api/v1`、Credentialは`OPENROUTER_API_KEY`、固定モデルは`OPENROUTER_MODEL`で指定する。`openrouter/free`は準備用の可変ルーターであり、再現性のある実送信には固定した`モデルID:free`をOwnerが選ぶ。APIキー設定・モデル確定・外部送信・課金・commit／pushは未実施。詳細は`ADF-COMPATIBLE-PROVIDER-ADAPTERS-001`とObsidian `47_ADF_参加者接続容易性と低コストAdapter計画_2026-08-25`を参照。
+
+> 2026-08-26: Ollama最小協業MVPを完成。実Ollamaへ合成Packetを1件だけ送信し、Result status `success`、Thread `thread-8c1de8c1fcc5d755`、Job `job-b8dd869eec3de7f4`、Evidence／Ledgerを確認した。Project Boardへ既存Runtime Threadの読み取り専用スナップショットを追加し、Threadカードをクリックして参加AI・役割・Result・Evidence・次のActionを確認できる導線を実装。窓口AIが通常のResult確認を担当し、ADF画面はOwnerの監視・証拠確認に限定する。typecheck 3系統、Vitest 42 files / 402 tests、production build、diff checkはPass。DeepSeek／Z.ai／Qwenの実送信、APIキー設定、commit／pushは未実施。Electronネイティブウィンドウの目視操作は環境上未検証。
+
+> 2026-08-25: 既存の`ollama-local` Adapterを維持し、DeepSeek／Z.ai／Qwenを共通`OpenAICompatibleTransport`でRegistry・Live Relayへ登録。Token使用量の数値メトリクスを追加した。決定的テスト、typecheck 3系統、full Vitest 41 files / 400 tests、production build、diff checkはPass。APIキー設定、実Provider送信、費用確認、外部E2Eは未実施。詳細は`ADF-COMPATIBLE-PROVIDER-ADAPTERS-001`とObsidian `47_ADF_参加者接続容易性と低コストAdapter計画_2026-08-25`を参照。
+
 > 2026-08-25: 最小MVP収束作業を実施。Owner向けPrimary UIは1プロジェクトの`ADF Project Board`に統一し、判断入力とTask単位管理は窓口AI経由へ寄せた。Aggregate child ResultへResult hashを保持し、Result Review時にResult／Run／Task／Job／入力hashを再検証するfail-closed境界を追加。現行Owner-facing IPC／follow-up DispatchはPacket-boundを必須化した。typecheck 3系統、Vitest 39 files / 389 tests、production build、package、diff checkをPass。リポジトリの生成済みアプリは現行パッケージ1個に整理し、旧生成物は削除せず`/tmp/adf-legacy-builds-20260825/`へ退避。実窓口AIクライアントの同一入口2Cycle操作と現行パッケージでの成果物ボタン実クリックは未検証のため、製品全体を完了扱いにしない。
+
+> 2026-08-25: AI協業の第一目的をToken Economyと定義。窓口AIは高能力・Owner意図保持を優先するがProvider固定はせず、協業参加者は低コスト／local-onlyを優先する。既存Thread／Turn／Resultを読み取り投影した`AI協業ルーム`をProject BoardとFrontdoor MCP Inspectへ追加し、Proposal → Criticのbounded引継ぎ、宛先、Result／Evidence binding、概算ContextBudgetを表示する。Adapter送信文脈は過去最大3 Turn、1 Turn最大1200文字、依存Result最大1000文字に制限。意味のある割り振り・結論・Aggregate採用は窓口AI／Ownerの責務として維持。Vitest 40 files / 392 tests、typecheck 3系統、production build／package、diff checkをPass。実Providerの請求Token比較と実窓口AIクライアント運用は未検証。
 
 > 2026-08-21: `ADF-MCP-FRONTDOOR-2CYCLE-E2E-001` を開始。既存の `adf_frontdoor` MCP入口を使った窓口AIの2Cycle実証を、Fake Adapter・local-only・Owner Gate維持で進める。外部送信、資格情報、正本自動書込み、commit／pushは対象外。
 >

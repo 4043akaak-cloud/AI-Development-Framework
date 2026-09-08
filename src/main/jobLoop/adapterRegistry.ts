@@ -15,6 +15,20 @@ export const adapterProfiles: readonly AdapterProfile[] = [
     dataPolicy: 'local-only'
   },
   {
+    // LM Studio exposes a local OpenAI-compatible server. It is explicit-only like Ollama so
+    // ADF never silently chooses a local model or changes the Owner's selected participant.
+    adapterId: 'lmstudio-local',
+    displayName: 'LM Studio / Local OpenAI-compatible API',
+    provider: 'lmstudio',
+    connection: 'local-http',
+    authMode: 'none',
+    status: 'available',
+    roles: ['proposal', 'critic', 'review'],
+    capabilities: ['read', 'propose'],
+    costTier: 'free',
+    dataPolicy: 'local-only'
+  },
+  {
     adapterId: 'fake-ai-b',
     displayName: 'Fake AI B / Critic',
     provider: 'fake',
@@ -54,6 +68,60 @@ export const adapterProfiles: readonly AdapterProfile[] = [
     dataPolicy: 'external-send'
   },
   {
+    adapterId: 'deepseek-external',
+    displayName: 'DeepSeek / OpenAI-compatible API',
+    provider: 'deepseek',
+    connection: 'api',
+    authMode: 'environment-secret',
+    status: 'available',
+    roles: ['proposal', 'critic', 'review'],
+    capabilities: ['read', 'propose'],
+    // Operational budget class only; it is not a provider price guarantee.
+    costTier: 'low',
+    dataPolicy: 'external-send'
+  },
+  {
+    adapterId: 'zai-external',
+    displayName: 'Z.ai / OpenAI-compatible API',
+    provider: 'zai',
+    connection: 'api',
+    authMode: 'environment-secret',
+    status: 'available',
+    roles: ['proposal', 'critic', 'review'],
+    capabilities: ['read', 'propose'],
+    costTier: 'low',
+    dataPolicy: 'external-send'
+  },
+  {
+    adapterId: 'qwen-external',
+    displayName: 'Qwen / Model Studio OpenAI-compatible API',
+    provider: 'qwen',
+    connection: 'api',
+    authMode: 'environment-secret',
+    status: 'available',
+    roles: ['proposal', 'critic', 'review'],
+    capabilities: ['read', 'propose'],
+    costTier: 'low',
+    dataPolicy: 'external-send'
+  },
+  {
+    // OpenRouter is a gateway to multiple model providers. It remains an explicit external
+    // candidate: ADF does not choose the downstream model, and the Window AI/Owner must select
+    // a fixed model before a real send so a later run is reproducible.
+    adapterId: 'openrouter-free',
+    displayName: 'OpenRouter / Fixed Free Model API',
+    provider: 'openrouter',
+    connection: 'api',
+    authMode: 'environment-secret',
+    status: 'available',
+    roles: ['proposal', 'critic', 'review'],
+    capabilities: ['read', 'propose'],
+    // Operational budget class only. A free route can have changing availability/limits and is
+    // never treated as a provider price guarantee by ADF.
+    costTier: 'low',
+    dataPolicy: 'external-send'
+  },
+  {
     // Exercises the whole external path with no network access, so the gates can be verified
     // before any provider or execution approval exists.
     adapterId: 'external-probe-mock',
@@ -68,11 +136,23 @@ export const adapterProfiles: readonly AdapterProfile[] = [
     dataPolicy: 'external-send'
   },
   {
+    // `ADF-CODEX-CLI-ADAPTER-001`: `planned` only — `supports()` already requires
+    // `status === 'available'`, so this entry cannot be auto-routed or explicitly dispatched to
+    // regardless of `connection`. Not registered in `index.ts`'s Relay either. Declaring the
+    // Transport is deliberately separate from making it reachable, as with `claude-code-cli`.
+    // `connection`/`authMode` were `unknown` until the Owner settled the connection method:
+    // `CodexCliTransport` over `codex exec`, authenticating with the Codex CLI session file that its
+    // isolated `CODEX_HOME` links to — hence `cli-session`, not `environment-secret`.
+    // `dataPolicy` stays `external-send`: Codex CLI is a local process, but it sends to OpenAI.
+    // Relaxing that value to slip past `validateAdapterPlan`'s local-only boundary is forbidden.
+    // Registering Codex here does not make it ADF's Frontdoor, nor does being ADF's current
+    // Frontdoor exclude it here: roles are per-Phase/Task Assignments (see `participantTypes.ts`),
+    // never a permanent product identity.
     adapterId: 'codex-external',
     displayName: 'Codex / External Conversation Adapter',
     provider: 'openai',
-    connection: 'unknown',
-    authMode: 'unknown',
+    connection: 'cli',
+    authMode: 'cli-session',
     status: 'planned',
     roles: ['proposal', 'critic', 'implementation'],
     capabilities: ['read', 'propose'],

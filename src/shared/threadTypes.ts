@@ -45,8 +45,19 @@ export interface ConversationTurn {
   resultEnvelopeRef?: string
   /** Hash of the stored Result Envelope, re-checked before the Owner can approve. */
   resultEnvelopeHash?: string
+  contextBudget?: ContextBudget
   errorRef?: string
   createdAt: string
+}
+
+/** Provider-neutral, transport-level context budget. It limits payload size without choosing meaning or assignment. */
+export interface ContextBudget {
+  mode: 'bounded'
+  priorTurnCount: number
+  priorTurnChars: number
+  dependencyCount: number
+  dependencyChars: number
+  estimatedTokens: number
 }
 
 /** Optional structured questions returned by an Adapter. The Frontdoor layer owns aggregation. */
@@ -121,6 +132,7 @@ export interface RelayDispatchHandle {
   /** Display-only deadline. Passing it never triggers an automatic action. */
   expiresAt: string
   dependencyResults?: AdapterDependencyResult[]
+  contextBudget?: ContextBudget
   orchestrationRunId?: string
 }
 

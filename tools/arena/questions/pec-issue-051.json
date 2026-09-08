@@ -1,0 +1,18 @@
+{
+  "id": "pec-issue-051",
+  "question": "Prediction Engine Core の Issue #051 は、残存する TypeScript エラー 340 件を『cosmetic（union 型のプロパティアクセスに起因する化粧上の問題）』と判定し、バックエンドの予測パイプラインは動作しているとして先へ進める判断をしている。この『cosmetic だから進んでよい』という合否判定は妥当か。",
+  "maxCharsPerSource": 900,
+  "maxCharsTotal": 2000,
+  "excerpts": [
+    {
+      "label": "PEC todo.md — Issue #051 Type System Refactoring",
+      "path": "/Users/kawakamiatsushishi/GitHub/prediction-engine-core/todo.md",
+      "lines": "281-295"
+    }
+  ],
+  "notes": [
+    "Technical/PEC_ErrorAnalysis_2_Issues5to9.md",
+    "Projects/PredictionEngine_Design_Insights.md"
+  ],
+  "_budgetNote": "このマシンは Apple A18 Pro / RAM 8GB。qwen2.5:3b は約2.4KBのプロンプトを16.7秒で処理する実測に基づき、資産の総量を2000文字とした。"
+}

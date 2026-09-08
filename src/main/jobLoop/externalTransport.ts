@@ -1,5 +1,5 @@
 import type { AdapterConnection, AuthMode } from '../../shared/jobLoopTypes'
-import type { ExternalPerformanceMetrics, ExternalSendOutcome, SyntheticPacket } from '../../shared/externalAdapterTypes'
+import type { ExternalPerformanceMetrics, ExternalSendOutcome, LocalModelReadiness, SyntheticPacket } from '../../shared/externalAdapterTypes'
 
 export interface TransportOptions {
   timeoutMs: number
@@ -32,6 +32,8 @@ export interface ExternalTransport {
   isLocalEndpoint?(): boolean
   /** Optional live readiness check. It is invoked only by an explicit Owner dispatch action. */
   checkReadiness?(): Promise<TransportReadiness>
+  /** Optional detailed local model check for an explicit Owner readiness action. */
+  localReadiness?(): Promise<LocalModelReadiness>
   /** Must never read the filesystem, the repo, or the Vault. It receives only the packet. */
   send(packet: SyntheticPacket, options: TransportOptions): Promise<ExternalSendOutcome>
 }
@@ -42,6 +44,13 @@ export interface CredentialStatus {
   /** Where the Owner sets it, e.g. an environment variable name. Never the value. */
   source: string
   authMode: AuthMode
+}
+
+export class MissingCredentialError extends Error {
+  readonly code = 'MISSING_CREDENTIAL'
+  constructor(variable: string) {
+    super(`${variable} is not set in this process environment; ADF does not store credentials`)
+  }
 }
 
 export const maxAnswerCharacters = 2000

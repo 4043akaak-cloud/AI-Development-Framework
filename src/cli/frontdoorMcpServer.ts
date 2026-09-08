@@ -211,6 +211,7 @@ function projectInspection(inspection: Awaited<ReturnType<FrontdoorOrchestrator[
     eventCount: inspection.eventCount,
     nodeTargetHashes: inspection.nodeTargetHashes,
     activities: inspection.activities,
+    collaborationMessages: inspection.collaborationMessages,
     goalAlignment: inspection.goalAlignment
   }
 }

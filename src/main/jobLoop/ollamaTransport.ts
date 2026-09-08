@@ -189,6 +189,10 @@ export class OllamaLocalHttpTransport implements ExternalTransport {
     return { ready: readiness.reachable && readiness.modelPresent, detail: readiness.detail }
   }
 
+  async localReadiness(): Promise<OllamaReadiness> {
+    return checkOllamaReadiness({ baseUrl: this.baseUrl, model: this.model, fetchImpl: this.fetchImpl, timeoutMs: this.readinessTimeoutMs })
+  }
+
   async send(packet: SyntheticPacket, options: TransportOptions): Promise<ExternalSendOutcome> {
     const startedAt = Date.now()
     if (!this.isLocalEndpoint()) throw new Error('Ollama endpoint is not a safe loopback URL')

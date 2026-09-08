@@ -34,6 +34,9 @@ export type ExternalOutcomeStatus = 'success' | 'failed' | 'timeout' | 'cancelle
 
 /** Provider-reported performance measurements. Values are numeric only; no prompt or answer text. */
 export interface ExternalPerformanceMetrics {
+  promptTokens?: number
+  completionTokens?: number
+  totalTokens?: number
   totalDurationNs?: number
   loadDurationNs?: number
   promptEvalCount?: number
@@ -112,6 +115,16 @@ export interface OllamaReadiness {
   models: string[]
   detail: string
   /** The endpoint and model this check actually targeted, for display next to the result. */
+  baseUrl: string
+  model: string
+}
+
+/** Read-only model/server check shared by local model servers such as Ollama and LM Studio. */
+export interface LocalModelReadiness {
+  reachable: boolean
+  modelPresent: boolean
+  models: string[]
+  detail: string
   baseUrl: string
   model: string
 }
