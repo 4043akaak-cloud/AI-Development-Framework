@@ -1,6 +1,6 @@
 # ADF-MCP-FRONTDOOR-2CYCLE-E2E-001
 
-Status: Verifying — 実装と自動検証は完了。受入条件12件すべてに証跡を対応付けた。残るのはProject Ownerの完了承認と、Cycle 1 Completion Gateの扱いの判断（2026-09-08）。
+Status: Verifying — 実装と自動検証は完了。受入条件12件すべてに証跡を対応付けた。**Cycle 1 `run-7987794137baa1041b91` のCompletion Gateは 2026-09-09 に閉じた**（`ADF-AGGREGATE-SCHEMA-MIGRATION-001` の互換経路により、19日ぶりにResult Reviewが通った）。保存済み5Runはすべて `complete` / `completed`。残るのはProject Ownerの完了承認のみ。
 Owner: Codex
 Implementation: Codex
 Independent Verification: Claude Code（2026-09-08、実窓口AIクライアントとして実施。実装者と分離）
@@ -106,7 +106,7 @@ Window AI
 - [x] 外部送信、資格情報、課金、Canonical repo／Obsidian書込みが発生しない。 — 全RunがFake Adapter／local-only。2026-09-08検証は読み取り専用。
 - [x] 自動検証、手動／実画面確認、未実施確認を分けて記録する。 — 2026-09-08節で3区分に分離して記録。
 
-**残る唯一のOwner操作**: Cycle 1 `run-7987794137baa1041b91` のCompletion Gate（受入条件上の必須項目ではない。詳細は本文末尾）。
+**Cycle 1 Completion Gate**: 2026-09-09 に完了。Result Review `owner-decision-878fc6630e1cff448e7d`（accept、互換経路 `proposal, critic`）→ Completion。19日間閉じられなかった原因と対処は `ADF-AGGREGATE-SCHEMA-MIGRATION-001` に記録した。
 
 ## 8. Verification Plan
 

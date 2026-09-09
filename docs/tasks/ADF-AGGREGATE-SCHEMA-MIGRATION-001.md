@@ -1,10 +1,12 @@
 # Task — ADF-AGGREGATE-SCHEMA-MIGRATION-001: 旧Aggregateが採用不能になった問題
 
-> Status: `Planned` — 設計のみ。実装未着手。**Codexの独立レビュー後に実装する。**
+> Status: `Verifying` — 実装・独立レビュー・レビュー反映まで完了。残るはProject Ownerの受入判断。
 > Type: Design → Implementation + Verification
 > Owner: Project Owner
 > Designer: Claude Code
-> Date: 2026-09-09
+> Implementation: Claude Code（`a0c2f08`、レビュー反映 `a21f65f`）
+> Independent Review: Codex（2026-09-09。実装後のレビューとなった。下記「順序の逸脱」を参照）
+> Date: 2026-09-09（設計） / 2026-09-09（実装・レビュー反映）
 > 契機: `ADF-MCP-FRONTDOOR-2CYCLE-E2E-001` Cycle 1 のCompletion Gateが閉じられなかったこと
 
 ## 1. 何が起きているか
@@ -88,3 +90,36 @@ Ownerが「この採用は旧形式のAggregateに対するもので、Aggregate
 - **旧Aggregateに対するAggregate陳腐化検出は復活しない。** 記録が無いため原理的に不可能。
 - 対象は2026-08-25以前に生成されたRunに限られるが、その件数を網羅的に数えていない。
 - 本設計は未レビュー。**実装前にCodexのレビューを通す。**
+
+## 順序の逸脱（記録）
+
+本Taskは「設計のみ。Codexの独立レビュー後に実装する」と記録した状態から、レビューを経ずに実装へ進んだ。Ownerが「全て進めて下さい」「さっさと終わらせて下さい」と明示指示したことによる。Codexのレビューはこれを **P1（ADFの実装前レビュー規則違反）** として指摘しており、その指摘は正しい。事後レビューによって順序違反が消えるわけではないため、事実として記録する。判断はOwnerが行った。
+
+## 実装結果（2026-09-09）
+
+| 設計時の方針 | 実装 |
+| --- | --- |
+| hash欠落のみを旧形式として扱う | **変更**。欠落に加えAggregateの`createdAt`がschema導入時刻（2026-08-25 11:10 +0900）より前であることを要求する。欠落だけでは「削除すれば緩い経路に入れる」ため |
+| 互換経路を通ったNodeはOwner Decisionのnoteへ記録 | **変更**。自由記述の`note`ではなくtyped field `compatibility` へ記録し、MCP projectionとUIのDecision一覧にも表示する |
+| `reviewResult`と`exportWorkPlaneArtifact`の双方へ適用 | 実装。Exportは継承ではなくAggregateから再導出して記録する |
+
+### Codexレビューの指摘と対応
+
+| 指摘 | 対応 |
+| --- | --- |
+| P1 `undefined`だけでLegacy判定するのは安全でない | 修正（`createdAt`束縛）。ただしRuntime全体を書ける攻撃者は防げない。strict経路も同様に防げないことをコメントへ明記した |
+| P1 Ledger hash chainは署名が無く、再構築で到達可能 | 上記で「新しいデータが互換経路へ入れない」ところまでを担保。署名／MACの導入は本Taskの範囲外として別Task候補に残す |
+| P1 互換経路を`note`へ埋め込むのは不適切 | 修正（typed field化＋MCP／UI projection追加） |
+| P2 Legacy経路の否定テスト不足 | 修正（credential混入・`resultRef`差し替え・cutoff後の削除の3件を追加） |
+| P2 Export側がLegacy routeを記録しない | 修正 |
+| P2 `7092e79`はdrift検査を修正せず対象から隠している | 修正。Execution Recordを独立カテゴリとして列挙し、「検査対象外」と明示する |
+| Findingなし test-only helperの本番漏洩 | 対応不要 |
+
+### 実runtimeでの結果
+
+Cycle 1 `run-7987794137baa1041b91` のResult Reviewと Completionが19日ぶりに成立し、保存済み5Runすべてが `complete` / `completed` となった。ただしこのDecisionは`a21f65f`より前に記録したため、互換経路は旧形式（`note`への追記）で残っている。Ledger履歴は書き換えない。
+
+### 未対応として残すもの
+
+- Ledgerへの署名／MAC。Runtimeファイルを書ける攻撃者に対する防御は本Taskでは達成していない。
+- `a21f65f`以降のコードは独立レビューを受けていない。
