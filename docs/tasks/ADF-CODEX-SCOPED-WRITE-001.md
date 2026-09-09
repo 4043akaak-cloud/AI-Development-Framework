@@ -1,6 +1,6 @@
 # Task — ADF-CODEX-SCOPED-WRITE-001: Codexによる実装（書き込み権限の限定付与）
 
-> Status: `Approved` — Owner承認済み（2026-09-09）。実行中。
+> Status: `Verifying` — 実施済み。**Codexが途中で停止し、Claude Codeが引き継いだため役割分離は成立していない。**
 > Type: Authority Grant + Implementation
 > Owner: Project Owner
 > Implementer: **Codex**（`gpt-6-astra` / `--sandbox workspace-write`）
@@ -58,4 +58,58 @@ Claude CodeはCodexの成果物を**受け入れるか、指摘を差し戻す�
 
 ## 5. 結果
 
-（実行後に追記）
+### 5.1 Codexは途中で停止した
+
+`gpt-6-astra` / `--sandbox workspace-write` で実行し、**使用量上限に達して中断**した（復帰は15:20）。exit codeは0だが、出力末尾に上限エラーが記録されている。
+
+到達範囲は6入口中4つ。
+
+| 入口 | Codexの到達 |
+| --- | --- |
+| Adapter回答 → `receiveFromAdapter` → Result Envelope | 到達 |
+| Participant 生成側（`adf_participant_submit_result`） | 到達 |
+| Participant 採用側（`listParticipantEvidence`） | 到達 |
+| Recovery → `safeErrorText` | 到達 |
+| Frontdoor Result採用（`assertAggregateResultsCurrent`） | **未着手** |
+| Work Plane export | **未着手** |
+
+残りの単体テストを `supporting guard unit contracts (not entrance coverage)` と自ら区別してラベル付けしており、「書けないことを書けたことにしない」という依頼条件は守られていた。
+
+### 5.2 Claude Codeが引き継いだ
+
+Ownerの指示により、待たずにClaude Codeが完成させた。**したがって本Taskでは実装者とレビュー担当が同一であり、§3の運用規則は成立していない。** 記録として明示する。
+
+Claude Codeが行った修正は4点。
+
+| 箇所 | 内容 |
+| --- | --- |
+| `approveDispatch` の呼び出し | 5引数で呼んでいたが実シグネチャは4引数。packets引数は存在しない |
+| fixture が Dispatch していなかった | participant submitは `frontdoor.approval-bound` を要求する。これは承認ではなく**実Dispatch実行時**に記録されるため、`executeApprovedRun` を通すよう変更した |
+| マスク文字列 | `[REDACTED]` を期待していたが実装は `<redacted>` |
+| イベントファイル名 | `events.jsonl` を参照していたが実体は `thread-events.jsonl` |
+
+4件とも既存APIの事実誤認であり、設計判断ではない。Codexは orchestrator のソースを読んでいる最中に上限へ達しており、確認が完了していなかった。
+
+### 5.3 目的の性質を変異テストで実証した
+
+本Taskの目的は「**ガード呼び出しを1箇所削除したら必ずテストが落ちる**」ことだった。実際に削除して確認した。
+
+| 削除したガード | 結果 |
+| --- | --- |
+| `participantMcpServer` 生成側 | **5件失敗** |
+| `participantEvidence` 採用側 | **5件失敗** |
+| `resultEnvelope` の Envelope 検査 | **8件失敗** |
+| `relay` の `safeErrorText` マスク | **1件失敗** |
+| （復元後） | 26件全通過 |
+
+以前の在庫表テストは、これらを削除しても1件も落ちなかった。性質は満たされた。
+
+### 5.4 検証
+
+typecheck 3系統、`vitest run` **535 tests / 50 files**（実施前518、回帰なし）、`electron-vite build`、`git diff --check` すべてPass。
+
+### 5.5 残る課題
+
+- **未着手2入口**（Frontdoor Result採用、Work Plane export）。Codexの復帰後に差し戻す。
+- **本Taskの成果を誰も独立レビューしていない。** 実装者=レビュー担当となったため。
+- モデル指定を変更した。**実装は `gpt-5.6-luna`、レビューは `gpt-6-astra`。** Astraは消費が激しく、実装用途では上限に達する。
