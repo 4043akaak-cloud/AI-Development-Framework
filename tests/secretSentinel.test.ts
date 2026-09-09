@@ -94,9 +94,35 @@ describe('secretSentinel', () => {
     expect(narrowed).toEqual([])
   })
 
-  it('masks exactly as the inlined projection mask did', () => {
+  /**
+   * The inline mask only caught assignments, so a bare `sk-…` or `Bearer …` survived it. That was
+   * cosmetic while masking only fed the screen; `safeErrorText` now leans on it to keep credentials
+   * out of the Ledger, so the property that matters is that nothing credential-shaped survives.
+   */
+  it('leaves no credential value behind', () => {
+    // The shape can survive — `api_key=<redacted>` still looks like an assignment — but the value
+    // must not. These are the payloads the old assignment-only mask let through untouched.
+    const payloads = ['sk-abcdefghijklmnop', 'SK-abcdefghijklmnop', 'Bearer abcdefghijklmnop', 'ANTHROPIC_API_KEY', 'hunter2', 'letmein', 's3cr3t']
+    for (const value of credentialShaped) {
+      const masked = maskSecrets(value)
+      for (const payload of payloads) {
+        if (value.includes(payload)) expect(masked, `${value} → ${masked}`).not.toContain(payload)
+      }
+    }
+  })
+
+  it('redacts at least as much as the inlined projection mask did', () => {
     for (const value of [...credentialShaped, ...innocuous, 'a token: x and secret: y']) {
-      expect(maskSecrets(value), value).toBe(previousMask(value))
+      const before = previousMask(value)
+      const after = maskSecrets(value)
+      // Everything the old mask removed is still gone; the new one may remove more.
+      if (before !== value) expect(after, value).not.toBe(value)
+    }
+  })
+
+  it('still leaves ordinary text untouched', () => {
+    for (const value of innocuous) {
+      expect(maskSecrets(value), value).toBe(value)
     }
   })
 

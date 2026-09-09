@@ -50,6 +50,21 @@ function sortedPacketHashes(packetHashes: DispatchPacketHashes): Record<string, 
   return Object.fromEntries(Object.entries(packetHashes).sort(([left], [right]) => left.localeCompare(right)))
 }
 
+/** `verification` and `risks` were copied out verbatim while every neighbouring field was masked. */
+function maskVerification(value: unknown): unknown {
+  return Array.isArray(value)
+    ? value.map((entry) =>
+        entry && typeof entry === 'object'
+          ? Object.fromEntries(Object.entries(entry as Record<string, unknown>).map(([key, item]) => [key, typeof item === 'string' ? maskSecrets(item) : item]))
+          : entry
+      )
+    : value
+}
+
+function maskRisks(value: unknown): unknown {
+  return Array.isArray(value) ? value.map((entry) => (typeof entry === 'string' ? maskSecrets(entry) : entry)) : value
+}
+
 function boundedArtifactText(value: unknown, limit: number): string | undefined {
   return typeof value === 'string' ? maskSecrets(value.slice(0, limit)) : undefined
 }
@@ -508,6 +523,10 @@ export class FrontdoorOwnerGateService {
         const result = await readJson<Record<string, unknown>>(await safeRuntimePath(this.runtimeRoot, record.resultRef!))
         if (hashJson(result) !== record.resultHash) throw new Error(`Work Plane export Result hash mismatch: ${record.node.nodeId}`)
         if (result.taskId !== record.childTaskId || result.jobId !== record.childJobId || result.adapterId !== record.node.adapterId || result.role !== record.node.role || result.inputHash !== record.childInputHash || result.orchestrationRunId !== runId) throw new Error(`Work Plane export Result binding mismatch: ${record.node.nodeId}`)
+        // Export has its own read loop, so the re-validation added to Result Review did not reach
+        // it: a pre-guard Envelope with valid hashes and approvals could still be exported, and its
+        // verification and risks are copied out below without masking.
+        validateResultEnvelope(result as unknown as AdapterResultEnvelope, { taskId: record.childTaskId!, jobId: record.childJobId!, inputHash: record.childInputHash! })
         const jobRequest = await readJson<JobRequest>(await safeRuntimePath(this.runtimeRoot, `jobs/${record.childJobId}/request.json`))
         const jobSelection = jobRequest.task.adapterPlan.selections.length === 1 ? jobRequest.task.adapterPlan.selections[0] : undefined
         if (jobRequest.jobId !== record.childJobId || jobRequest.inputHash !== record.childInputHash || jobRequest.inputHash !== hashJson(jobRequest.task) || jobRequest.task.taskId !== record.childTaskId || jobRequest.task.objective !== record.node.objective || jobSelection?.adapterId !== record.node.adapterId || jobSelection.role !== record.node.role || (run.runKind === 'implementation' && hashJson(jobRequest.task.implementationBinding) !== hashJson(run.implementationBinding))) throw new Error(`Work Plane export Job binding mismatch: ${record.node.nodeId}`)
@@ -517,7 +536,7 @@ export class FrontdoorOwnerGateService {
         const evidence = await readJson<Record<string, unknown> & { turns?: Array<Record<string, unknown>> }>(await safeRuntimePath(this.runtimeRoot, `threads/${record.threadId}/evidence-links.json`))
         if (evidence.threadId !== record.threadId || evidence.taskId !== record.childTaskId || evidence.jobId !== record.childJobId || hashJson(evidence) !== record.evidenceHash || !evidence.turns?.some((turn) => turn.resultEnvelopeRef === record.resultRef && turn.resultEnvelopeHash === record.resultHash)) throw new Error(`Work Plane export Evidence binding mismatch: ${record.node.nodeId}`)
         const candidate = run.runKind === 'implementation' ? validateImplementationCandidate(result.artifact, record.node.scope.inScope) : undefined
-        return { nodeId: record.node.nodeId, taskId: record.childTaskId, jobId: record.childJobId, threadId: record.threadId, resultRef: record.resultRef, resultHash: record.resultHash, inputHash: record.childInputHash, adapterId: record.node.adapterId, role: record.node.role, result: { status: result.status, summary: boundedArtifactText(result.summary, 2_000), content: boundedArtifactText(result.content, 12_000), verification: result.verification, risks: result.risks }, ...(candidate ? { candidate } : {}) }
+        return { nodeId: record.node.nodeId, taskId: record.childTaskId, jobId: record.childJobId, threadId: record.threadId, resultRef: record.resultRef, resultHash: record.resultHash, inputHash: record.childInputHash, adapterId: record.node.adapterId, role: record.node.role, result: { status: result.status, summary: boundedArtifactText(result.summary, 2_000), content: boundedArtifactText(result.content, 12_000), verification: maskVerification(result.verification), risks: maskRisks(result.risks) }, ...(candidate ? { candidate } : {}) }
       }))
       const artifactId = `artifact-${hashJson([runId, targetHash]).slice(0, 20)}`
       const relativePath = `frontdoor-runs/${runId}/work-plane/${artifactId}.json`

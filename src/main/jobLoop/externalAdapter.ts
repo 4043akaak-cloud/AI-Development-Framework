@@ -1,3 +1,4 @@
+import { maskSecrets } from '../../shared/secretSentinel'
 import type { AdapterRole } from '../../shared/jobLoopTypes'
 import type { ExternalCallRecord, ExternalOutcomeStatus, ExternalPerformanceMetrics, ExternalPreflight, SyntheticPacket } from '../../shared/externalAdapterTypes'
 import type { AdapterRunState, RelayTurnPayload } from '../../shared/threadTypes'
@@ -73,7 +74,8 @@ export class ExternalConversationAdapter implements ConversationAdapter {
         status: 'failed',
         terminationReason: 'transport-threw',
         durationMs: finishedAt.getTime() - startedAt.getTime(),
-        errorText: String((error as Error)?.message ?? error).slice(0, 200)
+        // Persisted to external-calls.jsonl before any Result validation runs, so it is masked here.
+        errorText: maskSecrets(String((error as Error)?.message ?? error)).slice(0, 200)
       }, startedAt, finishedAt))
       throw error
     } finally {
@@ -94,7 +96,7 @@ export class ExternalConversationAdapter implements ConversationAdapter {
       risks: answered ? [] : ['外部Adapterから採用可能な回答を得られなかった'],
       envelopeStatus: outcome.status,
       terminationReason: outcome.terminationReason,
-      ...(outcome.errorText ? { errorRef: `external:${outcome.errorText}` } : {})
+      ...(outcome.errorText ? { errorRef: `external:${maskSecrets(outcome.errorText)}` } : {})
     }
 
     // A definitive failure, timeout, or cancellation is still an answer ADF must record as a Turn,
@@ -156,7 +158,7 @@ export class ExternalConversationAdapter implements ConversationAdapter {
       ...(outcome.metrics ? { metrics: outcome.metrics } : {}),
       startedAt: startedAt.toISOString(),
       finishedAt: finishedAt.toISOString(),
-      ...(outcome.errorText ? { errorText: outcome.errorText } : {})
+      ...(outcome.errorText ? { errorText: maskSecrets(outcome.errorText) } : {})
     }
   }
 }

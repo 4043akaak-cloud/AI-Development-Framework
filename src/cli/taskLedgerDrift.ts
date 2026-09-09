@@ -132,11 +132,14 @@ export async function readTaskDocuments(repoRoot: string, relativeDirectories: r
   const documents: TaskDocument[] = []
   for (const relative of relativeDirectories) {
     const directory = path.join(repoRoot, relative)
+    // A missing optional directory is fine; anything else means the scan is incomplete and must
+    // not be reported as agreement.
     let entries: string[]
     try {
       entries = await readdir(directory)
-    } catch {
-      continue
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
+      throw new Error(`cannot read ${relative}: ${(error as Error).message}`)
     }
     for (const entry of entries.filter((name) => name.endsWith('.md')).sort()) {
       documents.push({
@@ -149,11 +152,23 @@ export async function readTaskDocuments(repoRoot: string, relativeDirectories: r
   return documents
 }
 
+/**
+ * `run-<id>.staging-<pid>-<time>` directories are written mid-creation and left behind by an
+ * interrupted one. Counting them as Runs turns ordinary churn into "undocumented Run" findings.
+ */
+const RUN_DIRECTORY = /^run-[0-9a-f]+$/
+
+/**
+ * Throws rather than returning an empty inventory. Swallowing a permission error or a wrong root
+ * would report every documented Run as missing and every Ledger Run as undocumented — or, if both
+ * sides failed, report perfect agreement between two things it never read.
+ */
 export async function readLedgerRunIds(runtimeRoot: string): Promise<string[]> {
+  const directory = path.join(runtimeRoot, 'frontdoor-runs')
   try {
-    return (await readdir(path.join(runtimeRoot, 'frontdoor-runs'))).filter((entry) => entry.startsWith('run-')).sort()
-  } catch {
-    return []
+    return (await readdir(directory)).filter((entry) => RUN_DIRECTORY.test(entry)).sort()
+  } catch (error) {
+    throw new Error(`cannot read the Ledger at ${directory}: ${(error as Error).message}`)
   }
 }
 

@@ -32,8 +32,11 @@ export const SECRET_PATTERNS: readonly SecretPattern[] = [
   { name: 'credential-assignment', pattern: /(?:sk-|api[_-]?key|token|secret|password)\s*[:=]\s*[^\s,}]+/i }
 ]
 
-/** Kept character-for-character identical to the mask that was inlined in each projection. */
-const MASK_SOURCE = '(sk-|api[_-]?key|token|secret|password)\\s*[:=]\\s*[^\\s,}]+'
+/**
+ * The assignment form the projections used to redact inline. Kept as the first pass so everything
+ * that was masked before is still masked in the same shape.
+ */
+const ASSIGNMENT_SOURCE = '(sk-|api[_-]?key|token|secret|password)\\s*[:=]\\s*[^\\s,}]+'
 
 export class CredentialShapedTextError extends Error {
   readonly code = 'CREDENTIAL_SHAPED_TEXT'
@@ -75,10 +78,22 @@ export function containsSecret(value: string): boolean {
 }
 
 /**
- * Display-time redaction for Owner-facing text. This is a courtesy for reading, not a boundary:
- * anything that must not be stored is rejected by `containsSecret` before it is written.
- * A fresh regex per call keeps the global flag's `lastIndex` from leaking between callers.
+ * Redacts credential-shaped text.
+ *
+ * The inline version this replaced only matched assignments — `api_key=…`. A bare `sk-abcdef…` or
+ * `Bearer abcdef…` passed straight through it. That was tolerable while masking was cosmetic, but
+ * `safeErrorText` now relies on it as a *storage* boundary: recovery error text is written to the
+ * event Ledger and to an error file, and refusing it there is not an option, since dropping the
+ * record of a failure at the moment one occurs is worse. So the mask has to actually mask.
+ *
+ * Every pattern the detector rejects on is redacted here, not just the assignment form. The output
+ * is therefore no longer byte-identical to the old inline mask — it redacts strictly more.
  */
 export function maskSecrets(value: string): string {
-  return value.replace(new RegExp(MASK_SOURCE, 'gi'), '$1=<redacted>')
+  let masked = value.replace(new RegExp(ASSIGNMENT_SOURCE, 'gi'), '$1=<redacted>')
+  for (const entry of SECRET_PATTERNS) {
+    if (entry.name === 'credential-assignment' || entry.name === 'api-key-assignment') continue
+    masked = masked.replace(new RegExp(entry.pattern.source, `g${entry.pattern.flags.includes('i') ? 'i' : ''}`), '<redacted>')
+  }
+  return masked
 }

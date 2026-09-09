@@ -37,6 +37,10 @@ export function gateOf(state: OwnerGateState | undefined): OwnerGate | undefined
  * away from one.
  */
 function gateEnteredBy(event: FrontdoorLedgerEvent): OwnerGate | null | undefined {
+  // `owner-decision-recorded` is handled by the caller, which needs the accumulated decisions to
+  // know which gate the replay's `advanceOwnerGate` lands on. Returning a fixed gate here would be
+  // wrong for every decision after the first.
+  if (event.type === 'frontdoor.owner-decision-recorded') return undefined
   const payload = event.payload as Record<string, unknown>
   switch (event.type) {
     case 'frontdoor.owner-gate-opened':
@@ -74,18 +78,69 @@ function gateEnteredBy(event: FrontdoorLedgerEvent): OwnerGate | null | undefine
  * Run away. A gate can be entered more than once — Node Review sends a Run back to `dispatch` — and
  * the newest entry is the one the Owner is actually sitting in front of.
  */
+/**
+ * The gate the replay's `advanceOwnerGate` settles on for a given set of Owner decisions.
+ *
+ * Mirrors `eventLedger.ts:44-49`. The first version of this module missed it entirely: it copied
+ * the explicit event switch and not the decision-driven advance, so the ordinary
+ * `intake → completion-shape → decomposition → dispatch` progression — the path almost every Run
+ * takes — reported no wait at all. That is the same mistake as keying off `owner-gate-opened`,
+ * made one layer down.
+ */
+function gateAfterDecisions(decided: ReadonlySet<string>): OwnerGate | undefined {
+  if (!decided.has('intake')) return undefined
+  if (!decided.has('completion-shape')) return 'completion-shape'
+  if (!decided.has('decomposition')) return 'decomposition'
+  return 'dispatch'
+}
+
+const ADVANCING_DECISIONS: Readonly<Record<string, readonly string[]>> = {
+  intake: ['proceed'],
+  'completion-shape': ['approve'],
+  decomposition: ['approve-selected']
+}
+
+/**
+ * When the Run entered the gate it is sitting in now.
+ *
+ * Deliberately not `FrontdoorRunSummary.updatedAt`. On the 2-cycle Cycle 1 Run that field reads
+ * `02:59:38`, the time the Run was created, while its last Owner Decision was recorded at
+ * `04:17:23` — it does not track the gate at all. The Ledger is append-only and replayable, so
+ * walking it is the one measurement that cannot drift.
+ *
+ * Keeps the moment the Run *entered* the current gate. A repeated notification of the gate it is
+ * already sitting in does not restart the clock: `recoverRun` can re-emit `run-recovery-needed`
+ * every time the Owner re-checks an unresolved recovery, and letting that reset the timer would
+ * report a week-old wait as a fresh one — hiding exactly the case worth seeing.
+ */
 function gateOpenedAt(events: readonly FrontdoorLedgerEvent[], gate: OwnerGate): string | undefined {
   let opened: string | undefined
+  let current: OwnerGate | undefined
+  const decided = new Set<string>()
+
+  const enter = (next: OwnerGate | undefined | null, at: string): void => {
+    if (next === null || next === undefined) {
+      if (next === null) {
+        current = undefined
+        opened = undefined
+      }
+      return
+    }
+    if (next === current) return // same gate re-announced: the wait continues, it does not restart
+    current = next
+    opened = next === gate ? at : undefined
+  }
+
   for (const event of events) {
-    const entered = gateEnteredBy(event)
-    if (entered === undefined) continue
-    if (entered === null) {
-      opened = undefined
+    if (event.type === 'frontdoor.owner-decision-recorded') {
+      const envelope = event.payload.decision as { gate?: string; decision?: string } | undefined
+      if (envelope?.gate && ADVANCING_DECISIONS[envelope.gate]?.includes(String(envelope.decision))) decided.add(envelope.gate)
+      enter(gateAfterDecisions(decided), event.occurredAt)
       continue
     }
-    opened = entered === gate ? event.occurredAt : undefined
+    enter(gateEnteredBy(event), event.occurredAt)
   }
-  return opened
+  return current === gate ? opened : undefined
 }
 
 export interface OwnerGateWaitInput {

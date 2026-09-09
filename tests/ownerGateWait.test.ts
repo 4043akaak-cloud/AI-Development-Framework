@@ -67,23 +67,76 @@ describe('assessOwnerGateWait', () => {
   })
 
   /**
-   * A gate can reopen — Node Review sends a Run back to `dispatch`. Measuring from the first opening
-   * would report a wait the Owner already answered.
+   * A gate can genuinely reopen — the Run leaves it and comes back — and then the newest entry is
+   * the one the Owner is sitting in front of.
    */
-  it('measures from the newest opening of the current gate, not the first', () => {
+  it('measures from the newest entry when the Run left the gate and returned', () => {
     const report = assessOwnerGateWait({
       runId: 'run-1',
       ownerGate: 'awaiting-owner:dispatch',
       events: [
         gateOpened('dispatch', '2026-08-01T00:00:00.000Z', 0),
-        otherEvent('2026-09-07T00:00:00.000Z', 1),
-        gateOpened('dispatch', '2026-09-08T00:00:00.000Z', 2)
+        typed('frontdoor.approval-bound', '2026-09-07T00:00:00.000Z', 1),
+        typed('frontdoor.node-review-continued', '2026-09-08T00:00:00.000Z', 2)
       ],
       nextAction: '',
       now
     })
     expect(report?.openedAt).toBe('2026-09-08T00:00:00.000Z')
     expect(report?.waitingDays).toBe(1)
+  })
+
+  /**
+   * `recoverRun` can re-emit `run-recovery-needed` every time the Owner re-checks an unresolved
+   * recovery. Treating that as a fresh entry would report a week-old wait as one day — hiding the
+   * exact case this module exists to surface.
+   */
+  it('does not restart the clock when the same gate is announced again', () => {
+    const report = assessOwnerGateWait({
+      runId: 'run-1',
+      ownerGate: 'awaiting-owner:dispatch',
+      events: [
+        typed('frontdoor.run-recovery-needed', '2026-09-01T00:00:00.000Z', 0),
+        typed('frontdoor.run-recovery-needed', '2026-09-08T00:00:00.000Z', 1)
+      ],
+      nextAction: '',
+      now
+    })
+    expect(report?.openedAt).toBe('2026-09-01T00:00:00.000Z')
+    expect(report?.waitingDays).toBe(8)
+    expect(report?.severity).toBe('stale')
+  })
+
+  /**
+   * The ordinary path almost every Run takes. `advanceOwnerGate` moves the Run through
+   * intake → completion-shape → decomposition → dispatch from the decisions alone, emitting no
+   * gate-opened event, so the first version of this module reported no wait for any of them.
+   */
+  it('follows the gates the replay derives from Owner decisions', () => {
+    const decision = (gate: string, value: string, at: string, sequence: number): FrontdoorLedgerEvent =>
+      typed('frontdoor.owner-decision-recorded', at, sequence, { decision: { gate, decision: value } })
+
+    const afterIntake = assessOwnerGateWait({
+      runId: 'run-1',
+      ownerGate: 'awaiting-owner:completion-shape',
+      events: [decision('intake', 'proceed', '2026-09-05T00:00:00.000Z', 0)],
+      nextAction: '',
+      now
+    })
+    expect(afterIntake?.waitingDays).toBe(4)
+
+    const afterDecomposition = assessOwnerGateWait({
+      runId: 'run-1',
+      ownerGate: 'awaiting-owner:dispatch',
+      events: [
+        decision('intake', 'proceed', '2026-09-01T00:00:00.000Z', 0),
+        decision('completion-shape', 'approve', '2026-09-02T00:00:00.000Z', 1),
+        decision('decomposition', 'approve-selected', '2026-09-06T00:00:00.000Z', 2)
+      ],
+      nextAction: '',
+      now
+    })
+    expect(afterDecomposition?.waitingDays).toBe(3)
   })
 
   it('ignores openings of a different gate', () => {

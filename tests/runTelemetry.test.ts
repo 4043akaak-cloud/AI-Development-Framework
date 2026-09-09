@@ -16,7 +16,7 @@ const node = { nodeId: 'proposal', role: 'proposal', adapterId: 'ollama-local' }
 
 describe('buildNodeTelemetry', () => {
   it('reads Ollama field names as tokens', () => {
-    const telemetry = buildNodeTelemetry({ ...node, call: { metrics: ollamaMetrics, costTier: 'free', provider: 'ollama-local-http' } })
+    const telemetry = buildNodeTelemetry({ ...node, call: { metrics: ollamaMetrics, costTier: 'free', provider: 'ollama-local-http', durationMs: 0 } })
     expect(telemetry.promptTokens).toBe(164)
     expect(telemetry.completionTokens).toBe(77)
     expect(telemetry.totalTokens).toBe(241)
@@ -26,20 +26,40 @@ describe('buildNodeTelemetry', () => {
   it('reads OpenAI-compatible field names as the same thing', () => {
     const telemetry = buildNodeTelemetry({
       ...node,
-      call: { metrics: { promptTokens: 10, completionTokens: 5, totalTokens: 15 }, costTier: 'free', provider: 'openai-compatible' }
+      call: { metrics: { promptTokens: 10, completionTokens: 5, totalTokens: 15 }, costTier: 'free', provider: 'openai-compatible', durationMs: 0 }
     })
     expect(telemetry.totalTokens).toBe(15)
   })
 
   it("prefers a provider's own total over adding the parts", () => {
-    const telemetry = buildNodeTelemetry({ ...node, call: { metrics: { promptTokens: 10, completionTokens: 5, totalTokens: 99 }, costTier: 'free', provider: 'p' } })
+    const telemetry = buildNodeTelemetry({ ...node, call: { metrics: { promptTokens: 10, completionTokens: 5, totalTokens: 99 }, costTier: 'free', provider: 'p', durationMs: 0 } })
     expect(telemetry.totalTokens).toBe(99)
   })
 
   /** 18.9s of a 29.3s call. "The model is slow" and "the model was not loaded" are different problems. */
   it('separates model load time from the call', () => {
-    const telemetry = buildNodeTelemetry({ ...node, call: { metrics: ollamaMetrics, costTier: 'free', provider: 'ollama-local-http' } })
+    const telemetry = buildNodeTelemetry({ ...node, call: { metrics: ollamaMetrics, costTier: 'free', provider: 'ollama-local-http', durationMs: 29_347 } })
     expect(telemetry.modelLoadMs).toBe(18_968)
+  })
+
+  /**
+   * relay.ts hard-codes `durationMs: 0` into every Envelope it builds, so reading the Envelope alone
+   * reported the real 29-second Ollama call as instant. The measurement lives in the call record.
+   */
+  it('takes the real duration from the external call, not the Envelope’s hard-coded zero', () => {
+    const telemetry = buildNodeTelemetry({
+      ...node,
+      envelope: { durationMs: 0, status: 'success', terminationReason: 'completed' },
+      call: { metrics: ollamaMetrics, costTier: 'free', provider: 'ollama-local-http', durationMs: 29_347 }
+    })
+    expect(telemetry.durationMs).toBe(29_347)
+  })
+
+  /** A Node that failed before any Result existed used to be indistinguishable from one not yet run. */
+  it('counts a Node that failed before producing a Result', () => {
+    const telemetry = buildNodeTelemetry({ ...node, nodeState: 'failed' })
+    expect(telemetry.status).toBe('failed')
+    expect(summariseRunTelemetry([telemetry]).failedNodeCount).toBe(1)
   })
 
   /**
@@ -75,7 +95,7 @@ describe('summariseRunTelemetry', () => {
       role: 'proposal',
       adapterId: 'a',
       envelope: { durationMs, status, terminationReason: 'completed' },
-      ...(totalTokens === undefined ? {} : { call: { metrics: { totalTokens }, costTier: 'free', provider: 'p' } })
+      ...(totalTokens === undefined ? {} : { call: { metrics: { totalTokens }, costTier: 'free', provider: 'p', durationMs: 0 } })
     })
 
   it('sums only what was measured', () => {
@@ -105,8 +125,8 @@ describe('collectRunTelemetry', () => {
       envelope: async () => ({ durationMs: 5, status: 'success', terminationReason: 'completed' }),
       calls: async () =>
         [
-          { metrics: { totalTokens: 1 }, costTier: 'free', provider: 'first' },
-          { metrics: { totalTokens: 2 }, costTier: 'free', provider: 'second' }
+          { metrics: { totalTokens: 1 }, costTier: 'free', provider: 'first', durationMs: 0 },
+          { metrics: { totalTokens: 2 }, costTier: 'free', provider: 'second', durationMs: 0 }
         ] as never
     })
     expect(summary.nodes[0]?.provider).toBe('second')

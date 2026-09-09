@@ -54,18 +54,25 @@ export interface NodeTelemetryInput {
   /** Absent while the Node has not run. */
   envelope?: MeasuredResult
   /** Absent for local and Fake adapters, which make no external call. */
-  call?: Pick<ExternalCallRecord, 'metrics' | 'costTier' | 'provider'>
+  call?: Pick<ExternalCallRecord, 'metrics' | 'costTier' | 'provider' | 'durationMs'>
+  /** The Node's own state, which is set even when it failed before producing a Result. */
+  nodeState?: string
 }
 
 export function buildNodeTelemetry(input: NodeTelemetryInput): NodeTelemetry {
   const tokens = normaliseTokens(input.call?.metrics)
   const modelLoadMs = loadDurationMs(input.call?.metrics)
+  const measuredDurationMs = input.call?.durationMs ?? (input.envelope ? input.envelope.durationMs : undefined)
   return {
     nodeId: input.nodeId,
     role: input.role,
     adapterId: input.adapterId,
-    // Left undefined rather than defaulted to 0: an unmeasured Node must not read as an instant one.
-    ...(input.envelope ? { durationMs: input.envelope.durationMs, status: input.envelope.status } : {}),
+    // The Envelope's own durationMs is hard-coded to 0 by relay.ts when the Turn is built, so a
+    // 29-second call reported as instant. The external-call record is where the measurement is.
+    // Left undefined when neither has it: an unmeasured Node must not read as an instant one.
+    ...(measuredDurationMs !== undefined ? { durationMs: measuredDurationMs } : {}),
+    ...(input.envelope ? { status: input.envelope.status } : {}),
+    ...(input.nodeState && !input.envelope ? { status: input.nodeState } : {}),
     ...(input.envelope?.terminationReason ? { terminationReason: maskSecrets(input.envelope.terminationReason) } : {}),
     ...(input.call ? { provider: input.call.provider, costTier: input.call.costTier } : {}),
     ...(modelLoadMs !== undefined ? { modelLoadMs } : {}),
@@ -85,6 +92,8 @@ export function summariseRunTelemetry(nodes: readonly NodeTelemetry[]): RunTelem
     // Summed only across Nodes that reported tokens, so a partial total is never read as a whole one.
     totalTokens: withTokens.reduce((total, node) => total + (node.totalTokens ?? 0), 0),
     tokenReportingNodeCount: withTokens.length,
+    // Counts a Node that failed before any Envelope existed — a readiness or transport failure
+    // leaves `node.state === 'failed'` and no Result, which used to read as simply not run.
     failedNodeCount: nodes.filter((node) => node.status !== undefined && node.status !== 'success').length
   }
 }
@@ -97,7 +106,7 @@ export function summariseRunTelemetry(nodes: readonly NodeTelemetry[]): RunTelem
  * A missing file is not an error — Fake and local adapters never write one.
  */
 export async function collectRunTelemetry(
-  nodes: readonly { nodeId: string; role: string; adapterId: string; threadId?: string; resultRef?: string }[],
+  nodes: readonly { nodeId: string; role: string; adapterId: string; threadId?: string; resultRef?: string; nodeState?: string }[],
   read: { envelope: (resultRef: string) => Promise<MeasuredResult | undefined>; calls: (threadId: string) => Promise<ExternalCallRecord[]> }
 ): Promise<RunTelemetry> {
   const collected: NodeTelemetry[] = []
@@ -106,7 +115,16 @@ export async function collectRunTelemetry(
     // The newest call for the thread: a retried Node has more than one, and the last is the one
     // whose Result was kept.
     const call = node.threadId ? (await read.calls(node.threadId)).at(-1) : undefined
-    collected.push(buildNodeTelemetry({ nodeId: node.nodeId, role: node.role, adapterId: node.adapterId, envelope, call }))
+    collected.push(
+      buildNodeTelemetry({
+        nodeId: node.nodeId,
+        role: node.role,
+        adapterId: node.adapterId,
+        ...(node.nodeState ? { nodeState: node.nodeState } : {}),
+        envelope,
+        call
+      })
+    )
   }
   return summariseRunTelemetry(collected)
 }

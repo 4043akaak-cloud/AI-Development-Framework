@@ -444,6 +444,7 @@ export class FrontdoorOrchestrator {
         nodeId: record.node.nodeId,
         role: record.node.role,
         adapterId: record.node.adapterId,
+        nodeState: record.state,
         ...(record.threadId ? { threadId: record.threadId } : {}),
         ...(record.resultRef ? { resultRef: record.resultRef } : {})
       })),
