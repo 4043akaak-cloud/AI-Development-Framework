@@ -191,3 +191,10 @@ h1, h2, h3, p { margin-top: 0; } h1 { margin-bottom: 8px; font-size: 32px; } h2 
   .mvp-collaboration-grid { grid-template-columns:1fr; }
   .mvp-collaboration-detail .detail-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
 }
+
+/* Owner gate wait. Colour carries the same three bands as the projection, so a stale Run reads as
+   stale at a glance rather than after arithmetic. */
+.gate-wait { font-variant-numeric: tabular-nums; }
+.gate-wait-fresh { color:#9df0dd; }
+.gate-wait-aging { color:#e8b86d; }
+.gate-wait-stale { color:#ffc2c7; font-weight:600; }

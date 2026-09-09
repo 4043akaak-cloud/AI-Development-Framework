@@ -32,6 +32,28 @@ function listValue(value: string): string[] {
   return value.split(',').map((item) => item.trim()).filter(Boolean)
 }
 
+/**
+ * A Run that has been waiting nineteen days should not read the same as one waiting an hour. The
+ * Board counted waiting Runs long before this and still let a nineteen-day wait go unnoticed,
+ * because a count says something is waiting, never for how long.
+ */
+function formatWait(days: number): string {
+  return days === 0 ? '本日' : `${days}日`
+}
+
+/**
+ * Says what was not measured rather than quietly averaging it away. Every Node in the current
+ * runtime is a Fake adapter reporting 0ms, and "0ms across 2 Nodes" is a true statement that would
+ * become a lie the moment an unmeasured Node were folded in as zero.
+ */
+function formatTelemetry(telemetry: NonNullable<FrontdoorInspection['telemetry']>): string {
+  const parts = [`${telemetry.totalDurationMs}ms`]
+  if (telemetry.tokenReportingNodeCount > 0) parts.push(`${telemetry.totalTokens}tok / ${telemetry.tokenReportingNodeCount}Node`)
+  else parts.push('Token未記録')
+  if (telemetry.failedNodeCount > 0) parts.push(`失敗${telemetry.failedNodeCount}`)
+  return parts.join('  ')
+}
+
 const activityKindLabels: Record<FrontdoorActivity['kind'], string> = {
   system: 'ADF',
   owner: 'Owner Gate',
@@ -523,6 +545,20 @@ export default function FrontdoorPanel({ minimal = false }: { minimal?: boolean 
                 <div><dt>次のAction</dt><dd>{inspection.nextAction}</dd></div>
                 <div><dt>Evidence</dt><dd>{inspection.evidenceRefs.length}件</dd></div>
                 <div><dt>Event</dt><dd>{inspection.eventCount}件</dd></div>
+                {inspection.ownerGateWait && (
+                  <div>
+                    <dt>判断待ち</dt>
+                    <dd className={`gate-wait gate-wait-${inspection.ownerGateWait.severity}`}>{formatWait(inspection.ownerGateWait.waitingDays)}</dd>
+                    <span>{gateLabels[inspection.ownerGateWait.gate]}</span>
+                  </div>
+                )}
+                {inspection.telemetry && (
+                  <div>
+                    <dt>実行コスト</dt>
+                    <dd>{formatTelemetry(inspection.telemetry)}</dd>
+                    <span>{inspection.telemetry.measuredNodeCount}/{inspection.telemetry.nodeCount} Node計測済</span>
+                  </div>
+                )}
               </dl>
               {inspection.workPlaneArtifact && (
                 <div className="frontdoor-artifact-access">
