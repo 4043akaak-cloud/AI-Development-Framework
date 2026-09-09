@@ -4,10 +4,18 @@ import type { AdapterCostTier, AdapterRole } from './jobLoopTypes'
  * The only payload an external Adapter may ever receive. It is synthetic on purpose: a fixed
  * exercise for the transport, never the real project, repo, Vault, or conversation history.
  */
+/** `policy-probe` measures whether an Adapter honours its contract; see `policyProbe.ts`. */
+export type SyntheticPacketKind = 'synthetic-connectivity-probe' | 'synthetic-policy-probe'
+
 export interface SyntheticPacket {
   packetId: string
   packetHash: string
-  kind: 'synthetic-connectivity-probe'
+  /**
+   * Widened from a single literal to a closed union. `assertPacketBoundary` admits only the kinds
+   * listed in `ALLOWED_PACKET_KINDS`, never an arbitrary string — the egress check is the last thing
+   * standing between ADF and a provider, and loosening it to add a probe would defeat the probe.
+   */
+  kind: SyntheticPacketKind
   taskId: string
   threadId: string
   jobId: string

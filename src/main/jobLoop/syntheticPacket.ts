@@ -1,5 +1,5 @@
 import type { AdapterRole } from '../../shared/jobLoopTypes'
-import type { SyntheticPacket } from '../../shared/externalAdapterTypes'
+import type { SyntheticPacket, SyntheticPacketKind } from '../../shared/externalAdapterTypes'
 import type { AdapterDependencyResult, ConversationThread } from '../../shared/threadTypes'
 import { hashJson } from './hash'
 
@@ -58,6 +58,12 @@ export function buildSyntheticPacket(thread: ConversationThread, role: AdapterRo
   return { ...body, packetId: `synthetic-${packetHash.slice(0, 16)}`, packetHash, createdAt }
 }
 
+/**
+ * The kinds allowed out. An allowlist rather than a comparison: a new probe kind has to be named
+ * here deliberately, and an unrecognised one is refused by default.
+ */
+const ALLOWED_PACKET_KINDS: readonly SyntheticPacketKind[] = ['synthetic-connectivity-probe', 'synthetic-policy-probe']
+
 /** Anything that could smuggle project content, a filesystem path, or a credential out of ADF. */
 const forbiddenPatterns: ReadonlyArray<{ name: string; pattern: RegExp }> = [
   { name: 'absolute-path', pattern: /(^|[^A-Za-z0-9])\/(Users|home|var|etc|private)\// },
@@ -75,7 +81,7 @@ const forbiddenPatterns: ReadonlyArray<{ name: string; pattern: RegExp }> = [
 export function assertPacketBoundary(packet: SyntheticPacket): void {
   const serialised = JSON.stringify(packet)
   const details = forbiddenPatterns.filter((rule) => rule.pattern.test(serialised)).map((rule) => `packet contains ${rule.name}`)
-  if (packet.kind !== 'synthetic-connectivity-probe') details.push('packet is not a synthetic connectivity probe')
+  if (!ALLOWED_PACKET_KINDS.includes(packet.kind)) details.push(`packet kind is not allowed to leave ADF: ${String(packet.kind)}`)
   if (packet.packetHash !== hashJson({ kind: packet.kind, taskId: packet.taskId, threadId: packet.threadId, jobId: packet.jobId, role: packet.role, sequence: packet.sequence, attempt: packet.attempt, scopeHash: packet.scopeHash, contextHash: packet.contextHash, instruction: packet.instruction, resultFormat: packet.resultFormat, stopConditions: packet.stopConditions, ...(packet.dependencyContext?.length ? { dependencyContext: packet.dependencyContext } : {}) })) {
     details.push('packet hash does not match its content')
   }
