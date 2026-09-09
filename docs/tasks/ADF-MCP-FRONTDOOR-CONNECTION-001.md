@@ -77,7 +77,7 @@ Codex window AI
 - 実際の窓口AIから`prepare`を呼ぶ確認は、Ownerが会話中に明示操作する読み取り・準備操作として別確認する。
 - StatusはProject Ownerの最終確認まで`Verifying`とする。
 
-## ADF Execution Summary
+## ADF Execution Record
 
 ```json
 {

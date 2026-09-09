@@ -161,7 +161,7 @@ Plan案生成は既存Owner Gateを短絡しない。Plan案生成だけでRunti
 
 `Done`。決定的Fake Planner、共通Service、Electron Plan案表示、契約テストの実装、自動検証、最新Electron Main／RendererでのPlanner案生成確認、最終Diff確認、commit／push、PR #4の`main`マージまで完了した。外部送信、認証、APIキー、Ollama実行、正本自動書込みは行っていない。
 
-## ADF Execution Summary
+## ADF Execution Record
 
 ```json
 {

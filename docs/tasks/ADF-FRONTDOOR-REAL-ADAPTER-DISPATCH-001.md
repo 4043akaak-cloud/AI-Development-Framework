@@ -132,7 +132,7 @@
 
 `Done`。FrontdoorのOwner Gateを通した実Ollama送信、Result／Evidence／Job／Thread／Frontdoor Event Ledger／Aggregateの整合確認、実行後Replay確認、全自動検証が完了。Run自体はOwnerのResult Review待ちとして保持している。
 
-## ADF Execution Summary
+## ADF Execution Record
 
 ```json
 {

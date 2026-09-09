@@ -93,7 +93,7 @@ Owner UI／CLI／test harness
 - 本TaskのE2Eは、窓口AIアプリへの設定登録ではなく、ADF MCP ClientとMCP Serverの実プロセス接続を対象とする。
 - 窓口AIの実MCP設定登録、実Ollama／実AIの送信、複数AIの実運用、Work Plane統合は別Task・別承認とする。
 
-## ADF Execution Summary
+## ADF Execution Record
 
 ```json
 {

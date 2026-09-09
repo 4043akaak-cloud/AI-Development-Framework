@@ -191,7 +191,7 @@ OrchestrationRun
 | — | 停止ルール適用 | 自動テストは284/284 Passだが、独立レビューで同一系統のP1が複数回継続 | 無限強化を止め、残存リスクをOwner確認へ移行 | 必要 |
 | — | 追加承認後の独立レビュー | Event Replayとmanifestを追加したが、完全なEvent-Sourcing／改ざん耐性基盤までは未達 | 同一Taskの無制限拡張を止め、後続Task候補として分離 | Project Owner判断が必要 |
 
-## ADF Execution Summary
+## ADF Execution Record
 
 ```json
 {

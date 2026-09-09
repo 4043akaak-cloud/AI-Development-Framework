@@ -125,7 +125,7 @@ Required Obsidian Context:
 - **既存Scope外の残存リスク**：`approvedBy`は現在、空でない文字列として検証される。Owner identityの認証・認可を追加するには既存Owner Gate契約を変更する別Taskが必要であり、本Taskでは変更しない。
 - **既存設計上の境界**：Frontdoor Orchestratorがdependency ResultのRun／Node／Job／input／hashを検証する。Relayの汎用`dependencyResults`引数を外部IPCへ公開する変更は行っていない。
 
-## ADF Execution Summary
+## ADF Execution Record
 
 ```json
 {

@@ -116,7 +116,7 @@
 
 `Done`。実装・注入Transport検証・全自動検証・実OllamaのProposal→Critic 2 Node実行・送信後のRuntime再読込／Replay／Evidence検証・Owner Result Review・Task Completionを完了した。Run `run-0cf084773023ec7ae222`は`complete`である。自動Retry・自動Completionは行っていない。
 
-## ADF Execution Summary
+## ADF Execution Record
 
 ```json
 {

@@ -131,7 +131,7 @@ Status: Verifying
 
 設計承認済み。実装・自動検証は完了。独立レビュー、最終Diff確認、検証結果、残存リスクのOwner承認まではDoneにしない。commit・pushは別指示まで行わない。
 
-## ADF Execution Summary
+## ADF Execution Record
 
 ```json
 {

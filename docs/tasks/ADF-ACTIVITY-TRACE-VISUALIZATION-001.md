@@ -88,7 +88,7 @@ Existing Frontdoor Event Ledger
 - 本TaskのStatusを`Verifying`から`Done`へ更新した。
 - Codex内部Skill／サブエージェントの自動観測と、実Token／費用計測は後続Taskで扱う。
 
-## ADF Execution Summary
+## ADF Execution Record
 
 ```json
 {

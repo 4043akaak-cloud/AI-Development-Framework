@@ -88,7 +88,7 @@ Dispatch approval
 - Node Reviewを含む実Ollamaの再送信は本Taskでは行わない。既存の実Ollama証跡は変更しない。
 - token budget／実コスト測定は別Taskで扱う。
 
-## ADF Execution Summary
+## ADF Execution Record
 
 ```json
 {
