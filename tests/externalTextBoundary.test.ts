@@ -1,9 +1,9 @@
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { ApprovedTaskPacket } from '../src/shared/jobLoopTypes'
-import type { DecompositionNode, FrontdoorRequestInput, OrchestrationRun } from '../src/shared/frontdoorTypes'
+import type { AggregateResult, DecompositionNode, FrontdoorLedgerEvent, FrontdoorRequestInput, OrchestrationRun } from '../src/shared/frontdoorTypes'
 import type { RelayTurnPayload } from '../src/shared/threadTypes'
 import type { ParticipantSubmission } from '../src/shared/participantTypes'
 import { ParticipantMcpServer } from '../src/cli/participantMcpServer'
@@ -15,7 +15,9 @@ import { hashJson } from '../src/main/jobLoop/hash'
 import { FrontdoorOrchestrator } from '../src/main/frontdoor/orchestrator'
 import { participantAssignmentId } from '../src/main/frontdoor/participantRegistry'
 import { listParticipantEvidence } from '../src/main/frontdoor/participantEvidence'
-import { nodeTargetHash } from '../src/main/frontdoor/ownerGates'
+import { buildDecisionEnvelope, nodeTargetHash, resultReviewTargetHash } from '../src/main/frontdoor/ownerGates'
+import { recordRunEvent, writeRun } from '../src/main/frontdoor/ledger'
+import { rebuildFrontdoorEventChain } from './support/frontdoorLedgerSurgery'
 import { CredentialShapedTextError, assertNoCredentialShapedText } from '../src/shared/secretSentinel'
 import { ResultEnvelopeRejectedError, type AdapterResultEnvelope } from '../src/main/jobLoop/resultEnvelope'
 import { validateImplementationCandidate } from '../src/main/frontdoor/candidateArtifact'
@@ -43,6 +45,94 @@ async function snapshot(root: string): Promise<Record<string, string>> {
   }
   await walk(root)
   return files
+}
+
+/**
+ * Deliberately bypasses the production write path to recreate an Envelope saved before the
+ * Result guard existed. This is fixture surgery only; the entrance coverage below still calls
+ * the real Owner Gate methods. Every persisted binding is rewritten so the test proves that
+ * matching hashes and a valid Frontdoor Ledger chain do not make stale text adoptable/exportable.
+ */
+async function rewritePersistedEnvelope(
+  fixture: Awaited<ReturnType<typeof createFixture>>,
+  transform: (envelope: AdapterResultEnvelope) => AdapterResultEnvelope
+) {
+  const { runtimeRoot, run } = fixture
+  const runPath = path.join(runtimeRoot, 'frontdoor-runs', run.runId, 'run.json')
+  const persistedRun = await readJson<OrchestrationRun>(runPath)
+  const record = persistedRun.nodes[0]
+  if (!record.resultRef || !record.threadId || !record.resultHash || !record.evidenceHash || !record.childInputHash) throw new Error('fixture Result bindings are incomplete')
+
+  const resultPath = path.join(runtimeRoot, record.resultRef)
+  const result = transform(await readJson<AdapterResultEnvelope>(resultPath))
+  const resultHash = hashJson(result)
+  await writeJsonAtomic(resultPath, result)
+
+  const threadPath = path.join(runtimeRoot, 'threads', record.threadId, 'thread.json')
+  const thread = await readJson<{ turns: Array<Record<string, unknown>> }>(threadPath)
+  const updatedTurns = thread.turns.map((turn) => turn.resultEnvelopeRef === record.resultRef ? { ...turn, resultEnvelopeHash: resultHash } : turn)
+  const updatedTurn = updatedTurns.find((turn) => turn.resultEnvelopeRef === record.resultRef)
+  if (!updatedTurn) throw new Error('fixture Thread turn binding is missing')
+  const updatedThread = { ...thread, turns: updatedTurns }
+  await writeJsonAtomic(threadPath, updatedThread)
+
+  const evidencePath = path.join(runtimeRoot, 'threads', record.threadId, 'evidence-links.json')
+  const evidence = await readJson<{ turns: Array<Record<string, unknown>> }>(evidencePath)
+  const updatedEvidence = { ...evidence, turns: evidence.turns.map((turn) => turn.resultEnvelopeRef === record.resultRef ? { ...turn, resultEnvelopeHash: resultHash } : turn) }
+  const evidenceHash = hashJson(updatedEvidence)
+  await writeJsonAtomic(evidencePath, updatedEvidence)
+
+  const updatedRecord = { ...record, resultHash, evidenceHash }
+  const updatedRun = { ...persistedRun, nodes: [updatedRecord] }
+  await writeRun(runtimeRoot, updatedRun)
+
+  const aggregatePath = path.join(runtimeRoot, persistedRun.aggregateResultRef!)
+  const aggregate = await readJson<AggregateResult>(aggregatePath)
+  const updatedAggregate = { ...aggregate, childResults: aggregate.childResults.map((child) => child.nodeId === record.node.nodeId ? { ...child, resultHash } : child) }
+  await writeJsonAtomic(aggregatePath, updatedAggregate)
+
+  const frontdoorEventsPath = path.join(runtimeRoot, 'frontdoor-runs', run.runId, 'events.jsonl')
+  const frontdoorEvents = (await readFile(frontdoorEventsPath, 'utf8')).split('\n').filter(Boolean).map((line) => JSON.parse(line) as FrontdoorLedgerEvent)
+  const reboundEvents = frontdoorEvents.map((event) => {
+    if (event.type === 'frontdoor.node-completed' && Array.isArray(event.payload.nodeRecords)) {
+      return {
+        ...event,
+        payload: {
+          ...event.payload,
+          nodeRecords: event.payload.nodeRecords.map((candidate) => {
+            if (!candidate || typeof candidate !== 'object' || !('node' in candidate) || typeof candidate.node !== 'object' || !candidate.node || !('nodeId' in candidate.node) || candidate.node.nodeId !== record.node.nodeId) return candidate
+            return { ...candidate, resultHash, evidenceHash }
+          })
+        }
+      }
+    }
+    if (event.type === 'frontdoor.completion-proposed') return { ...event, payload: { ...event.payload, aggregateHash: hashJson(updatedAggregate) } }
+    return event
+  })
+  await writeFile(frontdoorEventsPath, `${rebuildFrontdoorEventChain(reboundEvents).map((event) => JSON.stringify(event)).join('\n')}\n`, 'utf8')
+
+  const threadEventsPath = path.join(runtimeRoot, 'threads', record.threadId, 'thread-events.jsonl')
+  const threadEvents = (await readFile(threadEventsPath, 'utf8')).split('\n').filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>)
+  const reboundThreadEvents = threadEvents.map((event) => event.type === 'relay.received' && event.turnId === updatedTurn.turnId
+    ? { ...event, turnHash: hashJson(updatedTurn), resultHash }
+    : event)
+  await writeFile(threadEventsPath, `${reboundThreadEvents.map((event) => JSON.stringify(event)).join('\n')}\n`, 'utf8')
+
+  return { ...fixture, run: updatedRun, result, resultHash, aggregate: updatedAggregate }
+}
+
+/**
+ * The export gate requires an accepted Result Review before its own Result read loop runs. Seed
+ * that prerequisite directly only for the legacy-envelope fixture; this is another explicit test
+ * setup bypass, not the review entrance under test. The actual export method must still reject.
+ */
+async function seedAcceptedResultReview(fixture: Awaited<ReturnType<typeof rewritePersistedEnvelope>>): Promise<void> {
+  const { runtimeRoot, run, aggregate } = fixture
+  const targetHash = resultReviewTargetHash(run.runId, run.aggregateResultRef!, aggregate)
+  const decision = buildDecisionEnvelope(run, 'result-review', 'accept', targetHash, 'Project Owner', '2026-09-09T00:00:00.000Z', { expiresAt: '2099-12-31T23:59:59.000Z' })
+  await recordRunEvent(runtimeRoot, run.runId, 'frontdoor.owner-decision-recorded', { decision })
+  await recordRunEvent(runtimeRoot, run.runId, 'frontdoor.result-reviewed', { decision, aggregateRef: run.aggregateResultRef, aggregateHash: hashJson(aggregate) })
+  await writeRun(runtimeRoot, { ...run, ownerGate: 'awaiting-owner:completion' })
 }
 
 const requestInput: FrontdoorRequestInput = {
@@ -238,6 +328,50 @@ describe('external text boundaries — real entry points', () => {
       expect(files[`threads/${thread.threadId}/thread-events.jsonl`]).toContain('probe failed: <redacted>')
       expect(files[`threads/${thread.threadId}/thread-events.jsonl`]).toContain('recovery.failed-recorded')
       expect(JSON.stringify(files)).not.toContain(CREDENTIAL)
+    })
+  })
+
+  describe('Frontdoor Result review/export → Result Envelope', () => {
+    it('rejects a pre-guard Result during reviewResult without adding an Owner Decision or artifact', async () => {
+      const fixture = await rewritePersistedEnvelope(await createFixture(), (envelope) => ({ ...envelope, risks: [CREDENTIAL] }))
+      const before = await snapshot(fixture.runtimeRoot)
+
+      await expect(fixture.orchestrator.reviewResult(fixture.run.runId, 'Project Owner', 'accept')).rejects.toBeInstanceOf(ResultEnvelopeRejectedError)
+
+      expect(await snapshot(fixture.runtimeRoot)).toEqual(before)
+      await expect(readdir(path.join(fixture.runtimeRoot, 'frontdoor-runs', fixture.run.runId, 'work-plane'))).rejects.toMatchObject({ code: 'ENOENT' })
+    })
+
+    it('rejects a pre-guard Result during exportWorkPlaneArtifact without creating an artifact', async () => {
+      const fixture = await rewritePersistedEnvelope(await createFixture(), (envelope) => ({ ...envelope, risks: [CREDENTIAL] }))
+      await seedAcceptedResultReview(fixture)
+      const before = await snapshot(fixture.runtimeRoot)
+
+      await expect(fixture.orchestrator.exportWorkPlaneArtifact(fixture.run.runId, 'Project Owner')).rejects.toBeInstanceOf(ResultEnvelopeRejectedError)
+
+      expect(await snapshot(fixture.runtimeRoot)).toEqual(before)
+      await expect(readdir(path.join(fixture.runtimeRoot, 'frontdoor-runs', fixture.run.runId, 'work-plane'))).rejects.toMatchObject({ code: 'ENOENT' })
+    })
+
+    it('exports an accepted Result through the real path and masks an unscanned verification property', async () => {
+      const fixture = await rewritePersistedEnvelope(await createFixture(), (envelope) => ({
+        ...envelope,
+        // This extra property is intentionally outside validateResultEnvelope's name/reason scan.
+        verification: envelope.verification.map((entry, index) => index === 0 ? { ...entry, unscannedMetadata: CREDENTIAL } : entry),
+        risks: ['safe fixture risk']
+      }))
+
+      await fixture.orchestrator.reviewResult(fixture.run.runId, 'Project Owner', 'accept')
+      const manifest = await fixture.orchestrator.exportWorkPlaneArtifact(fixture.run.runId, 'Project Owner')
+      const stored = await readJson<{ content: { nodes: Array<{ result: { verification: Array<Record<string, unknown>>; risks: string[] } }> } }>(path.join(fixture.runtimeRoot, manifest.relativePath))
+      const exportedVerification = stored.content.nodes[0].result.verification[0]
+
+      expect(exportedVerification).toMatchObject({ name: 'scope-boundary', status: 'pass', unscannedMetadata: '<redacted>' })
+      // validateResultEnvelope scans every risk entry, so credential-shaped risks cannot reach this
+      // normal export branch. maskRisks is therefore only observed here copying a safe risk; this
+      // reachability limit is recorded as a fact, not changed by this test.
+      expect(stored.content.nodes[0].result.risks).toEqual(['safe fixture risk'])
+      expect(JSON.stringify(stored)).not.toContain(CREDENTIAL)
     })
   })
 })
