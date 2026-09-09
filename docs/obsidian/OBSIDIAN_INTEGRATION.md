@@ -11,7 +11,7 @@
 
 ## Task開始時
 
-1. GitHubのTaskで、Required Obsidian Contextを列挙する。
+1. GitHubのTaskで、Required Obsidian Contextを列挙する。種別の区別は[Contextの記憶種別](../workflow/CONTEXT_MEMORY_VOCABULARY.md)に従う。Obsidianは長期・semantic、Event Ledgerは長期・episodicであり、後者は`Required Episodic Context`として別に挙げる。
 2. 各ノートから今回採用する制約・学びをTaskへ短く記録する。
 3. AIへはVault全体を渡さず、Taskに指定されたノートだけを渡す。
 4. Contextが不足する場合は、推測で実装せず`Context Read`または`Blocked`で止まる。

@@ -24,6 +24,12 @@ Required Obsidian Context:
   - 最終確認日:
   - 今回採用する制約:
 
+Required Episodic Context:
+- 過去Run / Thread / Owner Decision ID:
+  - 何が起きたか:
+  - 今回効く制約:
+- 該当なしの場合は「探したが無し」と明記する（空欄で済ませない）
+
 GitHub Context:
 - 関連Goal / MVP / Roadmap / Current State:
 - 関連Issue / PR / ADR:
