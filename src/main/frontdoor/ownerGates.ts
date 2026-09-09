@@ -169,11 +169,33 @@ function assertAggregateBelongsToRun(runId: string, aggregate: AggregateResult):
   if (aggregate.openQuestions.some((question) => question.runId !== runId)) throw new Error('Aggregate Question belongs to another Run')
 }
 
-async function assertAggregateResultsCurrent(runtimeRoot: string, runId: string, run: OrchestrationRun, aggregate: AggregateResult): Promise<void> {
+/**
+ * Aggregates written before `resultHash` was added to `childResults` (the field landed in eba10bb,
+ * 2026-08-25, with no migration) carry only `nodeId`, `status` and `resultRef`. Comparing an absent
+ * hash against the Run's makes every earlier Run permanently unreviewable, which is a schema gap,
+ * not staleness.
+ */
+function isLegacyChildResult(child: AggregateResult['childResults'][number]): boolean {
+  return child.resultHash === undefined
+}
+
+/**
+ * Returns the nodeIds that were admitted through the legacy path, so the caller can record them on
+ * the Owner Decision. A compatibility route that leaves no trace is indistinguishable from a check
+ * that never ran.
+ */
+async function assertAggregateResultsCurrent(runtimeRoot: string, runId: string, run: OrchestrationRun, aggregate: AggregateResult): Promise<string[]> {
+  const legacyNodes: string[] = []
   for (const child of aggregate.childResults) {
     const record = run.nodes.find((candidate) => candidate.node.nodeId === child.nodeId)
     if (!record || !record.resultRef || !record.resultHash) throw new Error(`Result Review requires a bound Result: ${child.nodeId}`)
-    if (record.resultRef !== child.resultRef || record.resultHash !== child.resultHash) throw new Error(`Result Review Result binding is stale: ${child.nodeId}`)
+    // `resultRef` is present in every schema, so the binding itself stays enforced for legacy
+    // aggregates; only the aggregate-side hash comparison is skipped. The Result is still read and
+    // hashed against the Run's own `resultHash` below, so nothing goes unverified — the verification
+    // simply comes from the Run rather than from the aggregate's copy.
+    if (record.resultRef !== child.resultRef) throw new Error(`Result Review Result binding is stale: ${child.nodeId}`)
+    if (isLegacyChildResult(child)) legacyNodes.push(child.nodeId)
+    else if (record.resultHash !== child.resultHash) throw new Error(`Result Review Result binding is stale: ${child.nodeId}`)
     const result = await readJson<Record<string, unknown>>(await safeRuntimePath(runtimeRoot, record.resultRef))
     if (hashJson(result) !== record.resultHash) throw new Error(`Result Review Result hash mismatch: ${child.nodeId}`)
     if (result.orchestrationRunId !== runId || result.taskId !== record.childTaskId || result.jobId !== record.childJobId || result.inputHash !== record.childInputHash) {
@@ -184,6 +206,7 @@ async function assertAggregateResultsCurrent(runtimeRoot: string, runId: string,
     // skipped it, is still adoptable without this. Re-validating here closes adoption and export.
     validateResultEnvelope(result as unknown as AdapterResultEnvelope, { taskId: record.childTaskId!, jobId: record.childJobId!, inputHash: record.childInputHash! })
   }
+  return legacyNodes
 }
 
 function hasDecision(events: Awaited<ReturnType<typeof readRunEvents>>, gate: OwnerGate, decisions: readonly OwnerDecision[], targetHash: string): boolean {
@@ -419,10 +442,13 @@ export class FrontdoorOwnerGateService {
         validateImplementationCandidate(result.artifact, record.node.scope.inScope)
       }
     }
-    await assertAggregateResultsCurrent(this.runtimeRoot, runId, run, aggregate)
+    const legacyNodes = await assertAggregateResultsCurrent(this.runtimeRoot, runId, run, aggregate)
     const targetHash = resultReviewTargetHash(runId, run.aggregateResultRef, aggregate)
     const decidedAt = this.clock().toISOString()
-    const envelope = buildDecisionEnvelope(run, 'result-review', decision, targetHash, approvedBy, decidedAt, { note, expiresAt: new Date(this.clock().getTime() + 60 * 60 * 1000).toISOString() })
+    // The Owner is told which nodes were admitted on the Run's hash rather than the aggregate's, so
+    // the compatibility route is visible in the Ledger instead of being silently equivalent.
+    const decidedNote = legacyNodes.length ? [note, `legacy aggregate schema (no childResults.resultHash): ${legacyNodes.join(', ')}`].filter(Boolean).join(' | ') : note
+    const envelope = buildDecisionEnvelope(run, 'result-review', decision, targetHash, approvedBy, decidedAt, { note: decidedNote, expiresAt: new Date(this.clock().getTime() + 60 * 60 * 1000).toISOString() })
     if (!canReviewResult({ gate: 'result-review', decision, targetHash, expectedTargetHash: targetHash, approvedBy })) throw new Error('Result review decision is invalid')
     await assertDecisionBinding(this.runtimeRoot, envelope)
     await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.owner-decision-recorded', { decision: envelope })

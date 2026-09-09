@@ -13,6 +13,7 @@ import { createDecompositionPlan } from '../src/main/frontdoor/decomposition'
 import { FrontdoorOwnerGateService, canAnswer, canApprove, canComplete, canDispatch, dispatchTargetHash, questionTargetHash } from '../src/main/frontdoor/ownerGates'
 import { FrontdoorOrchestrator } from '../src/main/frontdoor/orchestrator'
 import { readFrontdoorEvents } from '../src/main/frontdoor/eventLedger'
+import { rewritePersistedAggregate } from './support/frontdoorLedgerSurgery'
 
 const requestInput: FrontdoorRequestInput = {
   requestId: 'owner-gate-request-001',
@@ -151,6 +152,39 @@ describe('Frontdoor Owner Gates', () => {
     result.content = 'tampered before review'
     await writeFile(resultPath, `${JSON.stringify(result)}\n`, 'utf8')
     await expect(orchestrator.reviewResult(run.runId, 'Project Owner', 'accept')).rejects.toThrow(/Result hash mismatch/)
+  })
+
+  it('reviews an aggregate written before childResults carried a resultHash and names the legacy nodes on the Owner Decision', async () => {
+    const { runtimeRoot, orchestrator, run } = await createFixture()
+    await approveInitialGates(orchestrator, run.runId)
+    await orchestrator.approveDispatch(run.runId, [proposal.nodeId])
+    await orchestrator.executeApprovedRun(run.runId, { proposal: packet(run) })
+    const reviewed = await orchestrator.getRun(run.runId)
+    if (!reviewed.aggregateResultRef) throw new Error('test aggregate reference missing')
+    // The shape every aggregate stored before eba10bb (2026-08-25) has: no childResults.resultHash.
+    await rewritePersistedAggregate(runtimeRoot, run.runId, reviewed.aggregateResultRef, (aggregate) => ({
+      ...aggregate,
+      childResults: aggregate.childResults.map(({ resultHash: _dropped, ...child }) => child)
+    }))
+    const envelope = await orchestrator.reviewResult(run.runId, 'Project Owner', 'accept', 'owner note')
+    expect(envelope.note).toBe(`owner note | legacy aggregate schema (no childResults.resultHash): ${proposal.nodeId}`)
+    // The Run's own binding still verifies the Result, so export stays available rather than the
+    // Run being permanently unreviewable.
+    await expect(orchestrator.exportWorkPlaneArtifact(run.runId, 'Project Owner')).resolves.toMatchObject({ status: 'exported' })
+  })
+
+  it('still rejects an aggregate whose childResults carry a resultHash that no longer matches the Run', async () => {
+    const { runtimeRoot, orchestrator, run } = await createFixture()
+    await approveInitialGates(orchestrator, run.runId)
+    await orchestrator.approveDispatch(run.runId, [proposal.nodeId])
+    await orchestrator.executeApprovedRun(run.runId, { proposal: packet(run) })
+    const reviewed = await orchestrator.getRun(run.runId)
+    if (!reviewed.aggregateResultRef) throw new Error('test aggregate reference missing')
+    await rewritePersistedAggregate(runtimeRoot, run.runId, reviewed.aggregateResultRef, (aggregate) => ({
+      ...aggregate,
+      childResults: aggregate.childResults.map((child) => ({ ...child, resultHash: 'f'.repeat(64) }))
+    }))
+    await expect(orchestrator.reviewResult(run.runId, 'Project Owner', 'accept')).rejects.toThrow(/binding is stale/)
   })
 
   it('rejects Work Plane export when the Job request binding is tampered', async () => {
