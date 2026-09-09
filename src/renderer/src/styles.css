@@ -90,6 +90,8 @@ h1, h2, h3, p { margin-top: 0; } h1 { margin-bottom: 8px; font-size: 32px; } h2 
 .frontdoor-node-list, .frontdoor-decision-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 7px; }
 .frontdoor-node-list li, .frontdoor-decision-list li { border-left: 3px solid #6d8fc0; border-radius: 5px; background: #0e1a2c; padding: 8px; color: #c8d8ef; font-size: 12px; line-height: 1.45; }
 .frontdoor-node-list small, .frontdoor-decision-list small { color: #8fa8c9; word-break: break-all; }
+/* A Gate passed on a compatibility route must not look identical to one passed on the current check. */
+.frontdoor-decision-list small.frontdoor-compatibility { color: #e0b56a; }
 .frontdoor-question { border-left: 3px solid #e8b86d; border-radius: 5px; background: #252238; padding: 10px; display: grid; gap: 8px; }
 .frontdoor-question p { margin-bottom: 0; }
 .frontdoor-json { max-height: 260px; overflow: auto; margin: 0; border-radius: 6px; background: #0b1525; color: #c8d8ef; padding: 10px; font-size: 11px; white-space: pre-wrap; }

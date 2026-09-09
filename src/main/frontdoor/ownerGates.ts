@@ -142,7 +142,7 @@ export function canComplete(run: Pick<OrchestrationRun, 'state'>, input: Omit<De
     && canApprove({ ...input, expectedTargetHash })
 }
 
-export function buildDecisionEnvelope(run: OrchestrationRun, gate: OwnerGate, decision: OwnerDecision, targetHash: string, approvedBy: string, now: string, options: Pick<OwnerDecisionEnvelope, 'nodeId' | 'note' | 'answerRef' | 'allowedCapability' | 'dataPolicy' | 'expiresAt'> = {}): OwnerDecisionEnvelope {
+export function buildDecisionEnvelope(run: OrchestrationRun, gate: OwnerGate, decision: OwnerDecision, targetHash: string, approvedBy: string, now: string, options: Pick<OwnerDecisionEnvelope, 'nodeId' | 'note' | 'answerRef' | 'allowedCapability' | 'dataPolicy' | 'expiresAt' | 'compatibility'> = {}): OwnerDecisionEnvelope {
   return {
     decisionId: `owner-decision-${hashJson([run.runId, gate, decision, targetHash, approvedBy, now]).slice(0, 20)}`,
     runId: run.runId,
@@ -170,13 +170,30 @@ function assertAggregateBelongsToRun(runId: string, aggregate: AggregateResult):
 }
 
 /**
- * Aggregates written before `resultHash` was added to `childResults` (the field landed in eba10bb,
- * 2026-08-25, with no migration) carry only `nodeId`, `status` and `resultRef`. Comparing an absent
- * hash against the Run's makes every earlier Run permanently unreviewable, which is a schema gap,
- * not staleness.
+ * `childResults.resultHash` landed in eba10bb (2026-08-25 11:10 +0900) with no migration, so every
+ * aggregate written before it carries only `nodeId`, `status` and `resultRef`. Aggregates are
+ * written once and never rewritten, so an aggregate created after the field existed and yet missing
+ * it did not come from the old schema — something removed it.
  */
-function isLegacyChildResult(child: AggregateResult['childResults'][number]): boolean {
-  return child.resultHash === undefined
+const CHILD_RESULT_HASH_INTRODUCED_AT = Date.parse('2026-08-25T02:10:19.000Z')
+
+/**
+ * The legacy route is bound to when the aggregate was written, not to the absent field alone.
+ *
+ * Absence on its own is not evidence of age: deleting the field from a current aggregate would
+ * otherwise be enough to opt into the weaker check. Requiring the aggregate to predate the schema
+ * change means the route can only be taken by data that genuinely could not carry the field. It
+ * does not defend against an attacker who can rewrite the whole runtime — such an attacker can
+ * equally rewrite the aggregate's hash to match, which the strict path does not catch either —
+ * but it does stop new or corrupted data from reaching the compatibility branch at all.
+ */
+function isLegacyAggregate(aggregate: AggregateResult): boolean {
+  const createdAt = Date.parse(aggregate.createdAt)
+  return Number.isFinite(createdAt) && createdAt < CHILD_RESULT_HASH_INTRODUCED_AT
+}
+
+function isLegacyChildResult(aggregate: AggregateResult, child: AggregateResult['childResults'][number]): boolean {
+  return child.resultHash === undefined && isLegacyAggregate(aggregate)
 }
 
 /**
@@ -194,7 +211,7 @@ async function assertAggregateResultsCurrent(runtimeRoot: string, runId: string,
     // hashed against the Run's own `resultHash` below, so nothing goes unverified — the verification
     // simply comes from the Run rather than from the aggregate's copy.
     if (record.resultRef !== child.resultRef) throw new Error(`Result Review Result binding is stale: ${child.nodeId}`)
-    if (isLegacyChildResult(child)) legacyNodes.push(child.nodeId)
+    if (isLegacyChildResult(aggregate, child)) legacyNodes.push(child.nodeId)
     else if (record.resultHash !== child.resultHash) throw new Error(`Result Review Result binding is stale: ${child.nodeId}`)
     const result = await readJson<Record<string, unknown>>(await safeRuntimePath(runtimeRoot, record.resultRef))
     if (hashJson(result) !== record.resultHash) throw new Error(`Result Review Result hash mismatch: ${child.nodeId}`)
@@ -445,10 +462,10 @@ export class FrontdoorOwnerGateService {
     const legacyNodes = await assertAggregateResultsCurrent(this.runtimeRoot, runId, run, aggregate)
     const targetHash = resultReviewTargetHash(runId, run.aggregateResultRef, aggregate)
     const decidedAt = this.clock().toISOString()
-    // The Owner is told which nodes were admitted on the Run's hash rather than the aggregate's, so
-    // the compatibility route is visible in the Ledger instead of being silently equivalent.
-    const decidedNote = legacyNodes.length ? [note, `legacy aggregate schema (no childResults.resultHash): ${legacyNodes.join(', ')}`].filter(Boolean).join(' | ') : note
-    const envelope = buildDecisionEnvelope(run, 'result-review', decision, targetHash, approvedBy, decidedAt, { note: decidedNote, expiresAt: new Date(this.clock().getTime() + 60 * 60 * 1000).toISOString() })
+    // The compatibility route is recorded as a typed field, not folded into the free-text note: a
+    // downstream reader must be able to tell ADF's own record from a sentence the Owner wrote.
+    const compatibility = legacyNodes.length ? { route: 'legacy-aggregate-missing-child-result-hash' as const, nodeIds: legacyNodes } : undefined
+    const envelope = buildDecisionEnvelope(run, 'result-review', decision, targetHash, approvedBy, decidedAt, { note, compatibility, expiresAt: new Date(this.clock().getTime() + 60 * 60 * 1000).toISOString() })
     if (!canReviewResult({ gate: 'result-review', decision, targetHash, expectedTargetHash: targetHash, approvedBy })) throw new Error('Result review decision is invalid')
     await assertDecisionBinding(this.runtimeRoot, envelope)
     await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.owner-decision-recorded', { decision: envelope })
@@ -542,7 +559,14 @@ export class FrontdoorOwnerGateService {
       })
       const targetHash = artifactExportTargetHash(runId, run.aggregateResultRef, hashJson(aggregate), run.nodes)
       const createdAt = this.clock().toISOString()
-      const envelope = buildDecisionEnvelope(run, 'artifact-export', 'export', targetHash, approvedBy, createdAt, { note, allowedCapability: 'propose', dataPolicy: 'local-only', expiresAt: new Date(this.clock().getTime() + 5 * 60 * 1000).toISOString() })
+      // Export carries the same compatibility record as the Review it rests on. The accepted Review
+      // may have been recorded before this field existed, so it is re-derived from the aggregate
+      // rather than copied: an export that inherits a route silently is exactly the silence the
+      // typed field exists to remove.
+      const exportCompatibility = aggregate.childResults.some((child) => isLegacyChildResult(aggregate, child))
+        ? { route: 'legacy-aggregate-missing-child-result-hash' as const, nodeIds: aggregate.childResults.filter((child) => isLegacyChildResult(aggregate, child)).map((child) => child.nodeId) }
+        : undefined
+      const envelope = buildDecisionEnvelope(run, 'artifact-export', 'export', targetHash, approvedBy, createdAt, { note, compatibility: exportCompatibility, allowedCapability: 'propose', dataPolicy: 'local-only', expiresAt: new Date(this.clock().getTime() + 5 * 60 * 1000).toISOString() })
       if (!canApprove({ gate: 'artifact-export', decision: 'export', targetHash, expectedTargetHash: targetHash, approvedBy })) throw new Error('Work Plane export decision is invalid')
       assertDecisionNotExpired(envelope, createdAt)
       const results = await Promise.all(records.map(async (record) => {

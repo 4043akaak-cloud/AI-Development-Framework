@@ -56,6 +56,17 @@ export interface TaskLedgerDriftReport {
    * the document. Absence of a heading is not listed — most Tasks never needed a Packet.
    */
   unreadableSummaries: MalformedSummary[]
+  /**
+   * Documents carrying an `## ADF Execution Record` block. These are narrative records of a
+   * finished Task, not Packet inputs, and the Packet CLI does not read them.
+   *
+   * They are listed rather than passed over in silence. Ten documents were renamed from
+   * "Execution Summary" to "Execution Record" because that is what they contain; the rename also
+   * removed them from the parser's view, and a report that then says "all readable" would be
+   * describing documents it no longer looks at. Naming them keeps the report honest about its own
+   * coverage.
+   */
+  executionRecords: string[]
   documentCount: number
   ledgerRunCount: number
 }
@@ -103,16 +114,21 @@ function inspectSummary(document: TaskDocument): { mismatch?: SummaryTaskIdMisma
   }
 }
 
+/** Not a Packet Execution Summary. The parser does not read these, so the report says so out loud. */
+const EXECUTION_RECORD_HEADING = '## ADF Execution Record'
+
 export function assessTaskLedgerDrift(documents: readonly TaskDocument[], ledgerRunIds: readonly string[]): TaskLedgerDriftReport {
   const references = collectRunReferences(documents)
   const ledger = new Set(ledgerRunIds)
 
   const summaryTaskIdMismatches: SummaryTaskIdMismatch[] = []
   const malformedSummaries: MalformedSummary[] = []
+  const executionRecords: string[] = []
   for (const document of documents) {
     const { mismatch, malformed } = inspectSummary(document)
     if (mismatch) summaryTaskIdMismatches.push(mismatch)
     if (malformed) malformedSummaries.push(malformed)
+    if (document.markdown.split(/\r?\n/).some((line) => line.trim() === EXECUTION_RECORD_HEADING)) executionRecords.push(document.document)
   }
 
   return {
@@ -123,6 +139,7 @@ export function assessTaskLedgerDrift(documents: readonly TaskDocument[], ledger
       .map(([runId, documents]) => ({ runId, documents: [...documents].sort() })),
     summaryTaskIdMismatches,
     unreadableSummaries: malformedSummaries,
+    executionRecords: executionRecords.sort(),
     documentCount: documents.length,
     ledgerRunCount: ledger.size
   }
@@ -194,6 +211,11 @@ export function formatDriftReport(report: TaskLedgerDriftReport): string {
   else {
     lines.push(`  unreadable Execution Summary blocks (heading present, Packet CLI would refuse): ${report.unreadableSummaries.length}`)
     for (const entry of report.unreadableSummaries) lines.push(`    - ${entry.document}: ${entry.details.join('; ')}`)
+  }
+
+  if (report.executionRecords.length > 0) {
+    lines.push(`  Execution Record blocks (narrative records, not Packet inputs — not checked by this tool): ${report.executionRecords.length}`)
+    for (const entry of report.executionRecords) lines.push(`    - ${entry}`)
   }
 
   lines.push('', 'Reported, not repaired. Which side is stale is the Owner\'s call.')

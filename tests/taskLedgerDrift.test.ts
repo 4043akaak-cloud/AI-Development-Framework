@@ -102,6 +102,15 @@ describe('assessTaskLedgerDrift', () => {
     expect(report.summaryTaskIdMismatches).toEqual([])
   })
 
+  it('names an Execution Record document instead of letting the report imply it was checked', () => {
+    // Renaming the heading took these documents out of the parser's view. If the report said only
+    // "all readable" it would be describing documents it no longer reads.
+    const report = assessTaskLedgerDrift([doc('docs/tasks/ADF-X-001.md', '# Task\n\n## ADF Execution Record\n\n```text\nrecorded\n```\n')], [])
+    expect(report.unreadableSummaries).toEqual([])
+    expect(report.executionRecords).toEqual(['docs/tasks/ADF-X-001.md'])
+    expect(formatDriftReport(report)).toContain('Execution Record blocks (narrative records, not Packet inputs — not checked by this tool): 1')
+  })
+
   it('counts both sides so an empty report is distinguishable from an empty scan', () => {
     const report = assessTaskLedgerDrift([doc('docs/tasks/A.md', '')], ['run-1111111111111111aaaa'])
     expect(report.documentCount).toBe(1)

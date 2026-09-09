@@ -70,6 +70,9 @@ async function createFixture(fixture: 'success' | 'partial' = 'success', aggrega
   return { runtimeRoot, orchestrator, run }
 }
 
+/** Before eba10bb (2026-08-25 11:10 +0900), when childResults.resultHash did not exist yet. */
+const LEGACY_AGGREGATE_CREATED_AT = '2026-08-21T02:59:38.142Z'
+
 async function approveInitialGates(orchestrator: FrontdoorOrchestrator, runId: string): Promise<void> {
   await orchestrator.approveIntake(runId)
   await orchestrator.approveCompletionShape(runId)
@@ -161,16 +164,84 @@ describe('Frontdoor Owner Gates', () => {
     await orchestrator.executeApprovedRun(run.runId, { proposal: packet(run) })
     const reviewed = await orchestrator.getRun(run.runId)
     if (!reviewed.aggregateResultRef) throw new Error('test aggregate reference missing')
-    // The shape every aggregate stored before eba10bb (2026-08-25) has: no childResults.resultHash.
+    // The shape every aggregate stored before eba10bb (2026-08-25) has: written before the field
+    // existed, so it carries no childResults.resultHash.
     await rewritePersistedAggregate(runtimeRoot, run.runId, reviewed.aggregateResultRef, (aggregate) => ({
       ...aggregate,
+      createdAt: LEGACY_AGGREGATE_CREATED_AT,
       childResults: aggregate.childResults.map(({ resultHash: _dropped, ...child }) => child)
     }))
     const envelope = await orchestrator.reviewResult(run.runId, 'Project Owner', 'accept', 'owner note')
-    expect(envelope.note).toBe(`owner note | legacy aggregate schema (no childResults.resultHash): ${proposal.nodeId}`)
+    // The Owner's own words stay their own; the compatibility route is a typed field a reader can
+    // rely on rather than a sentence it has to parse out of free text.
+    expect(envelope.note).toBe('owner note')
+    expect(envelope.compatibility).toEqual({ route: 'legacy-aggregate-missing-child-result-hash', nodeIds: [proposal.nodeId] })
     // The Run's own binding still verifies the Result, so export stays available rather than the
-    // Run being permanently unreviewable.
-    await expect(orchestrator.exportWorkPlaneArtifact(run.runId, 'Project Owner')).resolves.toMatchObject({ status: 'exported' })
+    // Run being permanently unreviewable — and export records the same route rather than
+    // inheriting it silently.
+    const manifest = await orchestrator.exportWorkPlaneArtifact(run.runId, 'Project Owner')
+    expect(manifest.status).toBe('exported')
+    const exportEvents = await readFrontdoorEvents(runtimeRoot, run.runId)
+    const exportDecision = exportEvents
+      .filter((event) => event.type === 'frontdoor.owner-decision-recorded')
+      .map((event) => event.payload.decision as { gate: string; compatibility?: unknown })
+      .find((decision) => decision.gate === 'artifact-export')
+    expect(exportDecision?.compatibility).toEqual({ route: 'legacy-aggregate-missing-child-result-hash', nodeIds: [proposal.nodeId] })
+  })
+
+  it('refuses the legacy route to an aggregate written after the field existed, even with the field removed', async () => {
+    const { runtimeRoot, orchestrator, run } = await createFixture()
+    await approveInitialGates(orchestrator, run.runId)
+    await orchestrator.approveDispatch(run.runId, [proposal.nodeId])
+    await orchestrator.executeApprovedRun(run.runId, { proposal: packet(run) })
+    const reviewed = await orchestrator.getRun(run.runId)
+    if (!reviewed.aggregateResultRef) throw new Error('test aggregate reference missing')
+    // Same removal as the legacy case, but the aggregate is stamped after the schema change. An
+    // absent field is not evidence of age, so this must stay a stale binding.
+    await rewritePersistedAggregate(runtimeRoot, run.runId, reviewed.aggregateResultRef, (aggregate) => ({
+      ...aggregate,
+      createdAt: '2026-09-01T00:00:00.000Z',
+      childResults: aggregate.childResults.map(({ resultHash: _dropped, ...child }) => child)
+    }))
+    await expect(orchestrator.reviewResult(run.runId, 'Project Owner', 'accept')).rejects.toThrow(/binding is stale/)
+  })
+
+  it('still rejects a credential-carrying Result reached through the legacy route', async () => {
+    const { runtimeRoot, orchestrator, run } = await createFixture()
+    await approveInitialGates(orchestrator, run.runId)
+    await orchestrator.approveDispatch(run.runId, [proposal.nodeId])
+    await orchestrator.executeApprovedRun(run.runId, { proposal: packet(run) })
+    const reviewed = await orchestrator.getRun(run.runId)
+    if (!reviewed.aggregateResultRef || !reviewed.nodes[0].resultRef) throw new Error('test bindings missing')
+    // The Result is rewritten first so the Run's own resultHash is re-bound to it; the legacy route
+    // must not become a way past the credential guard.
+    const resultPath = path.join(runtimeRoot, reviewed.nodes[0].resultRef)
+    const result = JSON.parse(await readFile(resultPath, 'utf8')) as Record<string, unknown>
+    result.risks = ['sk-live-0123456789abcdefghijklmnopqrstuvwxyz']
+    await writeFile(resultPath, `${JSON.stringify(result)}\n`, 'utf8')
+    await rewritePersistedAggregate(runtimeRoot, run.runId, reviewed.aggregateResultRef, (aggregate) => ({
+      ...aggregate,
+      createdAt: LEGACY_AGGREGATE_CREATED_AT,
+      childResults: aggregate.childResults.map(({ resultHash: _dropped, ...child }) => child)
+    }))
+    // It fails on the Run-side hash before the guard, which is the point: the legacy route skips
+    // only the aggregate's copy of the hash, never the Result's own verification.
+    await expect(orchestrator.reviewResult(run.runId, 'Project Owner', 'accept')).rejects.toThrow(/Result hash mismatch/)
+  })
+
+  it('still rejects a swapped resultRef on the legacy route', async () => {
+    const { runtimeRoot, orchestrator, run } = await createFixture()
+    await approveInitialGates(orchestrator, run.runId)
+    await orchestrator.approveDispatch(run.runId, [proposal.nodeId])
+    await orchestrator.executeApprovedRun(run.runId, { proposal: packet(run) })
+    const reviewed = await orchestrator.getRun(run.runId)
+    if (!reviewed.aggregateResultRef) throw new Error('test aggregate reference missing')
+    await rewritePersistedAggregate(runtimeRoot, run.runId, reviewed.aggregateResultRef, (aggregate) => ({
+      ...aggregate,
+      createdAt: LEGACY_AGGREGATE_CREATED_AT,
+      childResults: aggregate.childResults.map(({ resultHash: _dropped, ...child }) => ({ ...child, resultRef: 'threads/thread-other/results/turn-0-other.json' }))
+    }))
+    await expect(orchestrator.reviewResult(run.runId, 'Project Owner', 'accept')).rejects.toThrow(/binding is stale/)
   })
 
   it('still rejects an aggregate whose childResults carry a resultHash that no longer matches the Run', async () => {

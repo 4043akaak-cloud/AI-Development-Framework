@@ -761,7 +761,13 @@ export default function FrontdoorPanel({ minimal = false }: { minimal?: boolean 
                 </div>
               )}
               <ul className="frontdoor-decision-list">
-                {inspection.decisions.map((decision) => <li key={decision.decisionId}><strong>{decision.gate}</strong> · {decision.decision} · {decision.approvedBy}<br /><small>target: {decision.targetHash}</small></li>)}
+                {inspection.decisions.map((decision) => (
+                  <li key={decision.decisionId}>
+                    <strong>{decision.gate}</strong> · {decision.decision} · {decision.approvedBy}
+                    <br /><small>target: {decision.targetHash}</small>
+                    {decision.compatibility && <><br /><small className="frontdoor-compatibility">互換経路: {decision.compatibility.route} — {decision.compatibility.nodeIds.join(', ')}</small></>}
+                  </li>
+                ))}
               </ul>
             </section>
 

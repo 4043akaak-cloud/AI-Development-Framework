@@ -28,6 +28,17 @@ export interface OwnerDecisionEnvelope {
   expiresAt?: string
   note?: string
   answerRef?: string
+  /**
+   * Set when a Gate admitted something through a backward-compatibility route rather than the
+   * current check. Typed rather than folded into `note`, because `note` is free text an Owner also
+   * writes into: a downstream reader cannot tell an Owner's sentence from ADF's own record.
+   */
+  compatibility?: OwnerDecisionCompatibility
+}
+
+export interface OwnerDecisionCompatibility {
+  route: 'legacy-aggregate-missing-child-result-hash'
+  nodeIds: string[]
 }
 
 export interface FrontdoorConstraints {
