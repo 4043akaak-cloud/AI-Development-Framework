@@ -10,15 +10,18 @@ import { createFrontdoorRequest } from './intake'
 import { aggregateResults, buildFrontdoorReturn } from './returnEnvelope'
 import { questionsFromThread } from './questionAggregator'
 import { claimRun, readPlan, readProjectedRun, readRequest, readRun, readRunClaim, readRunEvents, recordRunEvent, releaseRun, replayRunFromEvents, writeAggregate, writeRun, writeRunBundleExclusive } from './ledger'
-import { readJson } from '../jobLoop/ledger'
+import { readEvents, readJson } from '../jobLoop/ledger'
 import { listParticipantEvidence } from './participantEvidence'
 import type { AdapterResultEnvelope } from '../jobLoop/resultEnvelope'
+import type { ExternalCallRecord } from '../../shared/externalAdapterTypes'
+import { safeRuntimePath } from './pathIntegrity'
 import { assertDispatchApproved, buildDecisionEnvelope, FrontdoorOwnerGateService, nodeReviewTargetHash, nodeTargetHash } from './ownerGates'
 import { getAdapterProfile } from '../jobLoop/adapterRegistry'
 import { buildActivityTrace } from './activityTrace'
 import { buildCollaborationTrace } from './collaborationTrace'
 import { assessGoalAlignment } from './goalAlignment'
 import { assessOwnerGateWait } from './ownerGateWait'
+import { collectRunTelemetry } from './runTelemetry'
 import { assertRunEventConsistency, assertRunIntegrity } from './runIntegrity'
 import { latestWorkPlaneArtifactManifest } from './workPlaneArtifact'
 
@@ -436,6 +439,31 @@ export class FrontdoorOrchestrator {
     inspection.nextAction = inspection.goalAlignment.nextAction
     // After nextAction settles, so the wait report carries the same instruction the Owner reads.
     inspection.ownerGateWait = assessOwnerGateWait({ runId, ownerGate: run.ownerGate, events, nextAction: inspection.nextAction })
+    inspection.telemetry = await collectRunTelemetry(
+      run.nodes.map((record) => ({
+        nodeId: record.node.nodeId,
+        role: record.node.role,
+        adapterId: record.node.adapterId,
+        ...(record.threadId ? { threadId: record.threadId } : {}),
+        ...(record.resultRef ? { resultRef: record.resultRef } : {})
+      })),
+      {
+        envelope: async (resultRef) => {
+          try {
+            return await readJson<AdapterResultEnvelope>(await safeRuntimePath(this.runtimeRoot, resultRef))
+          } catch {
+            return undefined
+          }
+        },
+        calls: async (threadId) => {
+          try {
+            return (await readEvents(path.join(this.runtimeRoot, 'threads', threadId, 'external-calls.jsonl'))) as unknown as ExternalCallRecord[]
+          } catch {
+            return []
+          }
+        }
+      }
+    )
     return inspection
   }
 

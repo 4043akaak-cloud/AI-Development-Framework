@@ -1,6 +1,6 @@
 # Task — ADF-RUN-TELEMETRY-PROJECTION-001: Run Telemetry読み取り専用投影
 
-> Status: `Waiting Approval` — Plan作成のみ。実装は未着手。
+> Status: `Verifying` — Owner承認済み（2026-09-09）。実装・検証完了。独立レビューと完了承認が残る。
 > Type: Implementation + Verification
 > Owner: Project Owner
 > Implementer: 未定（Codex または Claude Code）
@@ -112,3 +112,52 @@ Blueprint §7の必須4項目。
 | 自動 | | Not run | | 未承認のため未着手 |
 | 手動 | | Not run | | 未承認のため未着手 |
 | 独立レビュー | | Not applicable | | 実装後に実施 |
+
+
+## 9. Implementation Log（2026-09-09）
+
+### データの実際の所在
+
+Plan策定時は `ExternalCallRecord` の所在を特定していなかった。実装時に確認したところ、Frontdoorイベント `external.call-recorded`（`relay.ts:621`）には `durationMs`／`costTier`／`terminationReason` しか載っておらず、**Token を含む完全な記録は `threads/<threadId>/external-calls.jsonl`（`relay.ts:620`）にある**。
+
+そのため2つの出所を組み合わせる形にした。
+
+| 出所 | 得られるもの | 対象 |
+| --- | --- | --- |
+| Result Envelope | `durationMs`／`status`／`terminationReason` | **全Node**（Fake含む） |
+| `external-calls.jsonl` | Token／`costTier`／`provider`／モデルロード時間 | 外部送信したNodeのみ |
+
+### Provider ごとの Token 名の違い
+
+実データを確認したところ、Ollama は `promptEvalCount`／`evalCount`、OpenAI互換は `promptTokens`／`completionTokens` を返す。**同じ「入力トークン／出力トークン」に別名が付いている**ため、読み手ごとに分岐させず投影側で正規化した。Provider自身が `totalTokens` を返す場合はそれを優先する。
+
+### モデルロード時間の分離
+
+現Runtimeにある唯一の実外部送信（Ollama、`thread-8c1de8c1fcc5d755`）は、29.3秒のうち**18.9秒（65%）がモデルのロード時間**だった。「モデルが遅い」と「モデルが常駐していなかった」は別の問題なので、`modelLoadMs` として分離した。
+
+### 「未計測」と「0」の区別
+
+実装の中心はこの区別である。Fake Adapterは実際に0msで完了する一方、queued のNodeは計測されていない。後者を0で埋めると**最速のNodeとして表示される**。`durationMs` は未実行時に `undefined` のままとし、Token も `tokensRecorded` フラグで「0と報告された」と「何も報告されなかった」を分けた。
+
+Run合計の `totalTokens` には `tokenReportingNodeCount` を併記する。5Node中2Nodeの合計は Run の合計ではない。
+
+## 10. Verification（2026-09-09）
+
+| 種別 | 実施内容 | 結果 |
+| --- | --- | --- |
+| 自動 | typecheck node / web / cli | Pass |
+| 自動 | `vitest run` 全体 | **Pass 49 files / 501 tests**（実装前 48 files / 488、回帰なし） |
+| 自動 | `tests/runTelemetry.test.ts` | Pass 13/13 |
+| 自動 | `electron-vite build`、`git diff --check` | Pass |
+| 手動 | **実Runtimeの6 Runへコンパイル済み実装を適用** | 下記 |
+
+実測では、queued Nodeを持つ `run-113f864f` が「計測済0」、実行済みの5 Runが「0ms」と正しく区別された。全RunがFake Adapterのため Token報告は0 Nodeである。
+
+実Ollamaの計測値は Frontdoor Run に紐づかない Thread にあるため実Runでは現れない。そのためテストに**実記録と同一の数値**（`promptEvalCount: 164`／`evalCount: 77`／`loadDurationNs: 18967963792`）を固定し、正規化とロード時間分離を証明した。
+
+## 11. 残るリスク・未検証事項
+
+- **Token経路は実Runで未検証。** 現Runtimeの全FrontdoorRunがFake Adapterであるため、実データでの確認はテストの固定値に依存する。実Provider送信を含むRunが生まれた時点で再確認が必要。
+- UI表示は未実装。`FrontdoorInspection.telemetry` として公開したのみで、Boardには出していない（Scope内だが、表示設計はOwnerの判断を要すると考え分離した）。
+- 実価格への換算、Run横断の集計、しきい値アラートは Out of scope のまま。
+- 独立レビュー未実施。

@@ -235,6 +235,37 @@ export interface FrontdoorReturn {
   nextAction: string
 }
 
+export interface NodeTelemetry {
+  nodeId: string
+  role: string
+  adapterId: string
+  /** Absent when the Node has not run. Never defaulted to 0 — unmeasured is not instant. */
+  durationMs?: number
+  status?: string
+  terminationReason?: string
+  /** Present only for adapters that make an external call. */
+  provider?: string
+  costTier?: string
+  /** Time the provider spent loading the model rather than answering, where it reports it. */
+  modelLoadMs?: number
+  promptTokens?: number
+  completionTokens?: number
+  totalTokens?: number
+  /** Distinguishes "reported zero tokens" from "reported nothing". */
+  tokensRecorded: boolean
+}
+
+export interface RunTelemetry {
+  nodes: NodeTelemetry[]
+  nodeCount: number
+  measuredNodeCount: number
+  totalDurationMs: number
+  /** Summed across reporting Nodes only; read with `tokenReportingNodeCount`. */
+  totalTokens: number
+  tokenReportingNodeCount: number
+  failedNodeCount: number
+}
+
 export type OwnerGateWaitSeverity = 'fresh' | 'aging' | 'stale'
 
 /** How long a Run has been waiting on the Owner, derived from the Ledger rather than `updatedAt`. */
@@ -269,6 +300,8 @@ export interface FrontdoorInspection {
   goalAlignment?: GoalAlignmentReport
   /** Present only while the Run waits on an Owner decision. */
   ownerGateWait?: OwnerGateWaitReport
+  /** Derived from Result Envelopes and the external-call log. Adds no measurement of its own. */
+  telemetry?: RunTelemetry
 }
 
 export type CollaborationMessageKind = 'request' | 'proposal' | 'question' | 'review' | 'answer' | 'handoff' | 'result'
