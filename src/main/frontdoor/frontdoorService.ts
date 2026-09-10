@@ -5,6 +5,7 @@ import type { FrontdoorArtifactInspection, FrontdoorChildPacketSummary, Frontdoo
 import type { RelayResult } from '../../shared/threadTypes'
 import { readJson } from '../jobLoop/ledger'
 import { hashJson } from '../jobLoop/hash'
+import { validateApprovedTask } from '../jobLoop/contracts'
 import { FrontdoorOrchestrator } from './orchestrator'
 import { prepareFrontdoorRunOrThrow } from './frontdoorPrepareService'
 import type { FrontdoorPlanner } from './planner'
@@ -157,6 +158,29 @@ function guard<T>(run: () => Promise<T>): Promise<RelayResult<T>> {
 
 function safeError(error: unknown): string {
   return String((error as Error)?.message ?? error).replace(/\s+/g, ' ').slice(0, 500)
+}
+
+/**
+ * Whether the Packet already on disk could still be dispatched for this Run.
+ *
+ * Only a usable Packet is protected from replacement. An unreadable or malformed one, an expired
+ * approval, or a binding to a Request or Plan the Run has moved past cannot be dispatched by
+ * anyone, so keeping it would protect nothing and strand the Run.
+ */
+async function packetStillUsable(file: string, run: OrchestrationRun, now: Date): Promise<boolean> {
+  let existing: ApprovedTaskPacket
+  try {
+    existing = await readJson<ApprovedTaskPacket>(file)
+  } catch {
+    return false
+  }
+  if (existing.frontdoorBinding?.runId !== run.runId || existing.frontdoorBinding.requestHash !== run.requestHash || existing.frontdoorBinding.planHash !== run.planHash) return false
+  try {
+    validateApprovedTask(existing, now)
+    return true
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -319,9 +343,15 @@ export function approveFrontdoorRun(orchestrator: FrontdoorOrchestrator, input: 
  * them. The Owner's Dispatch Decision hashes these exact bytes, so writing them first is what makes
  * the approval meaningful rather than a promise about files that do not exist yet.
  *
- * `wx` — never overwrite. A Packet already on disk was put there by the Owner or by an earlier
- * derivation that a Decision may already bind; silently replacing it would move the ground under an
- * approval that has already been given.
+ * An existing Packet is replaced only when it can no longer be dispatched — its approval window has
+ * lapsed, or it is bound to a Request or Plan this Run has moved past. One that is still usable is
+ * left alone, because a Dispatch Decision may already bind its bytes and replacing it would move
+ * the ground under an approval the Owner has given.
+ *
+ * Refusing outright was the first version, and it was wrong in the same way the Cycle 1 Result
+ * Review was: a window that lapses before the Owner acts must not become a state with no way out.
+ * A 24-hour approval that expires overnight would have left the Run undispatchable and
+ * underivable at once.
  */
 export function deriveFrontdoorChildPackets(orchestrator: FrontdoorOrchestrator, input: FrontdoorDeriveChildPacketsInput): Promise<RelayResult<FrontdoorChildPacketSummary[]>> {
   return guard(async () => {
@@ -347,12 +377,8 @@ export function deriveFrontdoorChildPackets(orchestrator: FrontdoorOrchestrator,
     for (const node of plan.nodes) {
       const packet = packets[node.nodeId]
       const file = packetPath(orchestrator.runtimeRoot, packet.taskId)
-      try {
-        await writeFile(file, `${JSON.stringify(packet, null, 2)}\n`, { encoding: 'utf8', flag: 'wx' })
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new Error(`a child Packet already exists and was not replaced: approved-tasks/${packet.taskId}.json`)
-        throw error
-      }
+      if (await packetStillUsable(file, run, approvedAt)) throw new Error(`a usable child Packet already exists and was not replaced: approved-tasks/${packet.taskId}.json`)
+      await writeFile(file, `${JSON.stringify(packet, null, 2)}\n`, 'utf8')
       summaries.push({
         nodeId: node.nodeId,
         taskId: packet.taskId,

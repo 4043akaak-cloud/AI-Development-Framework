@@ -99,7 +99,27 @@ describe('the Owner loop closes without leaving ADF', () => {
     expect((inspected.json.run as { nodes: Array<{ state: string }> }).nodes[0].state).toBe('completed')
   })
 
-  it('refuses to replace a Packet that is already on disk', async () => {
+  it('re-derives a Packet whose approval window has lapsed', async () => {
+    const { runtimeRoot, runId } = await preparedRun()
+    await approveThrough(runtimeRoot, runId)
+    expect((await run(['derive-packets', '--runtime-root', runtimeRoot, '--run-id', runId, '--approval-id', 'approval-closure-001', '--approved-by', 'Project Owner', '--valid-for-hours', '1'])).code).toBe(0)
+
+    // An approval that lapses before the Owner acts must not become a state with no way out: the
+    // Packet cannot be dispatched, so protecting it from replacement would protect nothing. This is
+    // the Cycle 1 expiry failure, and it is not being repeated here.
+    const packetPath = path.join(runtimeRoot, 'approved-tasks', `${request.requestId}::proposal.json`)
+    const lapsed = JSON.parse(await readFile(packetPath, 'utf8'))
+    lapsed.approval.expiresAt = '2020-01-01T00:00:00.000Z'
+    await writeFile(packetPath, `${JSON.stringify(lapsed, null, 2)}\n`, 'utf8')
+
+    const again = await run(['derive-packets', '--runtime-root', runtimeRoot, '--run-id', runId, '--approval-id', 'approval-closure-002', '--approved-by', 'Project Owner'])
+    expect(again.stderr).toBe('')
+    expect(again.code).toBe(0)
+    await run(['approve', '--runtime-root', runtimeRoot, '--run-id', runId, '--gate', 'dispatch', '--decision', 'dispatch', '--nodes', 'proposal', '--approved-by', 'Project Owner'])
+    expect((await run(['dispatch', '--runtime-root', runtimeRoot, '--run-id', runId])).code).toBe(0)
+  })
+
+  it('refuses to replace a Packet that is still usable', async () => {
     const { runtimeRoot, runId } = await preparedRun()
     await approveThrough(runtimeRoot, runId)
     expect((await run(['derive-packets', '--runtime-root', runtimeRoot, '--run-id', runId, '--approval-id', 'approval-closure-001', '--approved-by', 'Project Owner'])).code).toBe(0)
@@ -108,7 +128,7 @@ describe('the Owner loop closes without leaving ADF', () => {
     // already binds the first Packet, replacing it silently moves the ground under that approval.
     const second = await run(['derive-packets', '--runtime-root', runtimeRoot, '--run-id', runId, '--approval-id', 'approval-closure-002', '--approved-by', 'Project Owner'])
     expect(second.code).toBe(1)
-    expect(second.stderr).toContain('already exists and was not replaced')
+    expect(second.stderr).toContain('usable child Packet already exists and was not replaced')
   })
 
   it('refuses to derive outside the Dispatch Gate', async () => {
