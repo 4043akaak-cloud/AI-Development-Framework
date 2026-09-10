@@ -55,15 +55,34 @@ async function loadApprovedPacket(relay: ConversationRelay, taskId: string): Pro
   }
 }
 
+/**
+ * The standalone Packets an Owner can start a Thread from. Frontdoor child Packets are excluded:
+ * `startApprovedThread` refuses them, so listing them would only offer the Owner a choice that
+ * always fails, and would present a Run's own Node as if it were startable outside its Gate.
+ */
 export function listApprovedTaskIds(relay: ConversationRelay): Promise<RelayResult<string[]>> {
   return guard(async () => {
+    let entries
     try {
-      const entries = await readdir(approvedTaskDirectory(relay), { withFileTypes: true })
-      return entries.filter((entry) => entry.isFile() && entry.name.endsWith('.json')).map((entry) => entry.name.replace(/\.json$/, '')).sort()
+      entries = await readdir(approvedTaskDirectory(relay), { withFileTypes: true })
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
       throw error
     }
+    const taskIds: string[] = []
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith('.json')) continue
+      const taskId = entry.name.replace(/\.json$/, '')
+      try {
+        // An unreadable Packet is skipped rather than thrown on: it cannot be started either way,
+        // and one malformed file must not hide every other Packet from the Owner.
+        if ((await loadApprovedPacket(relay, taskId)).frontdoorBinding) continue
+      } catch {
+        continue
+      }
+      taskIds.push(taskId)
+    }
+    return taskIds.sort()
   })
 }
 
@@ -84,8 +103,27 @@ export function inspectLiveArtifacts(relay: ConversationRelay, threadId: unknown
 }
 
 /** Starts a Thread only for a Task that already has an Owner-approved packet on disk. */
+/**
+ * The generic Thread entrance. It starts a Thread from a Packet in `approved-tasks/` without
+ * consulting any Frontdoor Decision, which was safe only while every Packet there had been placed
+ * by hand by the Owner.
+ *
+ * ADF now derives Frontdoor child Packets into that same directory. Today they cannot be reached
+ * here anyway: `asIdentifier` above forbids `:` and every child taskId is `<requestId>::<nodeId>`.
+ * That is protection by coincidence — it holds only while both the identifier shape and the
+ * childTaskId convention stay exactly as they are, and neither was written to defend this.
+ *
+ * So the rule is stated rather than relied upon: a Packet carrying a `frontdoorBinding` belongs to
+ * a Run and is refused here, because starting one as a standalone Thread would execute a Frontdoor
+ * Node with no Dispatch Decision at all. The Frontdoor path calls `relay.startThread` directly
+ * after `assertDispatchApproved`, so it is unaffected.
+ */
 export function startApprovedThread(relay: ConversationRelay, taskId: unknown): Promise<RelayResult<ConversationThread>> {
-  return guard(async () => relay.startThread(await loadApprovedPacket(relay, asIdentifier(taskId, 'taskId'))))
+  return guard(async () => {
+    const packet = await loadApprovedPacket(relay, asIdentifier(taskId, 'taskId'))
+    if (packet.frontdoorBinding) throw new Error(`this Packet belongs to Frontdoor Run ${packet.frontdoorBinding.runId} and must be dispatched through its Dispatch Gate, not started as a standalone Thread`)
+    return relay.startThread(packet)
+  })
 }
 
 /** Sends the first Turn of an `open` Thread. */

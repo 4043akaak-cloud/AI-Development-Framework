@@ -4,6 +4,8 @@ import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { DecompositionNode, FrontdoorRequestInput } from '../src/shared/frontdoorTypes'
 import { runFrontdoorCli, type FrontdoorCliIO } from '../src/cli/frontdoorOwnerLoop'
+import { createLiveRelay } from '../src/main/liveRelay'
+import { listApprovedTaskIds, startApprovedThread } from '../src/main/relayService'
 
 const roots: string[] = []
 afterEach(async () => {
@@ -199,5 +201,45 @@ describe('an independent review is recorded against the Run', () => {
     const after = await run(['inspect-reviews', '--runtime-root', runtimeRoot, '--run-id', runId])
     expect(after.json.cleared).toBe(false)
     expect((after.json.reviews as unknown[])).toHaveLength(1)
+  })
+})
+
+describe('a derived Packet cannot be run outside its Dispatch Gate', () => {
+  it('refuses the generic Thread entrance and hides the Packet from its list', async () => {
+    const { runtimeRoot, runId } = await preparedRun()
+    await approveThrough(runtimeRoot, runId)
+    expect((await run(['derive-packets', '--runtime-root', runtimeRoot, '--run-id', runId, '--approval-id', 'approval-closure-001', '--approved-by', 'Project Owner'])).code).toBe(0)
+
+    // approved-tasks/ was safe for the generic entrance only while every Packet there had been
+    // placed by hand. Deriving Packets into it means this entrance could otherwise execute a
+    // Frontdoor Node with no Dispatch Decision at all — the Gate bypassed by starting the Run's own
+    // Packet as a standalone Thread.
+    const relay = createLiveRelay(runtimeRoot)
+
+    // The real child taskId is rejected on its shape alone, because the generic entrance forbids
+    // ':' and every child taskId contains '::'. That is a coincidence, not a defence.
+    const byRealId = await startApprovedThread(relay, `${request.requestId}::proposal`)
+    expect(byRealId.ok).toBe(false)
+    if (!byRealId.ok) expect(byRealId.error).toBe('invalid taskId')
+
+    // So the guard is tested where that coincidence does not apply: the same Frontdoor-bound Packet
+    // copied to a taskId the entrance does accept. If the identifier shape or the childTaskId
+    // convention ever changes, this is what still refuses.
+    const derived = JSON.parse(await readFile(path.join(runtimeRoot, 'approved-tasks', `${request.requestId}::proposal.json`), 'utf8'))
+    await writeFile(path.join(runtimeRoot, 'approved-tasks', 'reachable-task-id.json'), `${JSON.stringify({ ...derived, taskId: 'reachable-task-id' }, null, 2)}\n`, 'utf8')
+    const started = await startApprovedThread(relay, 'reachable-task-id')
+    expect(started.ok).toBe(false)
+    if (started.ok) return
+    expect(started.error).toContain('must be dispatched through its Dispatch Gate')
+
+    const listed = await listApprovedTaskIds(relay)
+    expect(listed.ok).toBe(true)
+    if (!listed.ok) return
+    expect(listed.value).not.toContain('reachable-task-id')
+
+    // The Frontdoor path itself is unaffected: it calls relay.startThread directly, after the
+    // Dispatch Decision has been checked.
+    await run(['approve', '--runtime-root', runtimeRoot, '--run-id', runId, '--gate', 'dispatch', '--decision', 'dispatch', '--nodes', 'proposal', '--approved-by', 'Project Owner'])
+    expect((await run(['dispatch', '--runtime-root', runtimeRoot, '--run-id', runId])).code).toBe(0)
   })
 })
