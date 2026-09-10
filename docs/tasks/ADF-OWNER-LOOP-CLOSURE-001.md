@@ -4,7 +4,7 @@
 > Type: Implementation + Verification
 > Owner: Project Owner
 > Implementation: Claude Code（`92791b1`, `3d39b32`, `4352d94`, `cdbfc47`, `4cdeb60`）
-> Independent Review: Codex（2026-09-10、接続エラーにより中断。指摘1件のみ受領し反映済み）
+> Independent Review: Codex（2026-09-10。P1×6・P2×3 を受領し全件反映。`e429cd6`）
 > Date: 2026-09-10
 
 ## 1. Objective
@@ -38,9 +38,9 @@ Plan より狭くした点が2つある。capabilities は Node 自身のもの�
 | 種別 | 実施内容 | 結果 |
 | --- | --- | --- |
 | 自動 | typecheck node / web / cli | Pass |
-| 自動 | `vitest run` 全体 | **Pass 54 files / 592 tests**（着手前 568、回帰なし） |
+| 自動 | `vitest run` 全体 | **Pass 54 files / 599 tests**（着手前 568、回帰なし） |
 | 自動 | `electron-vite build`、`git diff --check` | Pass |
-| 自動 | 変異テスト（generic entrance の guard を削除） | 対応テストが落ちることを確認 |
+| 自動 | 変異テスト（generic entrance・reviewId検査・レビュー束縛・導出hash照合の各guardを削除） | いずれも対応テストが落ちることを確認 |
 | 手動 | **実Runtime** `run-46fb83d3a359e5aec308` | prepare → 3 Gate 承認 → derive-packets → Dispatch承認 → dispatch を**手書きPacket0件**で完走。proposal/critic とも `completed` |
 | 手動 | 実Runtime での自己レビュー記録 | `doneEligible: false`、`the reviewer and the implementer are both "Claude Code"` を検出 |
 
@@ -50,12 +50,27 @@ Plan より狭くした点が2つある。capabilities は Node 自身のもの�
 
 ## 5. レビュー指摘と対応
 
-Codexのレビューは接続エラーで中断し、最終所見は受け取っていない。中断前に1件の指摘があり、これは反映した。
+Codexは **P1を6件、P2を3件** 指摘した。全件を `4cdeb60` と `e429cd6` で反映した。
 
-- **generic Thread entrance の権限迂回**: `startApprovedThread` は `approved-tasks/` の Packet を Frontdoor Decision を見ずに実行する。手作業配置しかなかった間は安全だったが、ADFが同じ場所へ Packet を導出するようになると、**Dispatch Gate を通らずに Run の Node を実行できる**。検証したところ現状は塞がっている（`asIdentifier` が `:` を禁じ、子taskIdは `::` を含む）が、**これは偶然であり、識別子の形も childTaskId の規約もこの防御のために書かれていない**。`4cdeb60` で明示的な規則にした。テストも偶然に依存させず、受理される taskId へ同じ Packet を複製して guard 自体を検証している。
+| # | 指摘 | 対応 |
+| --- | --- | --- |
+| 1 | P1 generic Thread entrance が Frontdoor Decision を見ずに Packet を実行できる | `4cdeb60`。現状は塞がっていたが**偶然**（`asIdentifier` が `:` を禁じ子taskIdは `::` を含む）だったため明示的な規則にした |
+| 2 | P1 導出と承認の間で Packet を差し替えると、ADF生成物として承認される | 導出時にhashをLedgerへ記録し、Dispatch承認時に不一致を拒否。導出イベントの無いRunは無変更 |
+| 3 | P2 導出がNode固有の `scope.outOfScope` を落とす／binding無しの実装Runを通す | 双方修正 |
+| 4 | P1 期限切れPacketがUI上「準備済み」に見え、再導出経路が無い | `packetsReady` を「存在するか」から「dispatchできるか」へ変更 |
+| 5 | P2 `packetStillUsable` が `nodeId` を見ず、別Node用Packetを保護しうる | nodeIdを binding 判定へ追加 |
+| 6 | P1 **見てもいないRunを通すレビューを記録できる** | RunIDと実際に生成されたResult hashの引用を必須化 |
+| 7 | P1 **`reviewId` によるパストラバーサル** | 識別子として検証し、解決後パスがRunのreviewsディレクトリ内にあることも別途要求 |
+| 8 | P1 完了がCharterの要求する独立レビューを参照しない | ブロックはせず（Ownerの判断であり、既存Runを全て詰まらせる）、**未レビュー完了をDecisionへ明記**する形にした |
+| 9 | P2 レビューのファイル書き込みとLedger追記が非原子的 | 追記失敗時に孤児ファイルを削除（残ると再試行が排他書き込みで永久に失敗する） |
+
+指摘なしとされた領域: Dispatch Decision確定後のPacket差し替え拒否、`listReviewRuns` の改ざん検出の整合性、`inspect-reviews`／`prepare-implementation` 自体の権限。
+
+**7番は私が作り込んだ脆弱性である。** `reviewId` は呼び出し側のJSONに入って来る値で、非空文字列としてしか検査せずファイル名へ直接展開していた。`../../../../etc/adf-pwned` は runtime root の外へ解決する。
 
 ## 6. 残るリスク・未検証事項
 
-- **独立レビュー未完了。** 中断のため、`92791b1`〜`4cdeb60` は1件の指摘を除きレビューを受けていない。Charter の Completion Rule 上、本Taskを `Done` にはできない。
+- **反映後（`e429cd6`）のコードは未レビュー。** Charter の Completion Rule 上、本Taskを `Done` にはできない。
 - MCP には Candidate 系ツールが無いままである（窓口AIは accepted Candidate を消費できるが、一覧・確認・判定ができない）。
 - 実装Run経路は実Runtimeで未実行。自動テストのみ。
+- 8番はブロックではなく記録に留めた。**完了時に独立レビューを必須とするかはOwnerの方針判断**であり、必須化すると既存Runは全て完了できなくなる。
