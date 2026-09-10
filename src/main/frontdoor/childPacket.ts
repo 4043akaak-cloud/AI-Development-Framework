@@ -56,14 +56,17 @@ function packetContext(node: DecompositionNode, request: FrontdoorRequest): Appr
  * own Owner Gate. The Request's own out-of-scope list is carried into `forbiddenChanges` so the
  * Packet states the Owner's stated boundary and not only ADF's fixed one.
  */
-function packetTarget(request: FrontdoorRequest, run: OrchestrationRun): ApprovedTaskPacket['target'] {
+function packetTarget(request: FrontdoorRequest, run: OrchestrationRun, node: DecompositionNode): ApprovedTaskPacket['target'] {
   const fixed = ['external-send', 'write-canonical', 'commit', 'push', 'merge']
   return {
     repository: request.projectRef,
     branch: `frontdoor/${run.runId}`,
     worktree: `frontdoor://${run.runId}`,
     allowedFiles: [],
-    forbiddenChanges: [...new Set([...fixed, ...request.scope.outOfScope])]
+    // The Node's own out-of-scope list is carried too, not just the Request's. A Node may narrow
+    // the Request further, and dropping that would issue a Packet stating a wider boundary than the
+    // Decomposition the Owner approved.
+    forbiddenChanges: [...new Set([...fixed, ...request.scope.outOfScope, ...node.scope.outOfScope])]
   }
 }
 
@@ -99,7 +102,7 @@ function deriveOne(request: FrontdoorRequest, run: OrchestrationRun, node: Decom
     },
     adapter: 'frontdoor-child',
     fixtureMode: 'success',
-    target: packetTarget(request, run),
+    target: packetTarget(request, run, node),
     adapterPlan,
     frontdoorBinding: { runId: run.runId, requestHash: run.requestHash, planHash: run.planHash, nodeId: node.nodeId },
     ...(run.runKind === 'implementation' && run.implementationBinding ? { implementationBinding: run.implementationBinding } : {})
@@ -130,6 +133,10 @@ export function deriveChildPackets(request: FrontdoorRequest, run: Orchestration
   if (plan.planHash !== run.planHash) errors.push('the Plan does not match the Run')
   if (plan.requestId !== request.requestId) errors.push('the Plan does not belong to this Request')
   if (plan.nodes.length === 0) errors.push('the Plan has no Nodes')
+  // An implementation Run without its binding cannot produce a Packet that carries one, and
+  // `assertPacketMatchesNode` only compares the binding when the Run declares one — so the pair
+  // would agree on `undefined` and dispatch a child with no provenance at all.
+  if (run.runKind === 'implementation' && !run.implementationBinding) errors.push('the Run is an implementation Run but carries no implementationBinding')
   if (errors.length) throw new ChildPacketDerivationError(errors)
 
   const packets: Record<string, ApprovedTaskPacket> = {}

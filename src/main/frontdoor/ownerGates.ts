@@ -14,6 +14,7 @@ import { validateImplementationCandidate } from './candidateArtifact'
 import { assertImplementationSourceArtifacts } from './implementationBinding'
 import { assertNoSymlinkComponents, safeRuntimePath } from './pathIntegrity'
 import { latestWorkPlaneArtifactManifest, readVerifiedWorkPlaneArtifact } from './workPlaneArtifact'
+import { listReviewRuns, reviewClearance, reviewTargetHash } from './reviewRecord'
 
 const decisionByGate: Record<OwnerGate, readonly OwnerDecision[]> = {
   intake: ['clarify', 'edit', 'reject', 'proceed', 'stop'],
@@ -226,6 +227,27 @@ async function assertAggregateResultsCurrent(runtimeRoot: string, runId: string,
   return legacyNodes
 }
 
+/**
+ * When ADF derived the Packets, the Owner must be approving those bytes.
+ *
+ * The Dispatch Decision hashes whatever is in `approved-tasks/` at approval time, which is correct
+ * for Packets the Owner placed by hand. It is not sufficient for derived ones: a file swapped
+ * between derivation and approval would be bound into the Decision as if ADF had produced it, and
+ * every later check compares against that Decision rather than against what was generated.
+ *
+ * Runs with no derivation event are unaffected. Hand-placed Packets were never ADF output, so there
+ * is nothing to compare them against and nothing is being loosened for them.
+ */
+function assertDerivedPacketsUnchanged(events: readonly Awaited<ReturnType<typeof readRunEvents>>[number][], nodeIds: readonly string[], packetHashes: DispatchPacketHashes | undefined): void {
+  const derived = [...events].reverse().find((event) => event.type === 'frontdoor.child-packets-derived')
+  if (!derived) return
+  const recorded = derived.payload.packetHashes
+  if (!recorded || typeof recorded !== 'object') throw new Error('the recorded child Packet derivation is unreadable')
+  const expected = recorded as Record<string, unknown>
+  const changed = nodeIds.filter((nodeId) => typeof expected[nodeId] === 'string' && packetHashes?.[nodeId] !== expected[nodeId])
+  if (changed.length) throw new Error(`a derived child Packet changed after ADF generated it: ${changed.join(', ')}`)
+}
+
 function hasDecision(events: Awaited<ReturnType<typeof readRunEvents>>, gate: OwnerGate, decisions: readonly OwnerDecision[], targetHash: string): boolean {
   return events.some((event) => {
     if (event.type !== 'frontdoor.owner-decision-recorded') return false
@@ -386,6 +408,7 @@ export class FrontdoorOwnerGateService {
       if (!hasDecision(events, 'completion-shape', ['approve'], completionShapeTargetHash(run, request.requestedOutput))) throw new Error('Dispatch requires an approved Completion Shape')
       if (!hasDecision(events, 'decomposition', ['approve-selected'], plan.planHash)) throw new Error('Dispatch requires an approved Decomposition')
       const packetHashes = await readApprovedPacketHashes(this.runtimeRoot, run, selectedNodeIds)
+      assertDerivedPacketsUnchanged(events, selectedNodeIds, packetHashes)
       const targetHash = dispatchTargetHash(run, selectedNodeIds, packetHashes)
       const envelope = buildDecisionEnvelope(run, 'dispatch', 'dispatch', targetHash, approvedBy, this.clock().toISOString(), { note })
       if (!canDispatch(run, selectedNodeIds, envelope, packetHashes)) throw new Error('Dispatch approval is invalid or stale')
@@ -502,6 +525,16 @@ export class FrontdoorOwnerGateService {
     }
   }
 
+  /**
+   * Whether an independent review clears this Run, expressed on the Completion Decision when it
+   * does not. Returns undefined when a current, untampered, independently authored review exists —
+   * the ordinary case needs no annotation.
+   */
+  private async completionReviewClearance(runId: string, run: OrchestrationRun): Promise<{ route: 'completed-without-independent-review'; nodeIds: string[] } | undefined> {
+    const clearance = reviewClearance(await listReviewRuns(this.runtimeRoot, runId), reviewTargetHash(run))
+    return clearance.cleared ? undefined : { route: 'completed-without-independent-review', nodeIds: clearance.blockers.slice(0, 8) }
+  }
+
   async completeRun(runId: string, approvedBy: string, note?: string): Promise<OrchestrationRun> {
     const claim = await claimRun(this.runtimeRoot, runId, `owner-completion-${process.pid}`)
     try {
@@ -515,7 +548,13 @@ export class FrontdoorOwnerGateService {
       const reviewDecision = latestResultReviewDecision(events, targetHash)
       const reviewed = reviewDecision?.decision === 'accept'
       if (reviewDecision?.decision === 'accept') assertDecisionNotExpired(reviewDecision, this.clock().toISOString())
-      const envelope = buildDecisionEnvelope(run, 'completion', 'complete', targetHash, approvedBy, this.clock().toISOString(), { note })
+      // The Charter makes an independent review a condition of Done. Completion does not block on
+      // it — the Owner's completion is the Owner's call, and blocking would strand every Run
+      // recorded before reviews were storable at all. What it must not do is stay silent: a Run
+      // completed with no independent review, or with one that did not clear it, says so on the
+      // Decision itself rather than looking identical to a reviewed one.
+      const reviewClearanceNote = await this.completionReviewClearance(runId, run)
+      const envelope = buildDecisionEnvelope(run, 'completion', 'complete', targetHash, approvedBy, this.clock().toISOString(), { note, ...(reviewClearanceNote ? { compatibility: reviewClearanceNote } : {}) })
       if (!canComplete(run, envelope, targetHash, reviewed)) throw new Error('Completion requires an accepted Result review bound to the current aggregate')
       await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.owner-decision-recorded', { decision: envelope })
       await recordRunEvent(this.runtimeRoot, runId, 'frontdoor.completion-approved', { decision: envelope })

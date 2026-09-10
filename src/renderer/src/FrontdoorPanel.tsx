@@ -680,9 +680,10 @@ export default function FrontdoorPanel({ minimal = false }: { minimal?: boolean 
                   <button type="button" className="text-button" disabled={!canOwnerAct} onClick={() => void approveCurrentGate()}>{gateLabels[currentGate]}を承認</button>
                 )}
                 {currentGate === 'dispatch' && !packetsReady && (
-                  // Derives the child Packets from the Plan approved one Gate ago. It grants
+                  // Shown whenever the Packets are not usable — missing, expired, or bound to a
+                  // state the Run has left — not only when they are absent. Derivation grants
                   // nothing: the Dispatch Decision below still binds the exact bytes this writes.
-                  <button type="button" className="text-button" disabled={!canOwnerAct} title="承認済みPlanから子Packetを生成します。Dispatch承認はこの後です。" onClick={() => void runAction(() => window.adfFrontdoor.derivePackets({ runId: run.runId, approvalId: `approval-${run.runId}`, approvedBy: approvedBy.trim() }))}>承認済みPlanから子Packetを生成</button>
+                  <button type="button" className="text-button" disabled={!canOwnerAct} title="承認済みPlanから子Packetを生成します。Dispatch承認はこの後です。" onClick={() => void runAction(() => window.adfFrontdoor.derivePackets({ runId: run.runId, approvalId: `approval-${run.runId}-${Date.now()}`, approvedBy: approvedBy.trim() }))}>承認済みPlanから子Packetを生成</button>
                 )}
                 {currentGate === 'dispatch' && (
                   <button type="button" className="text-button" disabled={!canOwnerAct || !dispatchApproved || !packetsReady} title={!packetsReady ? '先に「承認済みPlanから子Packetを生成」を実行してください' : undefined} onClick={() => void runAction(() => window.adfFrontdoor.dispatch(run.runId))}>承認済みNodeをDispatch</button>

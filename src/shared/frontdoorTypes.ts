@@ -37,7 +37,8 @@ export interface OwnerDecisionEnvelope {
 }
 
 export interface OwnerDecisionCompatibility {
-  route: 'legacy-aggregate-missing-child-result-hash'
+  route: 'legacy-aggregate-missing-child-result-hash' | 'completed-without-independent-review'
+  /** For a legacy aggregate, the Node ids. For an uncleared completion, why the review did not clear. */
   nodeIds: string[]
 }
 
@@ -453,6 +454,8 @@ export type FrontdoorEventType =
   | 'frontdoor.candidate-request-created'
   /** An independent review recorded against a Run. Not replayed: it never changes Run state. */
   | 'frontdoor.review-run-recorded'
+  /** ADF derived the child Packets from the approved Plan, with the hashes it produced. Not replayed. */
+  | 'frontdoor.child-packets-derived'
 
 
 export interface FrontdoorLedgerEvent<TPayload extends Record<string, unknown> = Record<string, unknown>> {

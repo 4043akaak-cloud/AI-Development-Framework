@@ -16,7 +16,7 @@ import { proposeObsidianUpdate } from './obsidianProposal'
 import { deriveChildPackets, type ChildPacketApproval } from './childPacket'
 import { listReviewRuns, recordReviewRun, reviewClearance, reviewTargetHash } from './reviewRecord'
 import type { FrontdoorReviewStatus, RecordedReviewRun } from '../../shared/reviewTypes'
-import { readPlan, readProjectedRun, readRequest } from './ledger'
+import { readPlan, readProjectedRun, readRequest, recordRunEvent } from './ledger'
 import type { ObsidianWriteProposal } from '../../shared/obsidianProposalTypes'
 
 export interface FrontdoorApprovalInput {
@@ -167,14 +167,17 @@ function safeError(error: unknown): string {
  * approval, or a binding to a Request or Plan the Run has moved past cannot be dispatched by
  * anyone, so keeping it would protect nothing and strand the Run.
  */
-async function packetStillUsable(file: string, run: OrchestrationRun, now: Date): Promise<boolean> {
+async function packetStillUsable(file: string, run: OrchestrationRun, now: Date, nodeId: string): Promise<boolean> {
   let existing: ApprovedTaskPacket
   try {
     existing = await readJson<ApprovedTaskPacket>(file)
   } catch {
     return false
   }
-  if (existing.frontdoorBinding?.runId !== run.runId || existing.frontdoorBinding.requestHash !== run.requestHash || existing.frontdoorBinding.planHash !== run.planHash) return false
+  // The nodeId is part of the binding: a structurally valid Packet for a different Node would
+  // otherwise be treated as this Node's and protected from replacement, only to be rejected later
+  // by assertPacketMatchesNode with the Owner unable to re-derive it.
+  if (existing.frontdoorBinding?.runId !== run.runId || existing.frontdoorBinding.requestHash !== run.requestHash || existing.frontdoorBinding.planHash !== run.planHash || existing.frontdoorBinding.nodeId !== nodeId) return false
   try {
     validateApprovedTask(existing, now)
     return true
@@ -272,13 +275,20 @@ async function packetsForRun(orchestrator: FrontdoorOrchestrator, run: Orchestra
   return packets
 }
 
+/**
+ * Whether every Node's Packet could actually be dispatched right now.
+ *
+ * This used to answer "does the file exist", which was the same question while Packets were placed
+ * by hand and never regenerated. It is not the same question any more: a derived approval expires,
+ * and an expired Packet on disk would report ready, disable the derivation button, and leave the
+ * Owner with a Dispatch that fails and no way to fix it from the UI.
+ */
 async function packetsReady(orchestrator: FrontdoorOrchestrator, run: OrchestrationRun): Promise<boolean> {
-  try {
-    await Promise.all(run.nodes.map((record) => access(packetPath(orchestrator.runtimeRoot, record.childTaskId))))
-    return true
-  } catch {
-    return false
+  const now = new Date()
+  for (const record of run.nodes) {
+    if (!await packetStillUsable(packetPath(orchestrator.runtimeRoot, record.childTaskId), run, now, record.node.nodeId)) return false
   }
+  return true
 }
 
 async function runIds(orchestrator: FrontdoorOrchestrator): Promise<string[]> {
@@ -377,7 +387,7 @@ export function deriveFrontdoorChildPackets(orchestrator: FrontdoorOrchestrator,
     for (const node of plan.nodes) {
       const packet = packets[node.nodeId]
       const file = packetPath(orchestrator.runtimeRoot, packet.taskId)
-      if (await packetStillUsable(file, run, approvedAt)) throw new Error(`a usable child Packet already exists and was not replaced: approved-tasks/${packet.taskId}.json`)
+      if (await packetStillUsable(file, run, approvedAt, node.nodeId)) throw new Error(`a usable child Packet already exists and was not replaced: approved-tasks/${packet.taskId}.json`)
       await writeFile(file, `${JSON.stringify(packet, null, 2)}\n`, 'utf8')
       summaries.push({
         nodeId: node.nodeId,
@@ -389,6 +399,17 @@ export function deriveFrontdoorChildPackets(orchestrator: FrontdoorOrchestrator,
         path: path.relative(orchestrator.runtimeRoot, file)
       })
     }
+    // Recording what was generated is what makes "the Owner approves the bytes ADF produced" true.
+    // Without it the Dispatch Gate hashes whatever happens to be in approved-tasks/ at approval
+    // time, so a file swapped between derivation and approval would be approved as if ADF had
+    // written it.
+    await recordRunEvent(orchestrator.runtimeRoot, runId, 'frontdoor.child-packets-derived', {
+      approvalId,
+      approvedBy,
+      derivedAt: approval.approvedAt,
+      expiresAt: approval.expiresAt,
+      packetHashes: Object.fromEntries(summaries.map((entry) => [entry.nodeId, entry.packetHash]))
+    })
     return summaries
   })
 }

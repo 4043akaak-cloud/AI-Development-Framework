@@ -1,3 +1,4 @@
+import { rm } from 'node:fs/promises'
 import path from 'node:path'
 import type { FrontdoorLedgerEvent } from '../../shared/frontdoorTypes'
 import type { InspectedReviewRun, RecordedReviewRun, ReviewFinding, ReviewPacket, ReviewRun } from '../../shared/reviewTypes'
@@ -37,6 +38,9 @@ export function reviewTargetHash(run: { runId: string; requestHash: string; plan
   })
 }
 
+/** No slash, no dot-dot, no colon: this value is interpolated into a path. */
+const SAFE_REVIEW_ID = /^(?!\.)[A-Za-z0-9._-]{1,120}$/
+
 function assertFindingShape(finding: unknown, index: number, errors: string[]): void {
   const entry = finding as Partial<ReviewFinding>
   if (!entry || typeof entry !== 'object') return void errors.push(`findings[${index}] is not an object`)
@@ -57,7 +61,10 @@ export function validateReviewRun(value: unknown): ReviewRun {
   const errors: string[] = []
   const review = value as Partial<ReviewRun>
   if (!review || typeof review !== 'object') throw new ReviewRecordRejectedError(['the review is not an object'])
-  if (typeof review.reviewId !== 'string' || !review.reviewId.trim()) errors.push('reviewId is required')
+  // `reviewId` becomes a filename. Checked as an identifier, not merely as a non-empty string:
+  // it arrives inside caller-supplied JSON, and path.join happily resolves "../../.." out of the
+  // Run directory and out of the runtime root entirely.
+  if (typeof review.reviewId !== 'string' || !SAFE_REVIEW_ID.test(review.reviewId)) errors.push('reviewId must be 1-120 characters of letters, digits, dot, underscore or hyphen')
   if (typeof review.reviewer !== 'string' || !review.reviewer.trim()) errors.push('reviewer is required')
   if (typeof review.implementer !== 'string' || !review.implementer.trim()) errors.push('implementer is required')
   if (!['complete', 'incomplete', 'not-run'].includes(review.completion as string)) errors.push('completion is invalid')
@@ -77,6 +84,31 @@ export function validateReviewRun(value: unknown): ReviewRun {
 }
 
 /**
+ * A review must name the Run it examined.
+ *
+ * Without this the packet is free text: a review whose `targetTaskId` is some unrelated Task, whose
+ * `files` list names nothing in this Run, and whose reviewer never opened it, would clear the Run
+ * simply by being well-formed. That is the prose-in-a-Task-header problem with a JSON schema
+ * around it.
+ *
+ * What is checked is provenance, not diligence — no automated check can tell that a reviewer
+ * actually read something. It establishes that this review is *about* this Run: it cites the Run,
+ * and it cites at least one Result the Run actually produced. A reviewer who cites those and reads
+ * nothing can still lie, but they can no longer do it by accident or by reusing another Run's
+ * review.
+ */
+function assertReviewExaminedThisRun(run: { runId: string; nodes: readonly { node: { nodeId: string }; resultHash?: string }[] }, review: ReviewRun): void {
+  const errors: string[] = []
+  const cited = [review.packet.targetTaskId, review.packet.revisionRange, ...review.packet.files, ...review.packet.claims].join('\n')
+  if (!cited.includes(run.runId)) errors.push(`the review does not cite this Run (${run.runId}) anywhere in its packet`)
+  const resultHashes = run.nodes.map((record) => record.resultHash).filter((hash): hash is string => typeof hash === 'string')
+  if (resultHashes.length > 0 && !resultHashes.some((hash) => cited.includes(hash))) {
+    errors.push('the review cites none of the Result hashes this Run produced')
+  }
+  if (errors.length) throw new ReviewRecordRejectedError(errors)
+}
+
+/**
  * Records one review against one Run.
  *
  * `assessReview` runs here and its verdict is stored alongside the review, so the Ledger carries
@@ -91,6 +123,7 @@ export function validateReviewRun(value: unknown): ReviewRun {
 export async function recordReviewRun(runtimeRoot: string, run: { runId: string; requestId: string; requestHash: string; planHash: string; nodes: readonly { node: { nodeId: string }; resultHash?: string }[] }, review: ReviewRun, recordedBy: string, now: string): Promise<RecordedReviewRun> {
   const validated = validateReviewRun(review)
   if (!recordedBy.trim()) throw new ReviewRecordRejectedError(['recordedBy is required'])
+  assertReviewExaminedThisRun(run, validated)
   const record: RecordedReviewRun = {
     reviewId: validated.reviewId,
     runId: run.runId,
@@ -109,6 +142,10 @@ export async function recordReviewRun(runtimeRoot: string, run: { runId: string;
   const directory = path.join(runDirectory(root, run.runId), 'reviews')
   await assertNoSymlinkComponents(root, directory)
   const file = path.join(directory, `${validated.reviewId}.json`)
+  // Belt and braces: even with the identifier check above, the resolved file must sit inside the
+  // Run's own reviews directory. A guard that depends on one regex staying correct is one edit away
+  // from being no guard at all.
+  if (path.dirname(file) !== directory || path.relative(root, file).startsWith('..')) throw new ReviewRecordRejectedError([`reviewId does not resolve inside the Run's reviews directory: ${validated.reviewId}`])
   try {
     // Exclusive: a review is evidence of a moment. Replacing one in place would let a later, kinder
     // reading quietly overwrite the one that found something.
@@ -117,19 +154,31 @@ export async function recordReviewRun(runtimeRoot: string, run: { runId: string;
     if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new ReviewRecordRejectedError([`a review with this id is already recorded: ${validated.reviewId}`])
     throw error
   }
-  await recordRunEvent(runtimeRoot, run.runId, 'frontdoor.review-run-recorded', {
+  try {
+    await appendReviewEvent(runtimeRoot, run.runId, record, ref, now)
+  } catch (error) {
+    // The file is written first so the event can name its hash, which leaves a window where the
+    // evidence exists with no authoritative event. Removing the orphan closes it: a retry would
+    // otherwise hit the exclusive write and fail forever on a review that was never recorded.
+    await rm(file, { force: true })
+    throw error
+  }
+  return record
+}
+
+async function appendReviewEvent(runtimeRoot: string, runId: string, record: RecordedReviewRun, ref: string, now: string): Promise<void> {
+  await recordRunEvent(runtimeRoot, runId, 'frontdoor.review-run-recorded', {
     reviewId: record.reviewId,
     reviewRef: ref,
     reviewHash: hashJson(record),
     targetHash: record.targetHash,
-    reviewer: validated.reviewer,
-    implementer: validated.implementer,
-    completion: validated.completion,
+    reviewer: record.review.reviewer,
+    implementer: record.review.implementer,
+    completion: record.review.completion,
     doneEligible: record.outcome.doneEligible,
     blockers: record.outcome.blockers,
     recordedBy: record.recordedBy
   }, now)
-  return record
 }
 
 function reviewEvents(events: readonly FrontdoorLedgerEvent[]): FrontdoorLedgerEvent[] {

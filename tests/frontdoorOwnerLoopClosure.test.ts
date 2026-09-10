@@ -133,6 +133,25 @@ describe('the Owner loop closes without leaving ADF', () => {
     expect(second.stderr).toContain('usable child Packet already exists and was not replaced')
   })
 
+  it('refuses to approve a Dispatch whose derived Packet was swapped', async () => {
+    const { runtimeRoot, runId } = await preparedRun()
+    await approveThrough(runtimeRoot, runId)
+    expect((await run(['derive-packets', '--runtime-root', runtimeRoot, '--run-id', runId, '--approval-id', 'approval-closure-001', '--approved-by', 'Project Owner'])).code).toBe(0)
+
+    // The Dispatch Gate hashes whatever is in approved-tasks/ at approval time. For a derived
+    // Packet that is not enough: a swap here would be bound into the Decision as if ADF had
+    // produced it, and every later check compares against the Decision, not against what was
+    // generated.
+    const packetPath = path.join(runtimeRoot, 'approved-tasks', `${request.requestId}::proposal.json`)
+    const swapped = JSON.parse(await readFile(packetPath, 'utf8'))
+    swapped.objective = 'swapped between derivation and approval'
+    await writeFile(packetPath, `${JSON.stringify(swapped, null, 2)}\n`, 'utf8')
+
+    const approval = await run(['approve', '--runtime-root', runtimeRoot, '--run-id', runId, '--gate', 'dispatch', '--decision', 'dispatch', '--nodes', 'proposal', '--approved-by', 'Project Owner'])
+    expect(approval.code).toBe(1)
+    expect(approval.stderr).toContain('changed after ADF generated it')
+  })
+
   it('refuses to derive outside the Dispatch Gate', async () => {
     const { runtimeRoot, runId } = await preparedRun()
     const early = await run(['derive-packets', '--runtime-root', runtimeRoot, '--run-id', runId, '--approval-id', 'approval-closure-001', '--approved-by', 'Project Owner'])
@@ -156,13 +175,16 @@ describe('an independent review is recorded against the Run', () => {
     await run(['derive-packets', '--runtime-root', runtimeRoot, '--run-id', runId, '--approval-id', 'approval-closure-001', '--approved-by', 'Project Owner'])
     await run(['approve', '--runtime-root', runtimeRoot, '--run-id', runId, '--gate', 'dispatch', '--decision', 'dispatch', '--nodes', 'proposal', '--approved-by', 'Project Owner'])
     await run(['dispatch', '--runtime-root', runtimeRoot, '--run-id', runId])
-    return { root, runtimeRoot, runId }
+    const inspected = await run(['inspect', '--runtime-root', runtimeRoot, '--run-id', runId])
+    const resultHash = (inspected.json.run as { nodes: Array<{ resultHash: string }> }).nodes[0].resultHash
+    return { root, runtimeRoot, runId, resultHash }
   }
 
-  function reviewDocument(overrides: Record<string, unknown> = {}) {
+  /** Cites the Run and the Result it produced, as a review of that Run must. */
+  function reviewDocument(runId: string, resultHash: string, overrides: Record<string, unknown> = {}) {
     return {
       reviewId: 'review-closure-001',
-      packet: { packetId: 'review-packet-001', targetTaskId: 'ADF-EXAMPLE-001', revisionRange: 'abc..def', files: ['src/example.ts'], claims: ['the guard is wired'], questions: [], createdAt: '2026-09-09T00:00:00.000Z' },
+      packet: { packetId: 'review-packet-001', targetTaskId: runId, revisionRange: 'abc..def', files: ['src/example.ts'], claims: [`Result ${resultHash} を確認した`], questions: [], createdAt: '2026-09-09T00:00:00.000Z' },
       reviewer: 'Codex',
       implementer: 'Claude Code',
       completion: 'complete',
@@ -172,14 +194,14 @@ describe('an independent review is recorded against the Run', () => {
   }
 
   it('reports the Run as uncleared until a review covering it is recorded', async () => {
-    const { root, runtimeRoot, runId } = await executedRun()
+    const { root, runtimeRoot, runId, resultHash } = await executedRun()
 
     const before = await run(['inspect-reviews', '--runtime-root', runtimeRoot, '--run-id', runId])
     expect(before.json.cleared).toBe(false)
     expect((before.json.blockers as string[]).join()).toContain('no independent review has been recorded')
 
     const reviewPath = path.join(root, 'review.json')
-    await writeFile(reviewPath, `${JSON.stringify(reviewDocument())}\n`, 'utf8')
+    await writeFile(reviewPath, `${JSON.stringify(reviewDocument(runId, resultHash))}\n`, 'utf8')
     const recorded = await run(['record-review', '--runtime-root', runtimeRoot, '--run-id', runId, '--review-file', reviewPath, '--approved-by', 'Project Owner'])
     expect(recorded.stderr).toBe('')
     expect(recorded.code).toBe(0)
@@ -189,10 +211,10 @@ describe('an independent review is recorded against the Run', () => {
   })
 
   it('exits non-zero for a review that does not clear the Run, and still records it', async () => {
-    const { root, runtimeRoot, runId } = await executedRun()
+    const { root, runtimeRoot, runId, resultHash } = await executedRun()
     const reviewPath = path.join(root, 'self-review.json')
     // The failure the review model was built from: the implementer reviewing their own work.
-    await writeFile(reviewPath, `${JSON.stringify(reviewDocument({ reviewer: 'Claude Code' }))}\n`, 'utf8')
+    await writeFile(reviewPath, `${JSON.stringify(reviewDocument(runId, resultHash, { reviewer: 'Claude Code' }))}\n`, 'utf8')
 
     const recorded = await run(['record-review', '--runtime-root', runtimeRoot, '--run-id', runId, '--review-file', reviewPath, '--approved-by', 'Project Owner'])
     // Non-zero so a script cannot treat "a review happened" as "the review passed" — but recorded
