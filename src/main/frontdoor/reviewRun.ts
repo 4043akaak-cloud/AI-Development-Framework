@@ -1,5 +1,5 @@
 import { hashJson } from '../jobLoop/hash'
-import type { FindingDisposition, ReviewFinding, ReviewPacket, ReviewRun, ReviewSeverity } from '../../shared/reviewTypes'
+import type { FindingDisposition, ReviewFinding, ReviewOutcome, ReviewPacket, ReviewRun, ReviewSeverity } from '../../shared/reviewTypes'
 
 /**
  * The checks that made the difference when reviews were run by hand, and the one that did not hold.
@@ -44,15 +44,7 @@ export function assertIndependent(implementer: string, reviewer: string): void {
 
 const BLOCKING: readonly ReviewSeverity[] = ['P0', 'P1']
 
-export interface ReviewOutcome {
-  /** Whether the target Task may be considered for Done on the strength of this review. */
-  doneEligible: boolean
-  /** Why not. Empty when eligible. */
-  blockers: string[]
-  bySeverity: Record<ReviewSeverity, number>
-  unreproduced: number
-  undecided: number
-}
+export type { ReviewOutcome } from '../../shared/reviewTypes'
 
 /**
  * Whether a review actually clears the Task, rather than whether one happened.

@@ -72,3 +72,45 @@ export interface ReviewRun {
   findings: ReviewFinding[]
   reviewedAt?: string
 }
+
+export interface ReviewOutcome {
+  /** Whether the target Task may be considered for Done on the strength of this review. */
+  doneEligible: boolean
+  /** Why not. Empty when eligible. */
+  blockers: string[]
+  bySeverity: Record<ReviewSeverity, number>
+  unreproduced: number
+  undecided: number
+}
+
+/**
+ * A review as it sits in the Ledger, bound to the Run it reviewed.
+ *
+ * `ReviewRun` on its own has no `runId`: it was written as the arithmetic of a review, deliberately
+ * without I/O. That is why a review has so far been a sentence in a Task header, retyped by hand
+ * from a terminal, with nothing tying it to the Run it judged. This is the binding.
+ *
+ * It lives in `shared` because it crosses IPC: the renderer shows it, and the renderer cannot see
+ * main-process modules.
+ */
+export interface RecordedReviewRun {
+  reviewId: string
+  runId: string
+  requestId: string
+  /** Hash of the reviewed state, so a later reader can tell whether the review still applies. */
+  targetHash: string
+  review: ReviewRun
+  outcome: ReviewOutcome
+  recordedAt: string
+  recordedBy: string
+}
+
+/** A recorded review as read back: whether it still describes this Run, and whether it still matches its Ledger hash. */
+export type InspectedReviewRun = RecordedReviewRun & { stale: boolean; tampered: boolean }
+
+export interface FrontdoorReviewStatus {
+  targetHash: string
+  cleared: boolean
+  blockers: string[]
+  reviews: InspectedReviewRun[]
+}
