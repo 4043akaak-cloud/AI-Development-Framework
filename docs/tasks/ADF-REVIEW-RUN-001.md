@@ -1,6 +1,6 @@
 # Task — ADF-REVIEW-RUN-001: 独立レビューを記録型にする
 
-> Status: `Verifying` — 実装・検証完了。独立レビューとOwner完了承認が残る。
+> Status: `Verifying` — 実装・検証完了。**Frontdoor接続と永続化は `ADF-OWNER-LOOP-CLOSURE-001`（2026-09-10）で実装済み**（`frontdoor-runs/<runId>/reviews/` とLedgerイベント、target hashによるstale判定）。独立レビューとOwner完了承認が残る。
 > Type: Implementation + Verification
 > Owner: Project Owner
 > Implementer: Claude Code
