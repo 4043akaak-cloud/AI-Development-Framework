@@ -4,7 +4,7 @@
 > Type: Implementation + Verification
 > Owner: Project Owner
 > Implementation: Claude Code（`92791b1`, `3d39b32`, `4352d94`, `cdbfc47`, `4cdeb60`）
-> Independent Review: Codex（2026-09-10。P1×6・P2×3 を受領し全件反映。`e429cd6`）
+> Independent Review: Codex ×2（2026-09-10。1回目 P1×6・P2×3 → `4cdeb60` `e429cd6`。2回目 P1×2・P2×4 → `b37da51`。**未対応P2が3件残る**）
 > Date: 2026-09-10
 
 ## 1. Objective
@@ -38,7 +38,7 @@ Plan より狭くした点が2つある。capabilities は Node 自身のもの�
 | 種別 | 実施内容 | 結果 |
 | --- | --- | --- |
 | 自動 | typecheck node / web / cli | Pass |
-| 自動 | `vitest run` 全体 | **Pass 54 files / 599 tests**（着手前 568、回帰なし） |
+| 自動 | `vitest run` 全体 | **Pass 54 files / 602 tests**（着手前 568、回帰なし） |
 | 自動 | `electron-vite build`、`git diff --check` | Pass |
 | 自動 | 変異テスト（generic entrance・reviewId検査・レビュー束縛・導出hash照合の各guardを削除） | いずれも対応テストが落ちることを確認 |
 | 手動 | **実Runtime** `run-46fb83d3a359e5aec308` | prepare → 3 Gate 承認 → derive-packets → Dispatch承認 → dispatch を**手書きPacket0件**で完走。proposal/critic とも `completed` |
@@ -68,9 +68,28 @@ Codexは **P1を6件、P2を3件** 指摘した。全件を `4cdeb60` と `e429c
 
 **7番は私が作り込んだ脆弱性である。** `reviewId` は呼び出し側のJSONに入って来る値で、非空文字列としてしか検査せずファイル名へ直接展開していた。`../../../../etc/adf-pwned` は runtime root の外へ解決する。
 
+### 5.2 2回目のレビュー（反映後のコードに対して、`b37da51`）
+
+1回目の対応が入った状態を再レビューし、**P1を2件・P2を4件**指摘した。P1は両方とも修正した。
+
+| # | 指摘 | 対応 |
+| --- | --- | --- |
+| 1 | P1 **`dispatch → question → answer → dispatch` が完走できない** | 修正。再現してから直した |
+| 2 | P1 **中身の無いReview PacketでRunをclearedにできる** | 修正 |
+| 3 | P2 `reviewTargetHash` がレビュー対象そのものを束縛していない | **未対応** |
+| 4 | P2 導出がRun claim／atomic batchでない | **未対応** |
+| 5 | P2 contextの意味付けが位置依存、Matcherが完全一致でない | **未対応** |
+| 6 | P2 実装PacketをDispatch Gate前に active approval として materialize できる | **未対応** |
+
+**1番は既存の欠陥で、私の変更が原因ではない。** ただしQuestionを出した1 Node構成のRunが詰まる以上、「Ownerがループを離れずに一周できる」という本Taskの目的に対する穴であり、範囲内として直した。Questionに回答するとRunとNodeが承認時と同一状態へ戻るため、2回目のDispatchが1回目と同じtarget hashになり、`approveDispatch` は既存Decisionを返し、dispatch はそれを消費済みとして拒否していた。Dispatch承認にLedger由来のepochを持たせ、各試行が独自のDecisionになるようにした（Runへ新フィールドを足すとreplayが完全再現しない限り既存Runが全て読めなくなるため、保存せず導出する。epoch 0 では省略するので既存Decisionのtarget hashは不変）。
+
+**2番も私の作り込みである。** 記録入口は `files`／`claims` が配列であることしか見ておらず、`buildReviewPacket` が非空を要求しているのにIPC経由でそれを迂回できた。さらにRun/Resultの引用がpacket全体に対する部分文字列検索だったため、`revisionRange` にRun IDとResult hashを貼るだけで通った。構造化フィールド（`reviewedRunId`／`reviewedResultHashes`）による厳密照合へ変更し、**Runが生成した全Resultを網羅すること**を要求した。
+
 ## 6. 残るリスク・未検証事項
 
-- **反映後（`e429cd6`）のコードは未レビュー。** Charter の Completion Rule 上、本Taskを `Done` にはできない。
+- **未対応のP2が4件ある**（2回目レビューの3〜6番）。いずれも「現状の設計意図に対しては妥当だが、より強くできる」種類の指摘で、Owner判断を要する設計変更を含む。
+- **反映後（`b37da51`）のコードは未レビュー。** Charter の Completion Rule 上、本Taskを `Done` にはできない。
+- 2回目レビューはテスト実行に失敗している（Vitestが一時ディレクトリ作成の `EPERM` で起動前に停止）。**静的レビューのみである。**
 - MCP には Candidate 系ツールが無いままである（窓口AIは accepted Candidate を消費できるが、一覧・確認・判定ができない）。
 - 実装Run経路は実Runtimeで未実行。自動テストのみ。
 - 8番はブロックではなく記録に留めた。**完了時に独立レビューを必須とするかはOwnerの方針判断**であり、必須化すると既存Runは全て完了できなくなる。
