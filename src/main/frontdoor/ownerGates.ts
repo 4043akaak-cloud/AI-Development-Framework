@@ -72,12 +72,30 @@ function boundedArtifactText(value: unknown, limit: number): string | undefined 
 
 type DispatchRun = Pick<OrchestrationRun, 'runId' | 'requestId' | 'planHash'> & Partial<Pick<OrchestrationRun, 'nodes'>>
 
-export function dispatchTargetHash(run: DispatchRun, nodeIds: readonly string[], packetHashes?: DispatchPacketHashes): string {
+/**
+ * How many times this Run has already consumed a Dispatch Decision.
+ *
+ * Answering a Question returns the Run and its Nodes to exactly the state they were approved in, so
+ * without this the second Dispatch has the same target hash as the first — `approveDispatch` hands
+ * back the original Decision and `assertDispatchApproved` then refuses it as already consumed.
+ * `dispatch → question → answer → dispatch` could not complete at all.
+ *
+ * Counting consumed dispatches makes each attempt its own Decision. It is derived from the Ledger
+ * rather than stored on the Run, because a new `OrchestrationRun` field would have to be reproduced
+ * exactly by replay or every existing Run would fail to read.
+ */
+export function dispatchEpoch(events: readonly { type: string }[]): number {
+  return events.filter((event) => event.type === 'frontdoor.approval-bound').length
+}
+
+export function dispatchTargetHash(run: DispatchRun, nodeIds: readonly string[], packetHashes?: DispatchPacketHashes, epoch = 0): string {
   return hashJson({
     runId: run.runId,
     requestId: run.requestId,
     planHash: run.planHash,
     nodeIds: [...nodeIds].sort(),
+    // Omitted at epoch 0 so every Decision recorded before this existed keeps its target hash.
+    ...(epoch > 0 ? { dispatchEpoch: epoch } : {}),
     executionContext: (run.nodes ?? [])
       .filter((record) => nodeIds.includes(record.node.nodeId))
       .map((record) => ({ nodeId: record.node.nodeId, state: record.state, resultHash: record.resultHash ?? null, childInputHash: record.childInputHash ?? null }))
@@ -115,10 +133,10 @@ export function candidateReviewTargetHash(runId: string, candidateId: string, ca
 }
 
 
-export function canDispatch(run: DispatchRun & Pick<OrchestrationRun, 'state'>, nodeIds: readonly string[], input: Omit<DecisionCheckInput, 'expectedTargetHash'>, packetHashes?: DispatchPacketHashes): boolean {
+export function canDispatch(run: DispatchRun & Pick<OrchestrationRun, 'state'>, nodeIds: readonly string[], input: Omit<DecisionCheckInput, 'expectedTargetHash'>, packetHashes?: DispatchPacketHashes, epoch = 0): boolean {
   return run.state === 'ready-for-approval'
     && input.gate === 'dispatch'
-    && canApprove({ ...input, expectedTargetHash: dispatchTargetHash(run, nodeIds, packetHashes) })
+    && canApprove({ ...input, expectedTargetHash: dispatchTargetHash(run, nodeIds, packetHashes, epoch) })
 }
 
 export function canAnswer(question: Pick<FrontdoorQuestion, 'questionId' | 'runId' | 'nodeId' | 'text' | 'status'>, input: Omit<DecisionCheckInput, 'expectedTargetHash'> & { answerRef?: string; note?: string }): boolean {
@@ -312,9 +330,10 @@ async function readApprovedPacketHashes(runtimeRoot: string, run: OrchestrationR
 export async function assertDispatchApproved(runtimeRoot: string, runId: string, nodeIds: readonly string[], packetHashes?: DispatchPacketHashes, requirePacketBinding = false): Promise<OwnerDecisionEnvelope> {
   const run = await readProjectedRun(runtimeRoot, runId)
   const expectedPacketHashes = packetHashes ?? await readApprovedPacketHashes(runtimeRoot, run, nodeIds)
-  const packetBoundTargetHash = dispatchTargetHash(run, nodeIds, expectedPacketHashes)
-  const legacyTargetHash = dispatchTargetHash(run, nodeIds)
   const events = await readRunEvents(runtimeRoot, runId)
+  const epoch = dispatchEpoch(events)
+  const packetBoundTargetHash = dispatchTargetHash(run, nodeIds, expectedPacketHashes, epoch)
+  const legacyTargetHash = dispatchTargetHash(run, nodeIds, undefined, epoch)
   const allowedTargetHashes = requirePacketBinding ? [packetBoundTargetHash] : [packetBoundTargetHash, legacyTargetHash]
   const decision = events.find((event) => event.type === 'frontdoor.owner-decision-recorded'
     && (event.payload.decision as OwnerDecisionEnvelope | undefined)?.gate === 'dispatch'
@@ -409,9 +428,9 @@ export class FrontdoorOwnerGateService {
       if (!hasDecision(events, 'decomposition', ['approve-selected'], plan.planHash)) throw new Error('Dispatch requires an approved Decomposition')
       const packetHashes = await readApprovedPacketHashes(this.runtimeRoot, run, selectedNodeIds)
       assertDerivedPacketsUnchanged(events, selectedNodeIds, packetHashes)
-      const targetHash = dispatchTargetHash(run, selectedNodeIds, packetHashes)
+      const targetHash = dispatchTargetHash(run, selectedNodeIds, packetHashes, dispatchEpoch(events))
       const envelope = buildDecisionEnvelope(run, 'dispatch', 'dispatch', targetHash, approvedBy, this.clock().toISOString(), { note })
-      if (!canDispatch(run, selectedNodeIds, envelope, packetHashes)) throw new Error('Dispatch approval is invalid or stale')
+      if (!canDispatch(run, selectedNodeIds, envelope, packetHashes, dispatchEpoch(events))) throw new Error('Dispatch approval is invalid or stale')
       const existing = (await readRunEvents(this.runtimeRoot, runId)).find((event) => event.type === 'frontdoor.owner-decision-recorded' && (event.payload.decision as OwnerDecisionEnvelope | undefined)?.gate === 'dispatch' && (event.payload.decision as OwnerDecisionEnvelope | undefined)?.targetHash === targetHash)
       if (existing) {
         const stored = existing.payload.decision as OwnerDecisionEnvelope

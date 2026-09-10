@@ -46,7 +46,17 @@ const proposal: DecompositionNode = {
 function review(run: { runId: string; nodes: readonly { resultHash?: string }[] }, overrides: Partial<ReviewRun> = {}): ReviewRun {
   return {
     reviewId: 'review-001',
-    packet: { packetId: 'review-packet-001', targetTaskId: run.runId, revisionRange: 'abc123..def456', files: ['src/example.ts'], claims: [`Result ${run.nodes[0].resultHash} を確認した`], questions: [], createdAt: '2026-09-09T00:00:00.000Z' },
+    packet: {
+      packetId: 'review-packet-001',
+      targetTaskId: 'ADF-EXAMPLE-001',
+      revisionRange: 'abc123..def456',
+      files: ['src/example.ts'],
+      claims: ['the guard is wired'],
+      questions: [],
+      createdAt: '2026-09-09T00:00:00.000Z',
+      reviewedRunId: run.runId,
+      reviewedResultHashes: run.nodes.map((record) => record.resultHash!).filter(Boolean)
+    },
     reviewer: 'Codex',
     implementer: 'Claude Code',
     completion: 'complete',
@@ -164,18 +174,32 @@ describe('listReviewRuns and reviewClearance', () => {
 })
 
 describe('a review must be about the Run it is recorded against', () => {
-  it('refuses a review that cites neither the Run nor any Result it produced', async () => {
+  it('refuses a review that names a different Run', async () => {
     const { runtimeRoot, run } = await executedRun()
-    // Well-formed, independent, complete — and about something else entirely. Without this check it
-    // would clear the Run, which is the prose-in-a-Task-header problem with a schema around it.
-    const elsewhere = { ...review(run), packet: { ...review(run).packet, targetTaskId: 'ADF-SOMETHING-ELSE-001', claims: ['looks fine'] } }
-    await expect(recordReviewRun(runtimeRoot, run, elsewhere, 'Project Owner', '2026-09-09T02:00:00.000Z')).rejects.toThrow(/does not cite this Run/)
+    // Well-formed, independent, complete — and about something else entirely.
+    const elsewhere = { ...review(run), packet: { ...review(run).packet, reviewedRunId: 'run-somewhere-else' } }
+    await expect(recordReviewRun(runtimeRoot, run, elsewhere, 'Project Owner', '2026-09-09T02:00:00.000Z')).rejects.toThrow(/does not name this Run/)
   })
 
-  it('refuses a review that cites the Run but none of its Results', async () => {
+  it('refuses a review that does not cover every Result the Run produced', async () => {
     const { runtimeRoot, run } = await executedRun()
-    const shallow = { ...review(run), packet: { ...review(run).packet, claims: ['reviewed it'] } }
-    await expect(recordReviewRun(runtimeRoot, run, shallow, 'Project Owner', '2026-09-09T02:00:00.000Z')).rejects.toThrow(/cites none of the Result hashes/)
+    const partial = { ...review(run), packet: { ...review(run).packet, reviewedResultHashes: [] } }
+    await expect(recordReviewRun(runtimeRoot, run, partial, 'Project Owner', '2026-09-09T02:00:00.000Z')).rejects.toThrow(/does not cover every Result/)
+  })
+
+  it('refuses a review that claims a Result the Run never produced', async () => {
+    const { runtimeRoot, run } = await executedRun()
+    const invented = { ...review(run), packet: { ...review(run).packet, reviewedResultHashes: [...review(run).packet.reviewedResultHashes!, 'f'.repeat(64)] } }
+    await expect(recordReviewRun(runtimeRoot, run, invented, 'Project Owner', '2026-09-09T02:00:00.000Z')).rejects.toThrow(/did not produce/)
+  })
+
+  it('refuses a review that names no files and makes no claims', async () => {
+    const { runtimeRoot, run } = await executedRun()
+    // Naming the Run and its Results is not the same as having read anything. A review with an
+    // empty packet has nothing in it a reader could disagree with, and buildReviewPacket already
+    // refuses it — reaching the record through IPC must not be a way around that.
+    const hollow = { ...review(run), packet: { ...review(run).packet, files: [], claims: [] } }
+    await expect(recordReviewRun(runtimeRoot, run, hollow, 'Project Owner', '2026-09-09T02:00:00.000Z')).rejects.toThrow(/at least one reviewed file/)
   })
 
   it('refuses a reviewId that would write outside the Run directory', async () => {

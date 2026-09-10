@@ -49,6 +49,15 @@ export interface ReviewPacket {
   claims: string[]
   questions: string[]
   createdAt: string
+  /**
+   * What this review examined, stated structurally rather than left to be recognised in prose.
+   *
+   * Required when recording against a Run. An earlier version searched the packet's free text for
+   * the Run id and a Result hash, which meant a review that had read nothing could clear a Run by
+   * pasting two strings into `revisionRange`.
+   */
+  reviewedRunId?: string
+  reviewedResultHashes?: string[]
 }
 
 /**

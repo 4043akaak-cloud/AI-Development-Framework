@@ -184,7 +184,17 @@ describe('an independent review is recorded against the Run', () => {
   function reviewDocument(runId: string, resultHash: string, overrides: Record<string, unknown> = {}) {
     return {
       reviewId: 'review-closure-001',
-      packet: { packetId: 'review-packet-001', targetTaskId: runId, revisionRange: 'abc..def', files: ['src/example.ts'], claims: [`Result ${resultHash} を確認した`], questions: [], createdAt: '2026-09-09T00:00:00.000Z' },
+      packet: {
+        packetId: 'review-packet-001',
+        targetTaskId: 'ADF-EXAMPLE-001',
+        revisionRange: 'abc..def',
+        files: ['src/example.ts'],
+        claims: ['the guard is wired'],
+        questions: [],
+        createdAt: '2026-09-09T00:00:00.000Z',
+        reviewedRunId: runId,
+        reviewedResultHashes: [resultHash]
+      },
       reviewer: 'Codex',
       implementer: 'Claude Code',
       completion: 'complete',

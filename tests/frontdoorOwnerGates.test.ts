@@ -341,6 +341,22 @@ describe('Frontdoor Owner Gates', () => {
     await expect(orchestrator.reviewResult(run.runId)).rejects.toThrow(/another Run|proposed Evidence/)
   })
 
+  it('completes a second Dispatch after a Question is answered', async () => {
+    const { orchestrator, run } = await createFixture('partial', 'stop-on-blocking-question')
+    await approveInitialGates(orchestrator, run.runId)
+    await orchestrator.approveDispatch(run.runId, [proposal.nodeId])
+    const first = await orchestrator.executeApprovedRun(run.runId, { proposal: packet(run) })
+    expect(first.status).toBe('blocked-by-question')
+
+    await orchestrator.answerQuestion(run.runId, first.openQuestions[0], 'Project Owner', undefined, 'Owner answered')
+
+    // Answering returns the Run and its Nodes to exactly the state they were approved in, so the
+    // second Dispatch used to reproduce the first Decision's target hash — which dispatch then
+    // refused as already consumed. `dispatch -> question -> answer -> dispatch` could not complete.
+    await orchestrator.approveDispatch(run.runId, [proposal.nodeId])
+    await expect(orchestrator.executeApprovedRun(run.runId, { proposal: packet(run) })).resolves.toBeDefined()
+  })
+
   it('answers a blocking Question only by returning to explicit Dispatch approval', async () => {
     const { runtimeRoot, orchestrator, run } = await createFixture('partial', 'stop-on-blocking-question')
     await approveInitialGates(orchestrator, run.runId)

@@ -74,8 +74,15 @@ export function validateReviewRun(value: unknown): ReviewRun {
     if (typeof packet.packetId !== 'string' || !packet.packetId.trim()) errors.push('packet.packetId is required')
     if (typeof packet.targetTaskId !== 'string' || !packet.targetTaskId.trim()) errors.push('packet.targetTaskId is required')
     if (typeof packet.revisionRange !== 'string' || !packet.revisionRange.trim()) errors.push('packet.revisionRange is required')
-    if (!Array.isArray(packet.files)) errors.push('packet.files must be an array')
-    if (!Array.isArray(packet.claims)) errors.push('packet.claims must be an array')
+    // Non-empty, matching `buildReviewPacket`. Reaching the record through IPC must not be a way
+    // around the conditions that function already enforces: a review naming no files and making no
+    // claims has nothing in it to disagree with.
+    if (!Array.isArray(packet.files) || packet.files.length === 0) errors.push('packet.files must name at least one reviewed file')
+    if (!Array.isArray(packet.claims) || packet.claims.length === 0) errors.push('packet.claims must state at least one claim the reviewer examined')
+    if (packet.reviewedRunId !== undefined && typeof packet.reviewedRunId !== 'string') errors.push('packet.reviewedRunId must be a string')
+    if (packet.reviewedResultHashes !== undefined && (!Array.isArray(packet.reviewedResultHashes) || packet.reviewedResultHashes.some((hash) => typeof hash !== 'string'))) {
+      errors.push('packet.reviewedResultHashes must be an array of strings')
+    }
   }
   if (!Array.isArray(review.findings)) errors.push('findings must be an array')
   else review.findings.forEach((finding, index) => assertFindingShape(finding, index, errors))
@@ -99,12 +106,15 @@ export function validateReviewRun(value: unknown): ReviewRun {
  */
 function assertReviewExaminedThisRun(run: { runId: string; nodes: readonly { node: { nodeId: string }; resultHash?: string }[] }, review: ReviewRun): void {
   const errors: string[] = []
-  const cited = [review.packet.targetTaskId, review.packet.revisionRange, ...review.packet.files, ...review.packet.claims].join('\n')
-  if (!cited.includes(run.runId)) errors.push(`the review does not cite this Run (${run.runId}) anywhere in its packet`)
-  const resultHashes = run.nodes.map((record) => record.resultHash).filter((hash): hash is string => typeof hash === 'string')
-  if (resultHashes.length > 0 && !resultHashes.some((hash) => cited.includes(hash))) {
-    errors.push('the review cites none of the Result hashes this Run produced')
-  }
+  if (review.packet.reviewedRunId !== run.runId) errors.push(`the review does not name this Run: expected reviewedRunId ${run.runId}`)
+  const produced = run.nodes.map((record) => record.resultHash).filter((hash): hash is string => typeof hash === 'string')
+  const claimed = review.packet.reviewedResultHashes ?? []
+  // Every Result, not merely one. A review that covered a Run's proposal and never opened its
+  // critic has not reviewed the Run, and saying so is the only way the record means anything.
+  const uncovered = produced.filter((hash) => !claimed.includes(hash))
+  if (uncovered.length) errors.push(`the review does not cover every Result this Run produced (${uncovered.length} uncovered)`)
+  const unknown = claimed.filter((hash) => !produced.includes(hash))
+  if (unknown.length) errors.push('the review claims Result hashes this Run did not produce')
   if (errors.length) throw new ReviewRecordRejectedError(errors)
 }
 
