@@ -6,6 +6,7 @@ import type { DecompositionPlanInput, FrontdoorRequestInput, OwnerGate } from '.
 import { createLiveRelay } from '../main/liveRelay'
 import { FrontdoorOrchestrator } from '../main/frontdoor/orchestrator'
 import { prepareFrontdoorRunOrThrow } from '../main/frontdoor/frontdoorPrepareService'
+import { deriveFrontdoorChildPackets, dispatchFrontdoorRun, inspectFrontdoorReviews, materializeImplementationPacket, prepareImplementationRun, recordFrontdoorReview } from '../main/frontdoor/frontdoorService'
 
 interface FrontdoorInputFile {
   request: FrontdoorRequestInput
@@ -24,6 +25,12 @@ export const defaultFrontdoorCliIO: FrontdoorCliIO = {
   stderr: (text) => process.stderr.write(text)
 }
 
+/** The service layer wraps errors for IPC; the CLI wants them thrown so the catch below reports them. */
+function requireSuccess<T>(result: { ok: true; value: T } | { ok: false; error: string }): T {
+  if (!result.ok) throw new Error(result.error)
+  return result.value
+}
+
 const frontdoorOptions = {
   'runtime-root': { type: 'string' },
   input: { type: 'string' },
@@ -38,13 +45,19 @@ const frontdoorOptions = {
   'target-hash': { type: 'string' },
   'answer-ref': { type: 'string' },
   decision: { type: 'string' },
+  'approval-id': { type: 'string' },
+  'valid-for-hours': { type: 'string' },
+  'review-file': { type: 'string' },
+  'parent-run-id': { type: 'string' },
+  'source-node-id': { type: 'string' },
+  'allowed-files': { type: 'string' },
   json: { type: 'boolean' },
   help: { type: 'boolean' }
 } as const
 
-type FrontdoorCommand = 'prepare' | 'inspect' | 'approve' | 'dispatch' | 'review-node' | 'answer' | 'review-result' | 'complete' | 'export-artifact' | 'stop' | 'recover' | 'list-candidates' | 'inspect-candidate' | 'review-candidate'
+type FrontdoorCommand = 'prepare' | 'inspect' | 'approve' | 'dispatch' | 'review-node' | 'answer' | 'review-result' | 'complete' | 'export-artifact' | 'stop' | 'recover' | 'list-candidates' | 'inspect-candidate' | 'review-candidate' | 'derive-packets' | 'record-review' | 'inspect-reviews' | 'prepare-implementation' | 'materialize-implementation-packet'
 
-const commands: readonly FrontdoorCommand[] = ['prepare', 'inspect', 'approve', 'dispatch', 'review-node', 'answer', 'review-result', 'complete', 'export-artifact', 'stop', 'recover', 'list-candidates', 'inspect-candidate', 'review-candidate']
+const commands: readonly FrontdoorCommand[] = ['prepare', 'inspect', 'approve', 'dispatch', 'review-node', 'answer', 'review-result', 'complete', 'export-artifact', 'stop', 'recover', 'list-candidates', 'inspect-candidate', 'review-candidate', 'derive-packets', 'record-review', 'inspect-reviews', 'prepare-implementation', 'materialize-implementation-packet']
 
 
 function usage(command?: string): string {
@@ -70,6 +83,11 @@ function usage(command?: string): string {
     '  export-artifact explicitly materialize an accepted Result into the isolated Work Plane',
     '  stop            stop the Run without retry or integration',
     '  recover         mark interrupted work for Owner review; never retries',
+    '  derive-packets  derive the child Packets from the approved Plan; grants nothing on its own',
+    '  record-review   record an independent review against this Run and ADF\'s reading of it',
+    '  inspect-reviews show whether an independent review covers this Run as it stands',
+    '  prepare-implementation          derive a child implementation Run from an accepted parent Result',
+    '  materialize-implementation-packet  write the implementation child Packet for that Run',
     '',
     'Common options:',
     '  --runtime-root <path>  Runtime root (default: .adf-runtime)',
@@ -81,10 +99,14 @@ function usage(command?: string): string {
     '',
     'prepare options: --input <request-plan.json>',
     'approve options: --gate <gate> --decision <expected positive Decision> --approved-by <name>',
-    'dispatch options: --packets <packets.json>',
+    'dispatch options: [--packets <packets.json>] — omit to use the Packets in approved-tasks/',
     'review-node options: --node-id <node-id> --decision <continue|stop> [--packets <packets.json>]',
     'answer options: --question-id <id> plus --answer-ref <ref> or --note <text>',
     'review-result options: --decision <accept|follow-up|reject>',
+    'derive-packets options: --approval-id <id> --approved-by <name> [--valid-for-hours <1-336>]',
+    'record-review options: --review-file <review.json> --approved-by <name>',
+    'prepare-implementation options: --parent-run-id <run-id> --source-node-id <node-id> --allowed-files <a,b>',
+    'materialize-implementation-packet options: --approved-by <name>',
     ''
   ].join('\n')
 }
@@ -224,6 +246,17 @@ export async function runFrontdoorCli(argv: string[], io: FrontdoorCliIO = defau
       return 0
     }
 
+    if (command === 'prepare-implementation') {
+      const prepared = requireSuccess(await prepareImplementationRun(orchestrator, {
+        parentRunId: requiredString(values, 'parent-run-id'),
+        sourceNodeId: requiredString(values, 'source-node-id'),
+        allowedFiles: (requiredString(values, 'allowed-files') ?? '').split(',').map((entry) => entry.trim()).filter(Boolean),
+        ...(requiredString(values, 'note') ? { objective: requiredString(values, 'note')! } : {})
+      }))
+      output(io, { command, prepared, nextAction: 'approve intake, completion-shape and decomposition, then materialize-implementation-packet' }, json)
+      return 0
+    }
+
     const runId = requiredString(values, 'run-id')
     if (!runId) throw new Error(`${command} requires --run-id <run-id>`)
 
@@ -233,7 +266,7 @@ export async function runFrontdoorCli(argv: string[], io: FrontdoorCliIO = defau
       return 0
     }
 
-    const requiresOwnerIdentity = command === 'approve' || command === 'review-node' || command === 'answer' || command === 'review-result' || command === 'complete' || command === 'export-artifact' || command === 'stop'
+    const requiresOwnerIdentity = command === 'approve' || command === 'review-node' || command === 'answer' || command === 'review-result' || command === 'complete' || command === 'export-artifact' || command === 'stop' || command === 'derive-packets' || command === 'record-review' || command === 'materialize-implementation-packet'
     const approvedBy = requiredString(values, 'approved-by')
     if (requiresOwnerIdentity && !approvedBy) throw new Error(`${command} requires --approved-by <name>`)
     const note = requiredString(values, 'note') ?? undefined
@@ -258,9 +291,12 @@ export async function runFrontdoorCli(argv: string[], io: FrontdoorCliIO = defau
 
     if (command === 'dispatch') {
       const packetsPath = requiredString(values, 'packets')
-      if (!packetsPath) throw new Error('dispatch requires --packets <packets.json>')
-      const packets = ensurePackets(await io.readJsonFile(path.resolve(packetsPath)))
-      const result = await orchestrator.executeApprovedRun(runId, packets)
+      // Without --packets the Packets are read from approved-tasks/, which is where derive-packets
+      // wrote them and where the UI has always read them from. Requiring the flag was the last
+      // point in the CLI loop that forced the Owner to hand-assemble a file.
+      const result = packetsPath
+        ? await orchestrator.executeApprovedRun(runId, ensurePackets(await io.readJsonFile(path.resolve(packetsPath))))
+        : requireSuccess(await dispatchFrontdoorRun(orchestrator, runId, { requirePacketBinding: true }))
       output(io, { command, runId, result }, json)
       return 0
     }
@@ -317,6 +353,40 @@ export async function runFrontdoorCli(argv: string[], io: FrontdoorCliIO = defau
     if (command === 'stop') {
       const run = await orchestrator.stopRun(runId, note ?? 'Owner stopped Frontdoor run', approvedBy!)
       output(io, { command, run }, json)
+      return 0
+    }
+
+    if (command === 'derive-packets') {
+      const approvalId = requiredString(values, 'approval-id')
+      if (!approvalId) throw new Error('derive-packets requires --approval-id <id>')
+      const rawHours = requiredString(values, 'valid-for-hours')
+      const packets = requireSuccess(await deriveFrontdoorChildPackets(orchestrator, {
+        runId,
+        approvalId,
+        approvedBy: approvedBy!,
+        ...(rawHours === null || rawHours === undefined ? {} : { validForHours: Number(rawHours) })
+      }))
+      output(io, { command, packets, nextAction: 'approve --gate dispatch; the Decision binds these exact Packet hashes' }, json)
+      return 0
+    }
+
+    if (command === 'record-review') {
+      const reviewPath = requiredString(values, 'review-file')
+      if (!reviewPath) throw new Error('record-review requires --review-file <review.json>')
+      const review = await io.readJsonFile(path.resolve(reviewPath))
+      const record = requireSuccess(await recordFrontdoorReview(orchestrator, { runId, recordedBy: approvedBy!, review }))
+      output(io, { command, record, nextAction: record.outcome.doneEligible ? 'the review clears this Run; Owner completion approval is separate' : 'the review does not clear this Run' }, json)
+      return record.outcome.doneEligible ? 0 : 1
+    }
+
+    if (command === 'inspect-reviews') {
+      output(io, { command, ...requireSuccess(await inspectFrontdoorReviews(orchestrator, runId)) }, json)
+      return 0
+    }
+
+    if (command === 'materialize-implementation-packet') {
+      const packet = requireSuccess(await materializeImplementationPacket(orchestrator, runId, approvedBy!))
+      output(io, { command, taskId: packet.taskId, packetPath: `approved-tasks/${packet.taskId}.json`, nextAction: 'approve --gate dispatch, then dispatch' }, json)
       return 0
     }
 

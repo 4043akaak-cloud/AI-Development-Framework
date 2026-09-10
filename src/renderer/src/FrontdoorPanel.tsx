@@ -169,6 +169,7 @@ export default function FrontdoorPanel({ minimal = false }: { minimal?: boolean 
   const [candidates, setCandidates] = useState<import('../../shared/implementationTypes').CandidateSummary[]>([])
   const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null)
   const [candidateInspection, setCandidateInspection] = useState<import('../../shared/implementationTypes').CandidateInspectionResult | null>(null)
+  const [reviewStatus, setReviewStatus] = useState<import('../../shared/reviewTypes').FrontdoorReviewStatus | null>(null)
 
   const inspect = useCallback(async (runId: string): Promise<void> => {
     const result = await window.adfFrontdoor.inspect(runId)
@@ -177,6 +178,10 @@ export default function FrontdoorPanel({ minimal = false }: { minimal?: boolean 
       setInspection(result.value)
       setArtifactInspection(null)
       setMessage(null)
+      // Read-only. Whether an independent review covers this Run is part of reading the Run, not a
+      // separate errand the Owner has to remember to run.
+      const reviews = await window.adfFrontdoor.inspectReviews(runId)
+      setReviewStatus(reviews.ok ? reviews.value : null)
     } else setMessage(result.error)
   }, [])
 
@@ -674,8 +679,13 @@ export default function FrontdoorPanel({ minimal = false }: { minimal?: boolean 
                 {currentGate && currentGate !== 'question' && currentGate !== 'result-review' && currentGate !== 'completion' && (
                   <button type="button" className="text-button" disabled={!canOwnerAct} onClick={() => void approveCurrentGate()}>{gateLabels[currentGate]}を承認</button>
                 )}
+                {currentGate === 'dispatch' && !packetsReady && (
+                  // Derives the child Packets from the Plan approved one Gate ago. It grants
+                  // nothing: the Dispatch Decision below still binds the exact bytes this writes.
+                  <button type="button" className="text-button" disabled={!canOwnerAct} title="承認済みPlanから子Packetを生成します。Dispatch承認はこの後です。" onClick={() => void runAction(() => window.adfFrontdoor.derivePackets({ runId: run.runId, approvalId: `approval-${run.runId}`, approvedBy: approvedBy.trim() }))}>承認済みPlanから子Packetを生成</button>
+                )}
                 {currentGate === 'dispatch' && (
-                  <button type="button" className="text-button" disabled={!canOwnerAct || !dispatchApproved || !packetsReady} title={!packetsReady ? 'Owner-approved child Packetをapproved-tasksへ配置してください' : undefined} onClick={() => void runAction(() => window.adfFrontdoor.dispatch(run.runId))}>承認済みNodeをDispatch</button>
+                  <button type="button" className="text-button" disabled={!canOwnerAct || !dispatchApproved || !packetsReady} title={!packetsReady ? '先に「承認済みPlanから子Packetを生成」を実行してください' : undefined} onClick={() => void runAction(() => window.adfFrontdoor.dispatch(run.runId))}>承認済みNodeをDispatch</button>
                 )}
                 {currentGate === 'node-review' && nodeReview && (
                   <>
@@ -770,6 +780,34 @@ export default function FrontdoorPanel({ minimal = false }: { minimal?: boolean 
                 ))}
               </ul>
             </section>
+
+            {reviewStatus && (
+              <section className="frontdoor-card" aria-label="独立レビュー">
+                <p className="eyebrow">INDEPENDENT REVIEW · READ ONLY</p>
+                <p className={reviewStatus.cleared ? 'frontdoor-review-cleared' : 'frontdoor-review-blocked'}>
+                  {reviewStatus.cleared ? 'このRunの現在の状態を対象とした独立レビューが記録されています。' : 'このRunはまだ独立レビューを通っていません。'}
+                </p>
+                {reviewStatus.blockers.length > 0 && (
+                  <ul className="frontdoor-decision-list">
+                    {reviewStatus.blockers.map((blocker) => <li key={blocker}>{blocker}</li>)}
+                  </ul>
+                )}
+                {reviewStatus.reviews.length > 0 && (
+                  <ul className="frontdoor-decision-list">
+                    {reviewStatus.reviews.map((review) => (
+                      <li key={review.reviewId}>
+                        <strong>{review.reviewId}</strong> · {review.review.reviewer} が {review.review.implementer} をレビュー · {review.review.completion}
+                        <br /><small>P0 {review.outcome.bySeverity.P0} / P1 {review.outcome.bySeverity.P1} / P2 {review.outcome.bySeverity.P2} / P3 {review.outcome.bySeverity.P3}</small>
+                        {/* Stale and tampered are shown, never hidden: a review of a state the Run has left, or one whose bytes no longer match the Ledger, must not read as a passing review. */}
+                        {review.stale && <><br /><small className="frontdoor-compatibility">このレビューは現在のRun状態を対象としていません（stale）</small></>}
+                        {review.tampered && <><br /><small className="frontdoor-review-blocked">記録後に改変されています（tampered）</small></>}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <p className="turn-refs">レビューの記録は CLI の `frontdoor record-review` から行います。Owner の完了承認とは別です。</p>
+              </section>
+            )}
 
             {artifactInspection && artifactInspection.runId === run.runId && (
               <section className="frontdoor-card frontdoor-artifact-panel" aria-label="検証済み成果物">

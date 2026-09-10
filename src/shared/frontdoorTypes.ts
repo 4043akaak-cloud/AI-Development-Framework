@@ -207,6 +207,17 @@ export interface AggregateResult {
   createdAt: string
 }
 
+/** What the Owner sees after ADF derives the child Packets, before approving the Dispatch that binds them. */
+export interface FrontdoorChildPacketSummary {
+  nodeId: string
+  taskId: string
+  adapterId: string
+  role: string
+  capabilities: string[]
+  packetHash: string
+  path: string
+}
+
 export interface GoalAlignmentSignal {
   code: string
   severity: 'info' | 'warning' | 'error'
@@ -440,6 +451,8 @@ export type FrontdoorEventType =
   | 'frontdoor.candidate-review-started'
   | 'frontdoor.candidate-reviewed'
   | 'frontdoor.candidate-request-created'
+  /** An independent review recorded against a Run. Not replayed: it never changes Run state. */
+  | 'frontdoor.review-run-recorded'
 
 
 export interface FrontdoorLedgerEvent<TPayload extends Record<string, unknown> = Record<string, unknown>> {

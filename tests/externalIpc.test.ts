@@ -443,7 +443,19 @@ describe('ADF-EXTERNAL-ADAPTER-001 Electron wiring', () => {
       'frontdoor:list-candidates',
       'frontdoor:inspect-candidate',
       'frontdoor:start-candidate-review',
-      'frontdoor:review-candidate'
+      'frontdoor:review-candidate',
+      // Derives the child Packets from the already-approved Plan and writes them to
+      // approved-tasks/. It grants nothing: the Dispatch Decision that binds these bytes is still
+      // taken at the Gate, and a Packet on disk without that Decision dispatches nothing.
+      'frontdoor:derive-packets',
+      // Records an independent review and ADF's reading of it. A review is evidence, not authority
+      // — `reviewClearance` reports whether a Run is cleared, and Owner completion stays separate.
+      'frontdoor:record-review',
+      'frontdoor:inspect-reviews',
+      // Creates a child Run and its Packet from an already-accepted parent Result. Both re-verify
+      // the parent Result Review and its expiry before doing anything.
+      'frontdoor:prepare-implementation',
+      'frontdoor:materialize-implementation-packet'
     ])
   })
 

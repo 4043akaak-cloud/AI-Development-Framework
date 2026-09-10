@@ -6,7 +6,7 @@ import { safeDevelopmentRendererUrl } from '../shared/rendererUrlPolicy'
 import { createLiveRelay } from './liveRelay'
 import type { ConversationRelay } from './jobLoop/relay'
 import { cancelExternal, continueThread, decideThread, externalSendState, getThread, inspectLiveArtifacts, listApprovedTaskIds, listExternalAdapters, listThreads, localReadiness, ollamaReadiness, preflightExternal, recoverThread, scanForRecovery, sendExternal, sendFirstTurn, startApprovedThread } from './relayService'
-import { approveFrontdoorRun, answerFrontdoorQuestion, completeFrontdoorRun, dispatchFrontdoorRun, exportFrontdoorArtifact, inspectCandidate, inspectFrontdoorArtifact, inspectFrontdoorRun, listFrontdoorRuns, listReviewableCandidates, prepareFrontdoorRun, proposeFrontdoorPlan, recoverFrontdoorRun, reviewCandidate, reviewFrontdoorNode, reviewFrontdoorResult, startCandidateReview, stopFrontdoorRun } from './frontdoor/frontdoorService'
+import { approveFrontdoorRun, answerFrontdoorQuestion, completeFrontdoorRun, deriveFrontdoorChildPackets, dispatchFrontdoorRun, exportFrontdoorArtifact, inspectCandidate, inspectFrontdoorArtifact, inspectFrontdoorReviews, inspectFrontdoorRun, listFrontdoorRuns, listReviewableCandidates, materializeImplementationPacket, prepareFrontdoorRun, prepareImplementationRun, proposeFrontdoorPlan, recordFrontdoorReview, recoverFrontdoorRun, reviewCandidate, reviewFrontdoorNode, reviewFrontdoorResult, startCandidateReview, stopFrontdoorRun } from './frontdoor/frontdoorService'
 
 import { FrontdoorOrchestrator } from './frontdoor/orchestrator'
 import { DeterministicFakePlanner } from './frontdoor/planner'
@@ -126,6 +126,11 @@ app.whenReady().then(async () => {
   ipcMain.handle('frontdoor:inspect-candidate', (_event, candidateId: unknown) => inspectCandidate(frontdoor, candidateId))
   ipcMain.handle('frontdoor:start-candidate-review', (_event, candidateId: unknown) => startCandidateReview(frontdoor, candidateId))
   ipcMain.handle('frontdoor:review-candidate', (_event, input: unknown) => reviewCandidate(frontdoor, input))
+  ipcMain.handle('frontdoor:derive-packets', (_event, input: unknown) => deriveFrontdoorChildPackets(frontdoor, input as Parameters<typeof deriveFrontdoorChildPackets>[1]))
+  ipcMain.handle('frontdoor:record-review', (_event, input: unknown) => recordFrontdoorReview(frontdoor, input as Parameters<typeof recordFrontdoorReview>[1]))
+  ipcMain.handle('frontdoor:inspect-reviews', (_event, runId: unknown) => inspectFrontdoorReviews(frontdoor, runId))
+  ipcMain.handle('frontdoor:prepare-implementation', (_event, input: unknown) => prepareImplementationRun(frontdoor, input as Record<string, unknown>))
+  ipcMain.handle('frontdoor:materialize-implementation-packet', (_event, input: unknown) => materializeImplementationPacket(frontdoor, (input as { runId?: unknown })?.runId, (input as { approvedBy?: unknown })?.approvedBy))
 
 
   // One pass, before the window exists, so the renderer cannot act on a Thread mid-scan.

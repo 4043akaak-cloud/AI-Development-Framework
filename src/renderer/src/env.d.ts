@@ -48,6 +48,11 @@ declare global {
       inspectCandidate: (candidateId: string) => Promise<RelayResult<import('../../shared/implementationTypes').CandidateInspectionResult>>
       startCandidateReview: (candidateId: string) => Promise<RelayResult<import('../../shared/implementationTypes').CandidateReviewStartedResult>>
       reviewCandidate: (input: import('../../shared/implementationTypes').CandidateReviewDecisionInput) => Promise<RelayResult<import('../../shared/implementationTypes').CandidateReviewOwnerDecisionEnvelope>>
+      derivePackets: (input: { runId: string; approvalId: string; approvedBy: string; validForHours?: number }) => Promise<RelayResult<import('../../shared/frontdoorTypes').FrontdoorChildPacketSummary[]>>
+      recordReview: (input: { runId: string; recordedBy: string; review: unknown }) => Promise<RelayResult<import('../../shared/reviewTypes').RecordedReviewRun>>
+      inspectReviews: (runId: string) => Promise<RelayResult<import('../../shared/reviewTypes').FrontdoorReviewStatus>>
+      prepareImplementation: (input: { parentRunId: string; sourceNodeId: string; allowedFiles: string[]; objective?: string }) => Promise<RelayResult<unknown>>
+      materializeImplementationPacket: (input: { runId: string; approvedBy: string }) => Promise<RelayResult<import('../../shared/jobLoopTypes').ApprovedTaskPacket>>
     }
   }
 }

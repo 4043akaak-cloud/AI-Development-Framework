@@ -92,6 +92,9 @@ h1, h2, h3, p { margin-top: 0; } h1 { margin-bottom: 8px; font-size: 32px; } h2 
 .frontdoor-node-list small, .frontdoor-decision-list small { color: #8fa8c9; word-break: break-all; }
 /* A Gate passed on a compatibility route must not look identical to one passed on the current check. */
 .frontdoor-decision-list small.frontdoor-compatibility { color: #e0b56a; }
+/* Cleared and not-yet-cleared must not read the same at a glance. */
+.frontdoor-review-cleared { color: #7fc9a0; font-size: 12px; margin: 0 0 6px; }
+.frontdoor-review-blocked { color: #e08a8a; font-size: 12px; margin: 0 0 6px; }
 .frontdoor-question { border-left: 3px solid #e8b86d; border-radius: 5px; background: #252238; padding: 10px; display: grid; gap: 8px; }
 .frontdoor-question p { margin-bottom: 0; }
 .frontdoor-json { max-height: 260px; overflow: auto; margin: 0; border-radius: 6px; background: #0b1525; color: #c8d8ef; padding: 10px; font-size: 11px; white-space: pre-wrap; }

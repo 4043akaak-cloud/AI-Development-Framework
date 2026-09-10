@@ -49,5 +49,12 @@ contextBridge.exposeInMainWorld('adfFrontdoor', {
   listCandidates: (): Promise<RelayResult<import('../shared/implementationTypes').CandidateSummary[]>> => ipcRenderer.invoke('frontdoor:list-candidates'),
   inspectCandidate: (candidateId: string): Promise<RelayResult<import('../shared/implementationTypes').CandidateInspectionResult>> => ipcRenderer.invoke('frontdoor:inspect-candidate', candidateId),
   startCandidateReview: (candidateId: string): Promise<RelayResult<import('../shared/implementationTypes').CandidateReviewStartedResult>> => ipcRenderer.invoke('frontdoor:start-candidate-review', candidateId),
-  reviewCandidate: (input: import('../shared/implementationTypes').CandidateReviewDecisionInput): Promise<RelayResult<import('../shared/implementationTypes').CandidateReviewOwnerDecisionEnvelope>> => ipcRenderer.invoke('frontdoor:review-candidate', input)
+  reviewCandidate: (input: import('../shared/implementationTypes').CandidateReviewDecisionInput): Promise<RelayResult<import('../shared/implementationTypes').CandidateReviewOwnerDecisionEnvelope>> => ipcRenderer.invoke('frontdoor:review-candidate', input),
+  // Derives the child Packets from the Plan the Owner already approved. Still not an approval
+  // channel: the Dispatch Decision that binds these bytes is granted at the Gate, not here.
+  derivePackets: (input: { runId: string; approvalId: string; approvedBy: string; validForHours?: number }): Promise<RelayResult<import('../shared/frontdoorTypes').FrontdoorChildPacketSummary[]>> => ipcRenderer.invoke('frontdoor:derive-packets', input),
+  recordReview: (input: { runId: string; recordedBy: string; review: unknown }): Promise<RelayResult<import('../shared/reviewTypes').RecordedReviewRun>> => ipcRenderer.invoke('frontdoor:record-review', input),
+  inspectReviews: (runId: string): Promise<RelayResult<import('../shared/reviewTypes').FrontdoorReviewStatus>> => ipcRenderer.invoke('frontdoor:inspect-reviews', runId),
+  prepareImplementation: (input: { parentRunId: string; sourceNodeId: string; allowedFiles: string[]; objective?: string }): Promise<RelayResult<unknown>> => ipcRenderer.invoke('frontdoor:prepare-implementation', input),
+  materializeImplementationPacket: (input: { runId: string; approvedBy: string }): Promise<RelayResult<import('../shared/jobLoopTypes').ApprovedTaskPacket>> => ipcRenderer.invoke('frontdoor:materialize-implementation-packet', input)
 })
